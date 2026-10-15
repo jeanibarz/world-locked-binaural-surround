@@ -1,0 +1,91 @@
+# Backlog — ordered work blocks
+
+This is the **queue** the autonomous chain works from. The *next eligible block*
+is the first unchecked `[ ]` whose dependencies are checked. Keep it honest:
+check a block only when it is done, recorded in the journal, and committed. Add
+follow-ups and newly-discovered blocks as you go. Split any block too big for one
+sitting and leave the remainder unchecked.
+
+Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done.
+
+## M0 — Foundations
+
+- [x] Repo, README, requirements, AGENTS contract, journal skeleton, backlog
+- [ ] **B0.1** Choose the dev language/runtime for the Python prototype; set up
+  the project (pyproject/venv), linting, and a trivial passing test. Record the
+  stack decision in the journal.
+- [ ] **B0.2** Audio I/O spike: enumerate Windows audio devices and open a
+  low-latency stereo output + a multichannel input via WASAPI (`sounddevice` or
+  equivalent). Measure round-trip latency. Record findings.
+- [ ] **B0.3** Virtual-device spike: confirm a path to a virtual 7.1 sink
+  (VB-Audio / loopback) and capture its stream. Document setup steps for users.
+- [ ] **B0.4** Head-tracker spike: get MediaPipe (or chosen model) producing a
+  head yaw/pitch/roll estimate from a webcam frame; measure inference latency.
+
+## M1 — Static binaural render engine
+
+- [ ] **B1.1** HRIR loader: read a SOFA set, expose directions + ipsi/contra
+  IRs, resample to the engine rate. Unit-tested on a sample SOFA.
+- [ ] **B1.2** Direction interpolation: given (az,el), return an interpolated
+  HRIR (nearest → bilinear/VBAP, ITD-aware). Tested against known directions.
+- [ ] **B1.3** Partitioned-FFT convolution engine: per-channel real-time convolve
+  with overlap-save; correctness + latency test vs. `scipy.fftconvolve`.
+- [ ] **B1.4** 7.1 world layout model (screen-relative positions, configurable
+  distance/scale) → per-channel (az,el) for a *fixed* head. Tested.
+- [ ] **B1.5** Wire B1.1–B1.4 into a static renderer: 7.1 PCM in → stereo out,
+  offline-verified on a test signal (e.g. a known pan). No tracking yet.
+
+## M2 — Head-pose tracker
+
+- [ ] **B2.1** Tracker interface + MediaPipe implementation: webcam → smoothed
+  (yaw,pitch,roll) stream on its own thread. One-euro filter; expose latency/
+  jitter knobs. Tested with a recorded clip.
+- [ ] **B2.2** Calibration: define the neutral "looking at screen centre" pose;
+  map camera frame → world/screen frame.
+
+## M3 — World-lock (the core effect)
+
+- [ ] **B3.1** Couple tracker → render: per frame compute head-frame speaker
+  directions `Rᵀ(p_i−p_h)` and update the convolution click-free (crossfade).
+- [ ] **B3.2** Perceptual demo: a world-fixed virtual speaker that stays put when
+  the head turns; capture a short A/B (head-locked vs world-locked) for review.
+
+## M4 — End-to-end on Windows
+
+- [ ] **B4.1** Live capture from the virtual 7.1 device → engine → chosen
+  headphone output, running continuously without dropouts.
+- [ ] **B4.2** Graceful degradation: camera loss → freeze/fade; device change
+  handling.
+
+## M5 — Live filters & presets
+
+- [ ] **B5.1** Per-channel + bus parametric EQ (biquads), changeable live without
+  glitches (reuse EqualizerAPO semantics from the sibling project).
+- [ ] **B5.2** Preset save/load (layout + HRIR + EQ + tracker calib).
+
+## M6 — GUI
+
+- [ ] **B6.1** Minimal control GUI: device pickers, layout editor, HRIR chooser,
+  live EQ, tracker calibration.
+
+## M7 — AI-judge calibration
+
+- [ ] **B7.1** Integrate the `binaural-localization` synthetic-listener judge to
+  score a candidate HRIR/EQ configuration.
+- [ ] **B7.2** Guided blind A/B / staircase calibration harness; validate on the
+  synthetic listener before the human.
+
+## M8 — Latency hardening
+
+- [ ] **B8.1** Profile the Python hot path; decide the native stack (JUCE /
+  PortAudio / Rust) via a small benchmark; port the convolution path.
+
+## M9 — Fine-tuning & release
+
+- [ ] **B9.1** HRIR selection/fine-tuning toward morphology + headphone EQ.
+- [ ] **B9.2** Packaging, installer, user docs, donationware release.
+
+---
+
+### Discovered blocks / follow-ups
+_(the chain appends here as it learns)_
