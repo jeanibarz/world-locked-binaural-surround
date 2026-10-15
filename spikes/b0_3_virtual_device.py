@@ -20,12 +20,15 @@ What it does, and why:
    short WASAPI input stream on that capture endpoint and confirm frames arrive,
    reporting the captured peak level and the stream's reported input latency.
 3. **Complete B0.2's deferred round-trip**: render a short, quiet sine sweep to
-   the virtual sink and capture the far end, recovering the delay by
+   the virtual sink and capture the far end *concurrently* (see journal 04 for
+   the write-then-read bug this avoids), recovering the delay by
    cross-correlation. ``WasapiSettings`` here exposes no ``loopback`` flag
    (journal 02), so this is a *virtual-cable* loopback: it reports a real
    round-trip only if the cable's render strip is routed to its capture bus (for
    VoiceMeeter VAIO, strip → bus B1). If silent, it says so and points at the
-   setup doc rather than reporting a spurious 0 ms.
+   setup doc rather than reporting a spurious 0 ms. ``--out-device``/
+   ``--in-device`` override endpoint resolution to measure an explicit pair
+   (e.g. feed the AUX strip, capture B1) without disturbing the listening path.
 
 This never changes the host's mixer and never installs software — it reports the
 current routing truth. Prints a human summary and a ``RESULT_JSON:`` line for the
@@ -148,14 +151,26 @@ def measure_loopback(out_device: int, in_device: int, seconds: float, amplitude:
                 extra_settings=shared,
             )
             with play:
-                play.write(signal)
-                deadline = time.monotonic() + seconds + 0.3
+                # Record CONCURRENTLY with playback: write the output in small
+                # blocks and drain the input on every pass. Writing the whole
+                # buffer first (one blocking write) lets the input ring overflow,
+                # so a brief sweep buried in a long buffer is gone before the
+                # first read -- the bug that made this report silence on a route
+                # that actually works (a continuous tone survived it, a 50 ms
+                # burst did not). See journal 04.
+                block = 1024
+                pos = 0
+                deadline = time.monotonic() + seconds + 0.5
                 while time.monotonic() < deadline:
+                    if pos < signal.shape[0]:
+                        end = min(pos + block, signal.shape[0])
+                        play.write(signal[pos:end])
+                        pos = end
                     avail = rec.read_available
                     if avail:
                         data, _ = rec.read(avail)
                         frames.append(data.copy())
-                    else:
+                    elif pos >= signal.shape[0]:
                         time.sleep(0.005)
         if not frames:
             return {"ok": False, "error": "no frames captured"}
@@ -205,6 +220,8 @@ def main() -> int:
     ap.add_argument("--amplitude", type=float, default=0.1, help="loopback sweep level (quiet)")
     ap.add_argument("--min-channels", type=int, default=8, help="channels a 7.1 sink must expose")
     ap.add_argument("--no-loopback", action="store_true", help="skip the sweep (enumerate only)")
+    ap.add_argument("--out-device", type=int, default=None, help="override render endpoint index")
+    ap.add_argument("--in-device", type=int, default=None, help="override capture endpoint index")
     args = ap.parse_args()
 
     # The Windows console defaults to cp1252; force UTF-8 so any device name or
@@ -227,6 +244,13 @@ def main() -> int:
     sink = pick_virtual_sink(devices, min_output_channels=args.min_channels, allow=allow)
     capture = loopback_for_sink(devices, sink, allow=allow) if sink is not None else None
     pairs = pair_loopbacks(devices, allow=allow)
+
+    # Manual overrides: measure an explicit render->capture pair (e.g. feed the
+    # AUX input strip and capture bus B1) without changing the auto-resolution.
+    if args.out_device is not None:
+        sink = args.out_device
+    if args.in_device is not None:
+        capture = args.in_device
 
     def label(i: int | None) -> str:
         return f"#{i} {devices[i]['name']}" if i is not None else "none"
