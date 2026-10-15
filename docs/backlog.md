@@ -39,8 +39,12 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
 
 ## M1 — Static binaural render engine
 
-- [ ] **B1.1** HRIR loader: read a SOFA set, expose directions + ipsi/contra
+- [x] **B1.1** HRIR loader: read a SOFA set, expose directions + ipsi/contra
   IRs, resample to the engine rate. Unit-tested on a sample SOFA.
+  _(`binaural_headtracker.hrir`: h5py SOFA read → `HRIRSet` (directions, L/R IRs,
+  nearest lookup, ipsi/contra, polyphase resample). 12 tests on a synthetic SOFA +
+  pure math; validated on MIT KEMAR (710 dirs, ipsi/contra 4:1 head shadow). h5py
+  added to baseline. See journal 06.)_
 - [ ] **B1.2** Direction interpolation: given (az,el), return an interpolated
   HRIR (nearest → bilinear/VBAP, ITD-aware). Tested against known directions.
 - [ ] **B1.3** Partitioned-FFT convolution engine: per-channel real-time convolve

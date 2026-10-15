@@ -95,3 +95,10 @@ full story.
     operating range is therefore **±45° yaw / ±45° pitch** (requirements FR-4);
     past that is graceful-loss/re-acquisition (NFR-5, B4.2) or multi-camera
     (FR-13). (→ [05](05-head-tracker-spike.md))
+19. **SOFA is just HDF5 — read it with h5py, no SOFA library** (mirrors the
+    sibling). SimpleFreeFieldHRIR: `Data.IR` (M, 2, N) with receiver 0 = left,
+    1 = right; `SourcePosition` (M, 3) spherical `(az, el, radius)` degrees;
+    `Data.SamplingRate`. Azimuth is CCW from front (90° = left) — validated on MIT
+    KEMAR where az 90° makes the ipsilateral ear ~4× louder (head shadow). Resample
+    IRs with `resample_poly` using GCD-reduced up/down. Keep real `.sofa` out of
+    git; test with a synthetic one. (→ [06](06-hrir-sofa-loader.md))

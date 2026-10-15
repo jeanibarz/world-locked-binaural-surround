@@ -21,6 +21,11 @@ dependencies = [
     # fast and portable on CI/WSL where no audio device or camera exists.
     "numpy>=1.24",
     "scipy>=1.11",
+    # SOFA (HDF5) HRIR reading is core to the render engine (M1) and fully
+    # cross-platform with no hardware, so h5py is a baseline dep (BSD-3-Clause),
+    # mirroring the sibling binaural-localization project which parses SOFA the
+    # same way. SOFA = HDF5; no dedicated SOFA library is needed.
+    "h5py>=3.10",
 ]
 
 [project.optional-dependencies]
