@@ -51,7 +51,12 @@ Numbered `FR-n`. MoSCoW priority in brackets.
   scale are **user-configurable**.
 - **FR-4 [Must]** Track the listener's **head pose** — orientation (yaw/azimuth,
   pitch/elevation, ideally roll) and, if feasible, translation — from one
-  (optionally several) camera(s) facing the listener, in real time.
+  (optionally several) camera(s) facing the listener, in real time. **Target
+  operating range: ±45° yaw and ±45° pitch** from neutral (seated, facing the
+  screen); the tracker must stay reliable across that range. Beyond it, graceful
+  loss handling applies (NFR-5), and wider range is a later option (FR-13). This
+  bound is set by the MediaPipe FaceLandmarker spike (B0.4), which detects
+  reliably to ~±50° yaw and drops the face past it (journal 05).
 - **FR-5 [Must]** For each virtual speaker, compute its direction **relative to
   the current head pose** and render it binaurally by convolving its signal with
   the HRIR/BRIR for that relative direction (interpolated between measured

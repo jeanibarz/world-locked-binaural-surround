@@ -29,8 +29,13 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   doc ✓; loopback harness auto-pairs sink→capture ✓. A **measured** round-trip is
   gated on a one-time user routing step (VAIO→B1) or a VB-CABLE install → B0.6.
   See journal 03.)_
-- [ ] **B0.4** Head-tracker spike: get MediaPipe (or chosen model) producing a
+- [x] **B0.4** Head-tracker spike: get MediaPipe (or chosen model) producing a
   head yaw/pitch/roll estimate from a webcam frame; measure inference latency.
+  _(MediaPipe FaceLandmarker → yaw/pitch/roll via its facial-transformation
+  matrix; yaw tracked a smooth −52°→+57° sweep; inference ~12 ms (p95 15), ~3 ms
+  idle — well under the <50 ms budget. Reliable to ~±50° yaw, loses the face past
+  it → **operating range set to ±45°** (requirements FR-4). The webcam (C270,
+  ~15 fps) is the real latency bottleneck → B0.7. See journal 05.)_
 
 ## M1 — Static binaural render engine
 
@@ -115,3 +120,7 @@ _(the chain appends here as it learns)_
   only after a blocking full-buffer write) and added `--out-device/--in-device`
   overrides. Owner declined to lower the live buffer, so a single over-buffered
   point stands; see journal 04.)_
+- [ ] **B0.7** Raise the head-tracking update rate: the C270 gives ~15 fps @
+  640×480 (~66 ms/frame), which dominates the <50 ms tracking budget while
+  inference is only ~12 ms (journal 05). Evaluate MJPG fourcc / lower resolution /
+  a faster camera, and measure the achievable pose update rate. _(from journal 05)_

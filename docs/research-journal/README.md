@@ -21,8 +21,8 @@ requirements: [`../requirements.md`](../requirements.md).
 
 | Milestone | Goal | Status |
 |---|---|---|
-| M0 | Foundations: repo, docs, dev env, spikes | ◑ in progress |
-| M1 | Static binaural render engine (7.1 SOFA → stereo) | ☐ |
+| M0 | Foundations: repo, docs, dev env, spikes | ● done (B0.5/B0.7 are latency follow-ups) |
+| M1 | Static binaural render engine (7.1 SOFA → stereo) | ◑ next |
 | M2 | Head-pose tracker (camera → smoothed az/el/roll) | ☐ |
 | M3 | World-lock: tracker ↔ render, world-fixed speaker | ☐ |
 | M4 | End-to-end on Windows (virtual device → headphone) | ☐ |
@@ -43,6 +43,7 @@ The ordered work blocks live in [`../backlog.md`](../backlog.md).
 | 02 | [Audio-I/O spike](02-audio-io-spike.md) | Real WASAPI from WSL via interop: enumerate + ~22 ms reported latency; VoiceMeeter masks the hardware path. |
 | 03 | [Virtual-device spike](03-virtual-device-spike.md) | VoiceMeeter VAIO = the 7.1 sink; captured its stream (22 ms in); loopback harness exposed, measured round-trip gated on VAIO→B1 routing. |
 | 04 | [Measured round-trip latency](04-measured-roundtrip-latency.md) | Virtual loopback ≈ **130 ms** via AUX→B1 — essentially one 6144-sample (128 ms) driver buffer. Fixed a concurrent-capture bug in the spike. |
+| 05 | [Head-tracker spike](05-head-tracker-spike.md) | MediaPipe FaceLandmarker → yaw/pitch/roll from the webcam; inference ~**12 ms** (p95 14.6), but the C270's ~15 fps capture is the real bottleneck. |
 
 See also [`LEARNINGS.md`](LEARNINGS.md) — the cumulative, numbered lessons.
 

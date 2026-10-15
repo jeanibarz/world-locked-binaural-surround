@@ -36,6 +36,17 @@ dev = [
 audio = [
     "sounddevice>=0.5",
 ]
+# Head-tracker spike dependencies (B0.4). mediapipe (Apache-2.0) runs
+# FaceLandmarker; opencv-python (Apache-2.0) grabs webcam frames. Kept OUT of the
+# baseline and dev extras so `uv sync` stays green on headless WSL/CI with no
+# camera; install on the Windows host that runs spikes/b0_4_head_tracker.py
+# (`py -3.12 -m pip install mediapipe opencv-python`) or here with
+# `uv sync --extra vision`. The portable pose/latency math in
+# binaural_headtracker.head_pose needs neither and is unit-tested without them.
+vision = [
+    "mediapipe>=0.10",
+    "opencv-python>=4.8",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
