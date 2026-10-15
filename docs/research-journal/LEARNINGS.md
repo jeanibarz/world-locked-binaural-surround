@@ -21,3 +21,20 @@ full story.
    § 9): no `LICENSE`/`license` field; a `pyproject.toml` comment guards against a
    later block adding one. All deps so far are permissive (BSD/MIT/Apache), no GPL.
    (→ [01](01-python-project-setup.md))
+5. **The dev box is WSL2, but the Windows host is reachable via interop.**
+   `py.exe -3.12` runs a native Windows Python (with `sounddevice`/WASAPI and the
+   webcam); run repo scripts by their `wslpath -w` path. So Windows-only spikes
+   (audio, camera) are runnable from this box — never record them "blocked on WSL".
+   Keep portable logic in the package (unit-tested on WSL), hardware I/O in
+   `spikes/`. (→ [02](02-audio-io-spike.md))
+6. **WASAPI reality on this host:** ~22 ms reported latency (shared) on the
+   default output, which is a **VoiceMeeter virtual sink** — exclusive mode is no
+   better and the bare hardware DAC can't be opened directly (VoiceMeeter owns
+   it). The <30 ms target needs the virtual chain bypassed (B4/B8). A *measured*
+   round-trip needs a loopback the virtual device must expose (B0.3). Resolve
+   device indices as runtime *roles*, never hard-code them. (→ [02](02-audio-io-spike.md))
+7. **Language is not locked to Python.** Python-first for iteration, but a block
+   may prototype/benchmark a hot path in C/C++/Rust as soon as performance is the
+   deciding question — don't defer all native work to M8. Record the language
+   choice + its licence in the journal; keep config/HRIR/world-model shared across
+   languages. (→ AGENTS.md "Working discipline")

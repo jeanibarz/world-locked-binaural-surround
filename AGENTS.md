@@ -85,10 +85,29 @@ mid-block, because **state lives in files, not memory**. Each task:
   Never carry unfinished reasoning across the boundary in memory — put it in the
   journal.
 
+## Runtime environment (where spikes actually run)
+
+The dev box is **WSL2 (Linux)**, but it sits on the owner's **Windows** host and
+reaches it through **WSL interop** — so Windows-only spikes (audio/WASAPI,
+camera) are runnable **from here**, not blocked:
+
+- `py.exe -3.12` launches a native **Windows Python** that has the real audio
+  stack (`sounddevice`/PortAudio → WASAPI) and the webcam. Run a repo script by
+  its Windows path: `WINPATH=$(wslpath -w <script>); py.exe -3.12 "$WINPATH"`.
+- WSL itself exposes only WSLg PulseAudio (no WASAPI, no soundcard), which is
+  **not** representative of the Windows low-latency path — never quote WSL audio
+  numbers. Keep portable logic in the package (unit-tested on WSL/CI without any
+  device), and put hardware-touching code in `spikes/`.
+- Do **not** record an audio/camera block as "blocked on WSL" — drive the
+  Windows Python. (See journal 02.)
+
 ## Working discipline
 
-- Prototype in Python first for fast iteration; move hot paths native later
-  (see requirements § 5). Keep config/HRIR/world-model shared across both.
+- **Prototype in Python first** for fast iteration, but the language is **not
+  locked**: a block may prototype or benchmark a hot path in **C/C++/Rust** as
+  soon as performance is the deciding question — don't defer all native work to
+  M8 (see requirements § 5). Record the language choice and its licence in the
+  journal; keep config/HRIR/world-model shared across languages.
 - One variable at a time for any comparison; state the hypothesis before the
   result; record negative results. (Mirrors the sibling project's method.)
 - Keep large binaries (SOFA, wav, models) **out of git** (see `.gitignore`);
