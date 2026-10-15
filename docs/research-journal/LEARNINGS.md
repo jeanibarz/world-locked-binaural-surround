@@ -89,3 +89,9 @@ full story.
     save a frame and inspect it. A USB webcam also returns dark/garbage frames for
     ~1–2 s after opening — drain them (a timed settle) and ensure light, or you get
     zero detections. (→ [05](05-head-tracker-spike.md))
+18. **FaceLandmarker is reliable to ~±50° yaw and loses the face beyond it** (it is
+    a near-frontal model); detection gaps cluster exactly at the extremes, so judge
+    pose coverage from the *full* series, not a few early frames. The product
+    operating range is therefore **±45° yaw / ±45° pitch** (requirements FR-4);
+    past that is graceful-loss/re-acquisition (NFR-5, B4.2) or multi-camera
+    (FR-13). (→ [05](05-head-tracker-spike.md))

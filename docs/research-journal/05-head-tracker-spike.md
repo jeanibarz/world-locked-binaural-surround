@@ -41,28 +41,44 @@ head; and CPU inference is well under 50 ms.
 
 ## Result
 
-Live run, 150 frames, camera #0 (Logi C270) @ 640x480, 2 s settle, operator
-slowly turning:
+Live run, 200 frames, camera #0 (Logi C270) @ 640x480, 2 s settle, operator
+doing a deliberate **~±90° yaw sweep** (left, hold, right, hold):
 
 | Metric | Value |
 |---|---|
-| Faces detected | **103 / 150 (0.69)** |
-| Inference latency (face present) | mean **11.9 ms**, median 11.9, **p95 14.6**, max 16.2 |
+| Faces detected | **116 / 200 (0.58)** |
+| Inference latency (face present) | mean **11.9 ms**, median 11.8, **p95 15.0**, max 16.5 |
 | Inference latency (no face) | mean ~2.8 ms (model bails early) |
-| Warm-up first inference | 20.4 ms |
+| Warm-up first inference | ~20 ms |
 | Grab→pose (full) | mean **66.6 ms → ~15 fps** |
-| Sample yaw (deg) | 9.4 → 12.3 → 14.2 → 16.4 → 17.8 → 20.2 → 22.0 → 23.9 |
-| Sample pitch / roll (deg) | pitch ≈ −25 to −29 (steady) ; roll −2.7 → −8.5 |
+| Yaw range tracked | **−52° … +57°** (span 108°), smooth and monotonic through 0 |
+| Pitch / roll range | pitch −26…−18 (≈−22° camera-below offset) ; roll ±19° (tilt coupling) |
+| Steady frames with **no face** | **84 / 195** — clustered at the yaw extremes |
 
-Portable helpers: 34/34 pytest green on WSL; ruff + format clean.
+The trace makes the dropout explicit: continuous detection on the way out to
+~+52°, then a **gap (frames 64–93)** while held near the +90° extreme, detection
+resumes ~+55° and tracks down through 0 to ~−48°, then a second **gap (frames
+131–187)** at the −90° extreme. The misses are not random — they sit exactly
+where yaw exceeds ~±50°.
+
+An earlier, under-instrumented run logged only the first 8 detected frames
+(yaw 9→24°) and wrongly looked like a tiny range; the fix was to log the full
+series. Portable helpers: 34/34 pytest green on WSL; ruff + format clean.
 
 ## Interpretation
 
-- **Path works.** Yaw climbs monotonically (9°→24°) as the head turns — the pose
-  tracks real motion, FR-4's camera→orientation link is proven. The steady
-  pitch ≈ −26° is a fixed offset from the camera sitting *below* the face (it
-  looks up); that is exactly what neutral-pose calibration (B2.2) will zero out,
-  not an error.
+- **Path works, across a wide range.** Yaw tracks a full −52°→+57° swing smoothly
+  and monotonically — FR-4's camera→orientation link is proven, not just near
+  centre. The steady pitch ≈ −22° is a fixed offset from the camera sitting
+  *below* the face (it looks up); that is exactly what neutral-pose calibration
+  (B2.2) will zero out, not an error.
+- **The reliable range is ~±50° yaw; the model loses the face beyond it.** The
+  detection gaps sit precisely at the held ±90° extremes — a known property of a
+  near-frontal face-mesh model. This directly set the **product operating range:
+  ±45° yaw / ±45° pitch** (owner's decision, 2026-10-16), which sits safely inside
+  the reliable zone with margin; it is now in requirements § 3 (FR-4). Beyond ±45°
+  is graceful-loss territory (NFR-5 / B4.2) or a wider-range/multi-camera option
+  (FR-13).
 - **Inference is a non-issue:** ~12 ms with a face (p95 14.6), ~3 ms idle — tiny
   against the <50 ms budget. **The bottleneck is the camera**, not the model: the
   C270 at 640×480 yields ~15 fps (~66 ms between pose updates), which alone eats
@@ -78,8 +94,11 @@ Portable helpers: 34/34 pytest green on WSL; ruff + format clean.
      returned dark frames for ~1–2 s after opening (and the room was unlit).
      Adding a timed `--settle` drain (and light) fixed it. Detection is also
      sensitive to framing/exposure — hence 69 %, not 100 %.
-- Detection rate 69 % is fine for a spike; the M2 tracker can lift it with VIDEO
-  mode (temporal tracking), steadier framing, and a confidence/one-euro filter.
+- The 58 % overall detection rate is dragged down by the *deliberate* out-of-range
+  extremes (the two gaps); **within ±45° detection was continuous.** The M2 tracker
+  can still lift robustness with VIDEO mode (temporal tracking), steadier framing,
+  and a confidence/one-euro filter, and must handle re-acquisition when the head
+  leaves the operating range (B2.1 / B4.2).
 
 ## Dependency licences (§ 9 compliance — all permissive)
 

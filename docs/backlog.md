@@ -32,9 +32,10 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
 - [x] **B0.4** Head-tracker spike: get MediaPipe (or chosen model) producing a
   head yaw/pitch/roll estimate from a webcam frame; measure inference latency.
   _(MediaPipe FaceLandmarker → yaw/pitch/roll via its facial-transformation
-  matrix; yaw tracked 9°→24° on a live turn; inference ~12 ms (p95 14.6), ~3 ms
-  idle — well under the <50 ms budget. The webcam (C270, ~15 fps) is the real
-  bottleneck → B0.7. See journal 05.)_
+  matrix; yaw tracked a smooth −52°→+57° sweep; inference ~12 ms (p95 15), ~3 ms
+  idle — well under the <50 ms budget. Reliable to ~±50° yaw, loses the face past
+  it → **operating range set to ±45°** (requirements FR-4). The webcam (C270,
+  ~15 fps) is the real latency bottleneck → B0.7. See journal 05.)_
 
 ## M1 — Static binaural render engine
 

@@ -141,7 +141,11 @@ def main() -> int:
     infer_ms: list[float] = []
     frame_ms: list[float] = []
     warmup_infer_ms: list[float] = []
-    poses: list[tuple[float, float, float]] = []
+    yaws: list[float] = []
+    pitches: list[float] = []
+    rolls: list[float] = []
+    trace: list[tuple[int, float, float, float]] = []  # (frame, yaw, pitch, roll)
+    missed_frames: list[int] = []  # steady frames with no face (profile loss etc.)
     detected = 0
     processed = 0
 
@@ -172,11 +176,29 @@ def main() -> int:
                 detected += 1
                 m = np.asarray(mats[0], dtype=np.float64).reshape(4, 4)
                 yaw, pitch, roll = head_pose_from_matrix(m)
-                if i >= args.warmup and len(poses) < 8:
-                    poses.append((round(yaw, 2), round(pitch, 2), round(roll, 2)))
+                if i >= args.warmup:
+                    yaws.append(yaw)
+                    pitches.append(pitch)
+                    rolls.append(roll)
+                    trace.append((i, round(yaw, 1), round(pitch, 1), round(roll, 1)))
+            elif i >= args.warmup:
+                missed_frames.append(i)
     finally:
         cap.release()
         detector.close()
+
+    def angle_range(vals: list[float]) -> dict | None:
+        if not vals:
+            return None
+        return {
+            "min": round(min(vals), 1),
+            "max": round(max(vals), 1),
+            "span": round(max(vals) - min(vals), 1),
+        }
+
+    # Downsample the trace so the printed/stored series stays readable.
+    step = max(1, len(trace) // 30)
+    thinned = trace[::step]
 
     result_json: dict = {
         "status": "ok" if infer_ms else "no_steady_frames",
@@ -189,7 +211,11 @@ def main() -> int:
         "warmup_first_infer_ms": round(warmup_infer_ms[0], 2) if warmup_infer_ms else None,
         "inference_ms": summarize_latencies(infer_ms) if infer_ms else None,
         "frame_grab_to_pose_ms": summarize_latencies(frame_ms) if frame_ms else None,
-        "sample_poses_yaw_pitch_roll_deg": poses,
+        "yaw_range_deg": angle_range(yaws),
+        "pitch_range_deg": angle_range(pitches),
+        "roll_range_deg": angle_range(rolls),
+        "missed_after_warmup": len(missed_frames),
+        "trace_frame_yaw_pitch_roll": thinned,
     }
 
     print(
@@ -198,7 +224,13 @@ def main() -> int:
     print(f"warm-up first inference: {result_json['warmup_first_infer_ms']} ms")
     print(f"inference latency      : {result_json['inference_ms']}")
     print(f"grab->pose latency     : {result_json['frame_grab_to_pose_ms']}")
-    print(f"sample poses (y,p,r)   : {poses}")
+    print(f"yaw range  (deg)       : {result_json['yaw_range_deg']}")
+    print(
+        f"pitch/roll range (deg) : {result_json['pitch_range_deg']} / "
+        f"{result_json['roll_range_deg']}"
+    )
+    print(f"steady frames with NO face: {len(missed_frames)} of {len(infer_ms)}")
+    print(f"yaw trace (frame,y,p,r): {thinned}")
     print("\nRESULT_JSON:" + json.dumps(result_json))
     return 0
 
