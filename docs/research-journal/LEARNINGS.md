@@ -58,3 +58,19 @@ full story.
 11. **VoiceMeeter / VB-CABLE are proprietary donationware, not redistributable.**
     Depend on them at runtime only; the user installs them. Bundle nothing, add no
     Python dependency, introduce no GPL — § 9 safe. (→ [03](03-virtual-device-spike.md))
+12. **Loopback latency probes must record *concurrently* with playback.** Writing
+    the whole output buffer before reading lets the input ring overflow, so a short
+    sweep is dropped before the first read and reads as silence — while a
+    *continuous* tone hides the bug. Interleave block-writes with reads, or use one
+    full-duplex stream. (→ [04](04-measured-roundtrip-latency.md))
+13. **The measured virtual round-trip ≈ the VAIO/AUX driver buffer:** 6144 samples
+    = 128 ms → ~130 ms measured, with the engine and a 1024-sample hardware output
+    negligible beside it. Latency on the virtual path tracks that one buffer; the
+    <30 ms budget needs it driven down and/or the mixer bypassed (B0.5/B8). Two
+    independent streams make the figure a ±~20 ms ballpark (start skew + polling);
+    sample-accuracy needs a single-clock full-duplex stream.
+    (→ [04](04-measured-roundtrip-latency.md))
+14. **Use an unused VoiceMeeter input strip (AUX) → a B-bus as an isolated test
+    tap.** Measurement sweeps stay off the listening strip (VAIO→A1), so nothing
+    reaches the headphones and the normal routing is untouched.
+    (→ [04](04-measured-roundtrip-latency.md))

@@ -105,8 +105,13 @@ _(the chain appends here as it learns)_
   endpoint (e.g. the FiiO K11 DAC) and confirm it beats the ~22–24 ms the
   VoiceMeeter virtual sink reports. Feeds the <30 ms budget (requirements § 2).
   _(from journal 02)_
-- [ ] **B0.6** Complete the **measured** virtual round-trip latency: once a
+- [x] **B0.6** Complete the **measured** virtual round-trip latency: once a
   loopback route exists — VoiceMeeter VAIO strip → bus **B1**, or a dedicated
   **VB-CABLE** installed — run `spikes/b0_3_virtual_device.py` and record the real
   cross-correlated round-trip (the harness is already in place; the number was
   gated on owner-side routing/install, not on code). _(from journal 03)_
+  _(Measured **~130 ms** via an isolated AUX→B1 tap — essentially one 6144-sample
+  (128 ms) driver buffer. Fixed a concurrent-capture bug in the spike (it recorded
+  only after a blocking full-buffer write) and added `--out-device/--in-device`
+  overrides. Owner declined to lower the live buffer, so a single over-buffered
+  point stands; see journal 04.)_

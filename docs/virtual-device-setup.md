@@ -69,6 +69,24 @@ virtual stream, and — if a loopback route exists — reports a **measured
 round-trip latency**. If the route is not configured it says so and points back
 here, rather than reporting a misleading `0 ms`.
 
+### Measuring latency on an isolated tap (recommended)
+
+To measure a round-trip without sending sweeps to your headphones, route a
+*normally-unused* input strip to a B bus and target it explicitly. On this host
+(journal 04): the **AUX** input strip → bus **B1**, with the **VAIO** strip left
+on **A1** (your listening path). Then point the spike at that exact pair:
+
+```bash
+# feed AUX input (#27) -> AUX strip -> B1 -> capture VoiceMeeter Output / B1 (#35)
+py.exe -3.12 "$WINPATH" --out-device 27 --in-device 35 --seconds 2
+```
+
+`--out-device` / `--in-device` override auto-resolution so you can measure any
+render→capture pair. Indices drift — confirm them from the printed device table.
+The measured round-trip is roughly **one VAIO/AUX driver buffer** (e.g. 6144
+samples ≈ 128 ms), so lowering that buffer in the VB-Audio control panel lowers
+latency almost one-for-one — at the cost of dropout headroom on a busy host.
+
 ## Licences (donationware-release compliance, requirements § 9)
 
 VoiceMeeter and VB-CABLE are **proprietary donationware** from VB-Audio, **not**
