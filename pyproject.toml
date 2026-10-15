@@ -28,6 +28,14 @@ dev = [
     "pytest>=7.0",
     "ruff>=0.6",
 ]
+# Audio-I/O spike dependency (B0.2). sounddevice (MIT) wraps PortAudio (MIT) and
+# exposes WASAPI on Windows. Kept OUT of the baseline and dev extras so `uv sync`
+# stays green on headless WSL/CI with no audio device; install it on the Windows
+# host that runs spikes/b0_2_audio_io.py (`py -3.12 -m pip install sounddevice`)
+# or here with `uv sync --extra audio`.
+audio = [
+    "sounddevice>=0.5",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

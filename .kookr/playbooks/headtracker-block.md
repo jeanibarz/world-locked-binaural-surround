@@ -19,7 +19,10 @@ successor and you must never work more than one block.
 ## Context (read these first, every run — you start cold)
 
 - `AGENTS.md` — the binding contract for this repo (the one-block loop, git/
-  delivery rules, self-continuation + context-pressure guard). Follow it exactly.
+  delivery rules, self-continuation + context-pressure guard, and the **runtime
+  environment**: this WSL2 box reaches the Windows host via interop —
+  `py.exe -3.12` runs native Windows Python with real WASAPI + webcam, so
+  Windows-only spikes are runnable here, not "blocked on WSL"). Follow it exactly.
 - `docs/requirements.md` — what the product is and its architecture/milestones.
 - `docs/backlog.md` — the ordered queue of work blocks (the source of truth for
   "what next"). The next eligible block is the first unchecked `[ ]` (or `[~]`
@@ -42,7 +45,9 @@ block needs it; depend on it, don't duplicate it.
 2. **Implement it** in a fresh worktree:
    `git fetch origin main && git worktree add ../binaural-headtracker-<slug> -b <branch> origin/main`.
    Write/extend tests where code is involved. Keep the repo runnable and green.
-   Prototype in Python first (requirements § 5); keep hot paths portable to native.
+   Prototype in Python first (requirements § 5), but the language is not locked —
+   a block may prototype/benchmark a hot path in C/C++/Rust when performance is
+   the deciding question; record the choice + licence in the journal.
 3. **Record** (same run, before delivering):
    - Add a research-journal entry (Question/Context/Hypothesis/Method/Result/
      Interpretation/Learnings/Decision-next; negative results included), update

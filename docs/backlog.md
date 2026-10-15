@@ -14,11 +14,16 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
 - [x] **B0.1** Choose the dev language/runtime for the Python prototype; set up
   the project (pyproject/venv), linting, and a trivial passing test. Record the
   stack decision in the journal. _(uv + src/ + pytest + ruff; see journal 01.)_
-- [ ] **B0.2** Audio I/O spike: enumerate Windows audio devices and open a
+- [x] **B0.2** Audio I/O spike: enumerate Windows audio devices and open a
   low-latency stereo output + a multichannel input via WASAPI (`sounddevice` or
-  equivalent). Measure round-trip latency. Record findings.
+  equivalent). Measure round-trip latency. Record findings. _(Real WASAPI from
+  WSL via interop; enumerate ✓, stereo out ✓, multichannel in ✓, ~22 ms reported
+  latency. A measured round-trip is deferred to B0.3 (needs a virtual loopback);
+  see journal 02.)_
 - [ ] **B0.3** Virtual-device spike: confirm a path to a virtual 7.1 sink
   (VB-Audio / loopback) and capture its stream. Document setup steps for users.
+  **Also expose a clean render→capture loopback so B0.2's measured round-trip
+  latency can be completed** (VoiceMeeter VAIO→B-bus, or a dedicated VB-CABLE).
 - [ ] **B0.4** Head-tracker spike: get MediaPipe (or chosen model) producing a
   head yaw/pitch/roll estimate from a webcam frame; measure inference latency.
 
@@ -89,3 +94,9 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
 
 ### Discovered blocks / follow-ups
 _(the chain appends here as it learns)_
+
+- [ ] **B0.5** Exclusive-mode low-latency audit: once the virtual chain can be
+  bypassed (B0.3/B4), measure WASAPI exclusive-mode latency against a *hardware*
+  endpoint (e.g. the FiiO K11 DAC) and confirm it beats the ~22–24 ms the
+  VoiceMeeter virtual sink reports. Feeds the <30 ms budget (requirements § 2).
+  _(from journal 02)_
