@@ -53,6 +53,20 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   distance/scale) → per-channel (az,el) for a *fixed* head. Tested.
 - [ ] **B1.5** Wire B1.1–B1.4 into a static renderer: 7.1 PCM in → stereo out,
   offline-verified on a test signal (e.g. a known pan). No tracking yet.
+  _(Note: a static renderer already exists for the **owner's baked BRIR set** via
+  B1.6; B1.5 remains for the **generic SOFA** path through B1.1–B1.4.)_
+- [x] **B1.6** Static 7.1 → binaural renderer from the owner's **baked BRIR set**
+  (8 fixed-direction Audeze LCD-GX BRIRs): per-channel convolve + per-ear sum,
+  offline. `binaural_headtracker.surround` (`BakedBRIRSet`, `load_baked_brir`,
+  `render_7p1_to_stereo`, `SPEAKER_LAYOUT_7P1`); 9 tests; validated on the real
+  set (per-speaker ITD signs all correct). The comp FIR + parametric EQ are the
+  M5/B5 post-stage. _(owner request; see journal 07)_
+- [ ] **B1.7** Head-rotation interpolation over the owner's **8 fixed BRIRs**:
+  approximate a rotated head by **ITD resynthesis + magnitude blending** between
+  the nearest speaker BRIRs (time-alignment interpolation on the direct-path
+  wavefront; room tail held fixed). Coarse with 8 points, but usable for modest
+  turns — the owner's "vary ITD + blend signals" idea. Distinct from **B1.2** (the
+  generic continuous-SOFA interpolation). _(owner request; see journal 07)_
 
 ## M2 — Head-pose tracker
 
