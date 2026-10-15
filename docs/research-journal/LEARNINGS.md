@@ -102,3 +102,11 @@ full story.
     KEMAR where az 90° makes the ipsilateral ear ~4× louder (head shadow). Resample
     IRs with `resample_poly` using GCD-reduced up/down. Keep real `.sofa` out of
     git; test with a synthetic one. (→ [06](06-hrir-sofa-loader.md))
+20. **The owner's tuned surround is 8 fixed-direction baked BRIRs** (per 7.1
+    speaker, per ear), good for a **static** renderer but not the continuous field
+    head-tracking needs. Static render = per-channel convolve + per-ear sum (the
+    EqualizerAPO config's operation); the comp FIR + parametric EQ are a later
+    post-stage (M5/B5). Verify such a renderer **by construction** (impulse on a
+    channel → that channel's exact BRIR) and sanity-check real data by **ITD sign**
+    — ILD is unreliable here because the owner's real-head BRIRs are left/right
+    asymmetric. (→ [07](07-static-binaural-renderer.md))
