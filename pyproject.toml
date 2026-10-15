@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "binaural-headtracker"
+version = "0.1.0"
+description = "Real-time, head-tracked, world-locked binaural renderer (Python prototype)."
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+# No open-source licence is applied yet: the project targets a donationware /
+# closed release (see docs/requirements.md § 9). Do NOT add a `license` field or
+# LICENSE file until that decision is made. Keep every dependency permissive
+# (MIT/BSD/Apache); flag GPL in the research journal before adding it.
+authors = [{ name = "Jean IBARZ", email = "ibarz.jean@gmail.com" }]
+dependencies = [
+    # Core numerics for the render-engine prototype. Heavy, platform-specific
+    # audio/vision deps (sounddevice, mediapipe, sofar/python-sofa) are added by
+    # the spike blocks (B0.2–B0.4, B1.1) that first need them, each recorded with
+    # its licence in the journal — kept out of the baseline so `uv sync` stays
+    # fast and portable on CI/WSL where no audio device or camera exists.
+    "numpy>=1.24",
+    "scipy>=1.11",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.6",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+# Prototype in Python first (requirements § 5); keep it clean from the start.
+line-length = 100
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# A pragmatic default set: pyflakes (F), pycodestyle (E/W), isort (I),
+# pyupgrade (UP), flake8-bugbear (B). Expand as the codebase grows.
+select = ["E", "W", "F", "I", "UP", "B"]
+
+[tool.uv]
+package = true
