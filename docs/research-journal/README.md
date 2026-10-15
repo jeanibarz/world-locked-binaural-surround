@@ -39,6 +39,7 @@ The ordered work blocks live in [`../backlog.md`](../backlog.md).
 | # | Entry | One line |
 |---|---|---|
 | 00 | [Problem & objective](00-problem-and-objective.md) | Why world-locked head-tracked binaural, and what we are building. |
+| 01 | [Python project setup](01-python-project-setup.md) | Committed prototype stack (uv + src/ + pytest + ruff); green scaffold. |
 
 See also [`LEARNINGS.md`](LEARNINGS.md) — the cumulative, numbered lessons.
 

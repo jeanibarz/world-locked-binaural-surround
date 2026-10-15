@@ -11,9 +11,9 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
 ## M0 — Foundations
 
 - [x] Repo, README, requirements, AGENTS contract, journal skeleton, backlog
-- [ ] **B0.1** Choose the dev language/runtime for the Python prototype; set up
+- [x] **B0.1** Choose the dev language/runtime for the Python prototype; set up
   the project (pyproject/venv), linting, and a trivial passing test. Record the
-  stack decision in the journal.
+  stack decision in the journal. _(uv + src/ + pytest + ruff; see journal 01.)_
 - [ ] **B0.2** Audio I/O spike: enumerate Windows audio devices and open a
   low-latency stereo output + a multichannel input via WASAPI (`sounddevice` or
   equivalent). Measure round-trip latency. Record findings.
