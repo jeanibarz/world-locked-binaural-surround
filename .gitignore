@@ -15,6 +15,7 @@ models/
 *.wav
 *.keras
 *.onnx
+*.task
 .DS_Store
 .idea/
 .vscode/

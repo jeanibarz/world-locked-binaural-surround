@@ -74,3 +74,18 @@ full story.
     tap.** Measurement sweeps stay off the listening strip (VAIO→A1), so nothing
     reaches the headphones and the normal routing is untouched.
     (→ [04](04-measured-roundtrip-latency.md))
+15. **MediaPipe FaceLandmarker → head pose is easy and cheap.** Its 4x4
+    facial-transformation matrix gives the head orientation directly (no manual
+    solvePnP); scale-normalise the 3x3 block and decompose to Euler. CPU inference
+    is ~12 ms with a face / ~3 ms idle (p95 ~15 ms) — far inside the <50 ms
+    tracking budget. Apache-2.0; the `.task` model is user-fetched, not bundled.
+    (→ [05](05-head-tracker-spike.md))
+16. **For head tracking the camera is the bottleneck, not the model.** The C270 at
+    640×480 updates only ~15 fps (~66 ms/frame), which alone nears the <50 ms
+    tracking ceiling. Raise the *update rate* (MJPG fourcc, lower resolution,
+    faster camera) before optimising inference. (→ [05](05-head-tracker-spike.md))
+17. **Resolve the webcam by looking, not by index, and warm the sensor up.**
+    Virtual cameras (OBS Virtual Camera) masquerade as real ones at a low index;
+    save a frame and inspect it. A USB webcam also returns dark/garbage frames for
+    ~1–2 s after opening — drain them (a timed settle) and ensure light, or you get
+    zero detections. (→ [05](05-head-tracker-spike.md))
