@@ -38,3 +38,23 @@ full story.
    deciding question — don't defer all native work to M8. Record the language
    choice + its licence in the journal; keep config/HRIR/world-model shared across
    languages. (→ AGENTS.md "Working discipline")
+8. **A virtual 7.1 sink on Windows = VoiceMeeter VAIO (8-ch); VB-CABLE is stereo
+   only.** Apps select `VoiceMeeter Input (VAIO)` as their 7.1 speakers; the
+   renderer captures `VoiceMeeter Output (VAIO)`. Resolve both by name/channels at
+   runtime on the **WASAPI** host API only — the same cable also appears under
+   MME/DirectSound/WDM-KS with different latency, and **MME truncates device names
+   to 31 chars** (`MAXPNAMELEN`), breaking name matching. Pair a cable's two halves
+   by their shared trailing parenthetical. (→ [03](03-virtual-device-spike.md))
+9. **A VoiceMeeter loopback needs the virtual strip routed to a B bus.** The
+   capture endpoint opens and reads frames regardless, but stays silent until the
+   strip is assigned to B1 — report that as a config gap, never a spurious 0 ms. A
+   dedicated **VB-CABLE** gives a zero-config internal loopback for a clean latency
+   reference. The reported bound on the VoiceMeeter chain is ~44 ms (22 out + 22
+   in), above the <30 ms target. (→ [03](03-virtual-device-spike.md))
+10. **Windows-console spikes: force UTF-8 stdout and keep output ASCII.** The
+    default cp1252 codec aborts the whole run on a stray non-ASCII char (`→`); a
+    `sys.stdout.reconfigure(encoding="utf-8")` guard plus ASCII-only notes keeps
+    the RESULT_JSON line from being lost. (→ [03](03-virtual-device-spike.md))
+11. **VoiceMeeter / VB-CABLE are proprietary donationware, not redistributable.**
+    Depend on them at runtime only; the user installs them. Bundle nothing, add no
+    Python dependency, introduce no GPL — § 9 safe. (→ [03](03-virtual-device-spike.md))

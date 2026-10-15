@@ -20,10 +20,15 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   WSL via interop; enumerate ✓, stereo out ✓, multichannel in ✓, ~22 ms reported
   latency. A measured round-trip is deferred to B0.3 (needs a virtual loopback);
   see journal 02.)_
-- [ ] **B0.3** Virtual-device spike: confirm a path to a virtual 7.1 sink
+- [x] **B0.3** Virtual-device spike: confirm a path to a virtual 7.1 sink
   (VB-Audio / loopback) and capture its stream. Document setup steps for users.
   **Also expose a clean render→capture loopback so B0.2's measured round-trip
   latency can be completed** (VoiceMeeter VAIO→B-bus, or a dedicated VB-CABLE).
+  _(VoiceMeeter VAIO = 8-ch 7.1 sink ✓; captured its `VoiceMeeter Output` stream
+  (22 ms in) ✓; name/channel role-resolution helpers + Windows spike + user setup
+  doc ✓; loopback harness auto-pairs sink→capture ✓. A **measured** round-trip is
+  gated on a one-time user routing step (VAIO→B1) or a VB-CABLE install → B0.6.
+  See journal 03.)_
 - [ ] **B0.4** Head-tracker spike: get MediaPipe (or chosen model) producing a
   head yaw/pitch/roll estimate from a webcam frame; measure inference latency.
 
@@ -100,3 +105,8 @@ _(the chain appends here as it learns)_
   endpoint (e.g. the FiiO K11 DAC) and confirm it beats the ~22–24 ms the
   VoiceMeeter virtual sink reports. Feeds the <30 ms budget (requirements § 2).
   _(from journal 02)_
+- [ ] **B0.6** Complete the **measured** virtual round-trip latency: once a
+  loopback route exists — VoiceMeeter VAIO strip → bus **B1**, or a dedicated
+  **VB-CABLE** installed — run `spikes/b0_3_virtual_device.py` and record the real
+  cross-correlated round-trip (the harness is already in place; the number was
+  gated on owner-side routing/install, not on code). _(from journal 03)_
