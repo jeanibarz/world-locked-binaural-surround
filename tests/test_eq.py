@@ -95,6 +95,32 @@ def test_high_shelf_asymptotes():
     assert _gain_db_at(sos, 1.0)[0] == pytest.approx(0.0, abs=0.1)  # DC → 0
 
 
+def test_reference_coefficients_pin_alpha():
+    # Independently computed RBJ SOS (NOT via eq.py) — pins alpha(Q) and the
+    # default-S shelf alpha, which the gain-at-Fc / asymptote tests do not constrain.
+    pk = design(BiquadSpec("PK", fc=1000.0, gain_db=6.0, q=2.0), FS)
+    assert np.allclose(
+        pk, [1.0224727682, -1.9381165806, 0.9323677439, 1.0, -1.9381165806, 0.9548405121],
+        atol=1e-9,
+    )
+    ls = design(BiquadSpec("LS", fc=200.0, gain_db=10.0), FS)
+    assert np.allclose(
+        ls, [1.0108612709, -1.9718259538, 0.9621668305, 1.0, -1.9722369514, 0.9726171038],
+        atol=1e-9,
+    )
+
+
+def test_bw_octaves_equals_equivalent_q():
+    # BW-oct and its equivalent Q must give the identical filter (pins the BW→alpha
+    # branch against the Q branch). Equivalence: Q = 1/(2*sinh(ln2/2*BW*w0/sin w0)).
+    fc, bw = 2000.0, 1.0
+    w0 = 2 * np.pi * fc / FS
+    q_eq = 1.0 / (2 * np.sinh(np.log(2) / 2 * bw * w0 / np.sin(w0)))
+    by_bw = design(BiquadSpec("PK", fc=fc, gain_db=6.0, bw_oct=bw), FS)
+    by_q = design(BiquadSpec("PK", fc=fc, gain_db=6.0, q=q_eq), FS)
+    assert np.allclose(by_bw, by_q, atol=1e-12)
+
+
 def test_design_normalises_a0_to_one():
     sos = design(BiquadSpec("PK", fc=1000.0, gain_db=6.0, q=2.0), FS)
     assert sos[3] == pytest.approx(1.0, abs=1e-12)
@@ -195,3 +221,23 @@ def test_crossfade_is_click_free_and_converges():
     rms_out = np.sqrt(np.mean(steady**2))
     rms_in = np.sqrt(np.mean(tone[-1000:, 0] ** 2))
     assert 20 * np.log10(rms_out / rms_in) == pytest.approx(12.0, abs=0.5)
+
+
+def test_second_swap_mid_crossfade_is_click_free():
+    # Retune twice in quick succession (second swap lands inside the first fade).
+    # The current blend must be frozen as the new fade's source → no discontinuity.
+    fs = FS
+    tone = np.sin(2 * np.pi * 300 * np.arange(6000) / fs).reshape(-1, 1)
+    eq = ParametricEQ([[]], fs)
+    eq.process_block(tone[:500])
+    eq.set_specs([[BiquadSpec("LS", 120, 12, None)]], crossfade=2048)
+    mid = eq.process_block(tone[500:1200])  # 700 samples into a 2048 fade
+    eq.set_specs([[BiquadSpec("HS", 6000, -9, None)]], crossfade=2048)  # overlap!
+    after = eq.process_block(tone[1200:])
+    # Continuity across the second swap: last sample before vs first sample after
+    # differ by no more than a normal one-sample step of the signal around there.
+    joined = np.concatenate([mid[:, 0], after[:, 0]])
+    steps = np.abs(np.diff(joined))
+    boundary_step = abs(after[0, 0] - mid[-1, 0])
+    assert boundary_step <= 5 * np.median(steps) + 1e-9  # no click spike at the seam
+    assert np.max(np.abs(joined)) < 6.0  # bounded

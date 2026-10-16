@@ -23,8 +23,8 @@ What it provides:
   inter-block clicks), the real-time counterpart of an offline `sosfilt`.
 * `ParametricEQ` — one cascade per channel over a multichannel block (use it for
   the per-channel 7.1 input EQ *and* for the stereo output-bus EQ, FR-8), with a
-  **glitch-free live update** (`set_specs`): a short equal-energy crossfade between
-  the old and new filters so the EQ can be retuned mid-stream without a click.
+  **glitch-free live update** (`set_specs`): a short linear crossfade between the
+  old and new filters so the EQ can be retuned mid-stream without a click.
 
 Pure numpy/scipy, unit-tested headless.
 """
@@ -220,18 +220,25 @@ class ParametricEQ:
     ``(M, C)``.
 
     :meth:`set_specs` swaps the filters live. To avoid a click from the abrupt
-    coefficient/state change it runs the old and new cascades in parallel for
-    ``crossfade`` samples and equal-power-free (linear) fades old→new; after the
-    window only the new cascade remains. ``crossfade=0`` swaps hard (for tests /
-    offline use).
+    coefficient/state change it runs the outgoing and new cascades in parallel for
+    ``crossfade`` samples and fades (linear amplitude ramp) outgoing→new; after the
+    window only the new cascade remains. A second ``set_specs`` *during* a fade is
+    also click-free: the current blend is frozen as the new fade's outgoing group
+    (so the output is continuous across the second swap). ``crossfade=0`` swaps hard
+    (for tests / offline use).
     """
+
+    # A fade (per channel) is (outgoing, remaining, total): `outgoing` is a list of
+    # (cascade, weight) whose weighted sum reproduces the signal that was being
+    # output when the fade began; it fades out as (1-g) while the new cascade fades
+    # in as g, over `total` samples.
 
     def __init__(self, channel_specs: list[list[BiquadSpec]], fs: float) -> None:
         self.fs = float(fs)
         self._n = len(channel_specs)
         self._cascades = [BiquadCascade.from_specs(s, fs) for s in channel_specs]
-        # Active crossfade per channel: (old_cascade, remaining_samples, total) or None.
-        self._fade: list[tuple[BiquadCascade, int, int] | None] = [None] * self._n
+        self._fade: list[tuple[list[tuple[BiquadCascade, float]], int, int] | None]
+        self._fade = [None] * self._n
 
     @property
     def n_channels(self) -> int:
@@ -254,7 +261,17 @@ class ParametricEQ:
             self._fade = [None] * self._n
             return
         for ch in range(self._n):
-            self._fade[ch] = (self._cascades[ch], crossfade, crossfade)
+            prev = self._fade[ch]
+            if prev is None:
+                outgoing = [(self._cascades[ch], 1.0)]
+            else:
+                out_list, remaining, total = prev
+                # Gain the previous fade would apply to its *new* cascade at the next
+                # sample; freeze the current blend = (1-g)*out_list + g*current.
+                g = min(1.0, (total - remaining) / total)
+                outgoing = [(c, w * (1.0 - g)) for c, w in out_list]
+                outgoing.append((self._cascades[ch], g))
+            self._fade[ch] = (outgoing, crossfade, crossfade)
         self._cascades = new
 
     def process_block(self, block: np.ndarray) -> np.ndarray:
@@ -270,15 +287,15 @@ class ParametricEQ:
             if fade is None:
                 out[:, ch] = y_new
                 continue
-            old_cascade, remaining, total = fade
-            y_old = old_cascade.process_block(x)
+            outgoing, remaining, total = fade
+            # Advance every outgoing cascade (keep its state in sync with x) and sum
+            # with the frozen weights → the signal that was playing when the fade began.
+            y_out = sum(w * c.process_block(x) for c, w in outgoing)
             m = x.shape[0]
-            # Linear ramp new-gain 0→1 across the fade window; this block covers the
-            # samples [total-remaining, total-remaining+m).
+            # Linear new-gain ramp 0→1; this block covers samples [total-remaining, +m).
             start = total - remaining
-            idx = np.arange(start, start + m, dtype=float)
-            g_new = np.clip(idx / total, 0.0, 1.0)
-            out[:, ch] = (1.0 - g_new) * y_old + g_new * y_new
+            g_new = np.clip(np.arange(start, start + m, dtype=float) / total, 0.0, 1.0)
+            out[:, ch] = (1.0 - g_new) * y_out + g_new * y_new
             remaining -= m
-            self._fade[ch] = None if remaining <= 0 else (old_cascade, remaining, total)
+            self._fade[ch] = None if remaining <= 0 else (outgoing, remaining, total)
         return out
