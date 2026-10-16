@@ -210,17 +210,23 @@ _(the chain appends here as it learns)_
   128-sample (2.67 ms) block in pure Python (currently only 1.0×RT for 8-ch
   7.1→stereo; block 256 already clears the § 7 budget). Only if M4 needs a sub-5 ms
   block before the M8 native port. _(from journal 09)_
-- [x] **B1.10** Comb-free direct-path interpolation for the baked set: `baked_interp`
-  now offers `timealign`/`minphase`/**`notchwarp`** (default). notchwarp slides the
-  N1 pinna notch (frequency-warped magnitude) + nearer-neighbour excess phase →
-  comb-free *and* externalised. Chosen over timealign/minphase by 4 lenses (comb
-  metric, real-BRIR envelope, synthetic-listener judge, owner ear). _(journal 17)_
-- [ ] **B1.11** **Rear front/back is a data problem, not interpolation.** Journal 17
-  (judge + sibling 18/19) showed the owner's measured RL/RR BRIRs read as
-  front/back-ambiguous, so *no* interpolation fixes the back gap. Resolve via better
-  rear cues or an HRTF **set** that resolves the owner's rears (sibling HRTF-selection
-  track). Gated on an objective re-score with the owner's **mixed-rig judge**
-  (`judge_registry.best_judge()`, B7.0) once the sibling publishes it. _(journal 17)_
+- [x] **B1.10 / B1.12** Rotation over the baked set: `baked_interp` offers
+  `nearest` (**default**) / `timealign` / `minphase` / `notchwarp`. B1.10 built the
+  three synthesis methods; **B1.12 made `nearest` the default** — the mixed-rig judge
+  `pooled5` (dense cue-decomposed map) *and* the owner's ear agree it localises best
+  (25° vs 43/51°, best on the trustworthy lateral axis too), because synthesis methods
+  flip front↔back (the worst error) while nearest only drifts in azimuth. Smooth
+  rotation is the **render layer's** crossfade, not a synthesised in-between spectrum.
+  _(journals 17→18; reverses the notchwarp default.)_
+- [ ] **B3.1 note** When the tracker→render coupling lands, it **must crossfade**
+  between successive `nearest` BRIRs click-free as the head/source moves (the rotating
+  demo proves the shape via Hann overlap-add). _(journal 18)_
+- [ ] **B1.11** **Rear front/back is a data problem, not interpolation.** Journals
+  17/18 (judge + sibling 18/19) showed the owner's measured RL/RR BRIRs read as
+  front/back-ambiguous, so *no* rotation method (incl. nearest) fixes the back gap.
+  Resolve via better rear cues or an HRTF **set** that resolves the owner's rears
+  (sibling HRTF-selection track). Re-score with the owner's **mixed-rig judge**
+  (`judge_registry.best_judge()`, B7.0). **This is the next real frontier.** _(journal 18)_
 - [ ] **B0.7** Raise the head-tracking update rate: the C270 gives ~15 fps @
   640×480 (~66 ms/frame), which dominates the <50 ms tracking budget while
   inference is only ~12 ms (journal 05). Evaluate MJPG fourcc / lower resolution /
