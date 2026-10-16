@@ -94,6 +94,10 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   wavefront; room tail held fixed). Coarse with 8 points, but usable for modest
   turns — the owner's "vary ITD + blend signals" idea. Distinct from **B1.2** (the
   generic continuous-SOFA interpolation). _(owner request; see journal 07)_
+  **This is also the real fix for the "moving snare" the owner heard** — the
+  end-of-clip wander is the undirected BRIR reverb tail, not the (interaurally
+  symmetric) EQ; separating the direct-path wavefront from the held room tail
+  addresses it. _(journal 12)_
 
 ## M2 — Head-pose tracker
 
@@ -121,6 +125,15 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
 
 - [ ] **B5.1** Per-channel + bus parametric EQ (biquads), changeable live without
   glitches (reuse EqualizerAPO semantics from the sibling project).
+  _(Note: this is a **timbre / headphone-matching** feature (FR-8), now shown to be
+  **decoupled from the "movement" issue** — the owner's subjective EQ is applied
+  equally to both ears (`Channel: L R`), so it cannot change the spatial image
+  (journal 12). The sibling `binaural_localization.eqapo` already has a faithful,
+  unit-tested RBJ-biquad engine + EqualizerAPO config interpreter; the open design
+  question for this block is **depend on it vs port a live/per-channel/head-tracked
+  engine into our renderer** (AGENTS "depend, don't duplicate" vs the live
+  glitch-free + head-tracked requirement). See `spikes/b5_eqapo_offline_compare.py`
+  which reuses it to reproduce the owner's whole chain offline.)_
 - [ ] **B5.2** Preset save/load (layout + HRIR + EQ + tracker calib).
 
 ## M6 — GUI

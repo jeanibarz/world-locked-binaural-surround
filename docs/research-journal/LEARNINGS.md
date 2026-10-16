@@ -188,3 +188,21 @@ full story.
     `ModuleNotFoundError`. It is a toolchain artifact, not a code regression —
     verify against a known-good checkout before suspecting the diff.
     (→ [11](11-static-sofa-renderer.md))
+32. **A filter applied equally to both ears preserves the interaural cues exactly
+    — it re-timbres without changing the image geometry.** The owner's big
+    subjective EQ is under `Channel: L R` (same biquads on L and R), so it leaves
+    ITD/ILD untouched (0.16 dB L-vs-R asymmetry). Caveat: a common filter can still
+    shift the *perceived* image by reweighting direct-vs-diffuse energy, so symmetry
+    alone doesn't prove "no effect" — confirm with a stability metric (here the full
+    chain was no steadier). Only a *per-ear-asymmetric* stage (the comp FIR, HRIRs,
+    the convolution itself) changes the image geometry; when chasing a *spatial*
+    symptom, start with the interaurally-asymmetric parts of the chain.
+    (→ [12](12-eqapo-offline-comparison.md))
+33. **Don't ship a diagnosis as a conclusion — verify it against ground truth
+    before acting on it.** An earlier session *guessed* the missing EQ stabilised
+    the image and nearly motivated building B5 to "fix" it; reconstructing the
+    real EqualizerAPO chain offline (reusing the sibling's LTI engine) showed the
+    opposite — our render is EQ-APO's bake to 2.8e-17, and the EQ doesn't steady
+    the image at all. The "moving snare" is the BRIR reverb tail (→ B1.7), not the
+    EQ. Reuse the sibling's faithful engine for such checks; depend, don't
+    duplicate. (→ [12](12-eqapo-offline-comparison.md))
