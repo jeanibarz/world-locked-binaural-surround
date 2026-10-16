@@ -280,3 +280,11 @@ full story.
     Also: do not lock a default on a *generic* judge + a partial ear test — wait for
     the owner's best (mixed-rig) judge and a full A/B; entry 17's notchwarp default was
     reversed once they were in. (→ [18](18-nearest-default-no-flips.md))
+42. **For a device-driven component, split the device from the consumer and test the
+    consumer with a recorded clip + timestamp-driven time.** `HeadTracker` takes an
+    abstract pose *source* iterator: the webcam→MediaPipe source lives in a host spike,
+    while the threaded smoothing/publishing consumer is unit-tested on in-memory
+    `HeadPose` clips. Drive all timing from each sample's own timestamp (the 1€ filter
+    and the rate/jitter stats), so the tests are deterministic and need **no real
+    sleeps** and no hardware — and a clean `stop()` on an endless generator is testable.
+    (→ [19](19-head-tracker.md))

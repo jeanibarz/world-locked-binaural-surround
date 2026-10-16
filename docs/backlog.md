@@ -108,9 +108,14 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
 
 ## M2 — Head-pose tracker
 
-- [ ] **B2.1** Tracker interface + MediaPipe implementation: webcam → smoothed
+- [x] **B2.1** Tracker interface + MediaPipe implementation: webcam → smoothed
   (yaw,pitch,roll) stream on its own thread. One-euro filter; expose latency/
   jitter knobs. Tested with a recorded clip.
+  _(`binaural_headtracker.tracking`: `OneEuroFilter` (min_cutoff/beta knobs),
+  per-axis `PoseFilter`, threaded `HeadTracker` over an abstract pose source
+  (recorded-clip in tests, MediaPipe webcam in `spikes/b2_1_head_tracker.py`),
+  publishing a smoothed `latest()` + rate/jitter `stats`. 14 headless tests, no
+  real sleeps. The `latest()` seam is where B3.1 couples. See journal 19.)_
 - [ ] **B2.2** Calibration: define the neutral "looking at screen centre" pose;
   map camera frame → world/screen frame.
 
