@@ -169,3 +169,25 @@ guess which `saved_model/*.keras` to use** — resolve the best validated judge 
 path + metadata/metrics). Current best: **`pooled5_distribution_v1`** (pooled 5-rig,
 cross-rig QE 9.0%, in-domain 0.44%). The keras model loads in the *sibling's* env;
 this repo only resolves the path. See `judge_registry` for the contract.
+
+### Reading the judge output (observability methodology)
+
+When scoring localization with the judge, read its **full 256-bin distribution**, not
+a decoded point estimate — a bare angular error hides *how* it is wrong. Reuse the
+sibling's `explain_localization.py` / `diagnose_distribution.py` to decompose each
+direction's error onto the two orthogonal cue axes and report, per direction:
+
+- **lateral (ITD/ILD, binaural):** expected lateral angle + error + spread;
+- **polar / front-back (monaural spectral/pinna):** `geometry.distribution_front_prob`
+  (≈0.5 = genuine ambiguity, not a silent collapse) + a **bimodality / front-back
+  confusion** flag;
+- **distribution concentration/entropy** (sharp single lobe = confident; diffuse or
+  bimodal = confused), so you can tell *confident-but-flipped* from *genuinely
+  ambiguous*; and, where useful, the measured cues (ITD, ILD, pinna notch).
+
+This tells you *which cue* fails and the judge's confidence — the input to any
+"adjust to improve" loop. **Validity bound (sibling entries 20/22): the judge is
+trustworthy on the LATERAL axis but LOW-CONFIDENCE on polar/front-back for
+owner-domain (reverberant/EQ'd) input.** So trust lateral/ITD statements, treat
+front/back as directional-not-definitive, and **confirm front/back by ear** on a
+listening test before concluding.
