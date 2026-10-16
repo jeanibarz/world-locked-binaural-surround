@@ -80,7 +80,9 @@ def nearest_brir_index(azimuths: dict[int, float], source_az_deg: float) -> int:
 
     Distance is the wrapped angular distance, so e.g. a source at −170° is nearer the
     135°-side rear (RR at −135°, 35° away) than the 135° rear (55° away) only if that
-    is in fact closer — the wrap is handled. Ties resolve to the lower channel index.
+    is in fact closer — the wrap is handled. An exact tie resolves to whichever channel
+    comes first in :data:`RING_CHANNELS` order (the order ``ring_azimuths`` built the
+    dict), e.g. SL over RL at 112.5°; exact float ties don't arise from live tracking.
     """
     best_i, best_d = None, None
     for i, az in azimuths.items():
