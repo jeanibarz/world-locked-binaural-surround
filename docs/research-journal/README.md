@@ -50,6 +50,7 @@ The ordered work blocks live in [`../backlog.md`](../backlog.md).
 | 09 | [Partitioned convolution](09-partitioned-convolution.md) | Real-time uniformly-partitioned overlap-save FFT convolver (single-channel + 7.1→stereo); matches `fftconvolve` to 1e-14, latency = one block; 7.1→stereo 3.2×RT at block 256 (5.3 ms). |
 | 10 | [World layout model](10-world-layout-model.md) | Screen-relative 3-D speaker positions → per-channel (az,el); the full `Rᵀ(pᵢ−p_h)` projection defaulting to the fixed head; reproduces the nominal 7.1 angles exactly, yaw shifts every azimuth by −yaw. |
 | 11 | [Static SOFA renderer](11-static-sofa-renderer.md) | Wired B1.1–B1.4 into `binaural_headtracker.render` (generic-SOFA 7.1→stereo, fixed head): layout → per-speaker HRIR lookup → convolve-and-sum; offline render == the B1.3 streaming engine to 1e-9; world-lock seam (head_rotation) ready for M3. |
+| 12 | [EqualizerAPO offline comparison](12-eqapo-offline-comparison.md) | Our render == EQ-APO's bake to 2.8e-17; the subjective EQ is interaurally symmetric (0.16 dB) so it re-timbres, can't move the image; comp+EQ doesn't steady ITD/coherence → the "moving snare" is the BRIR reverb tail (B1.7), not the missing EQ. Refutes the earlier guess. |
 
 See also [`LEARNINGS.md`](LEARNINGS.md) — the cumulative, numbered lessons.
 
