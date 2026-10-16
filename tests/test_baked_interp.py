@@ -14,10 +14,11 @@ import pytest
 
 from binaural_headtracker.baked_interp import (
     DIRECTIONAL_7P1,
+    _min_phase_from_magnitude,
     interpolate_baked_brir,
     ring_azimuths,
 )
-from binaural_headtracker.interpolate import estimate_delay
+from binaural_headtracker.interpolate import estimate_delay, fractional_delay
 from binaural_headtracker.surround import SPEAKER_LAYOUT_7P1, BakedBRIRSet
 
 FS = 48000
@@ -151,3 +152,154 @@ def test_rejects_set_without_two_directional_speakers():
                        samplerate=FS)
     with pytest.raises(ValueError):
         interpolate_baked_brir(one, 10.0)
+
+
+# --- minimum-phase magnitude-domain interpolation (comb-free, B1.10) --------
+
+
+def test_min_phase_reconstruction_preserves_magnitude_and_is_causal():
+    # A known FIR's magnitude, rebuilt as minimum-phase, must keep that magnitude
+    # and be causal/front-loaded (min-phase packs energy earliest).
+    nfft = 512
+    h = np.array([1.0, -0.8, 0.5, 0.2, -0.3])
+    mag = np.abs(np.fft.rfft(h, n=nfft))
+    mp = _min_phase_from_magnitude(mag, nfft)
+    assert np.allclose(np.abs(np.fft.rfft(mp, n=nfft)), mag, atol=1e-6)
+    # min-phase ⇒ most energy in the first few samples
+    cum = np.cumsum(mp**2) / np.sum(mp**2)
+    assert cum[8] > 0.9
+
+
+def _comb_pair_set(delay_lo=6, delay_hi=11):
+    # Two adjacent ring speakers (L @30°, SL @90°) whose direct paths are comb
+    # filters (delta + reflection) with nulls at DIFFERENT frequencies.
+    base = 60
+    left = np.zeros((2, N))
+    right = np.zeros((2, N))
+    for row, dly in ((0, delay_lo), (1, delay_hi)):
+        for ch in (left, right):
+            ch[row, base] = 1.0
+            ch[row, base + dly] = 0.9  # reflection → spectral comb at fs/(2*dly)
+    return BakedBRIRSet(channels=("L", "SL"), left=left, right=right, samplerate=FS)
+
+
+def _direct_mag(ir, split=240, nfft=512):
+    """Onset-aligned magnitude spectrum of a direct window (placement delay removed)."""
+    seg = np.pad(ir[:split], (0, split))
+    t = estimate_delay(seg)
+    return np.abs(np.fft.rfft(fractional_delay(seg, -t)[:split], n=nfft))
+
+
+def test_minphase_stays_within_parent_envelope_timealign_combs_below_it():
+    # At 60° (midway L↔SL), the two directs are combs with nulls at different freqs.
+    # minphase blends LOG-MAGNITUDE → weighted geometric mean, which stays pointwise
+    # within [min,max] of the parents (keeps real notches, invents none). timealign
+    # is a COMPLEX sum that cancels where phases oppose → dips BELOW both parents,
+    # i.e. a spurious comb. That below-the-envelope dip is the rotation smear.
+    brir = _comb_pair_set()
+    mlo, mhi = _direct_mag(brir.left[0]), _direct_mag(brir.left[1])
+    p_min, p_max = np.minimum(mlo, mhi), np.maximum(mlo, mhi)
+    lt, _ = interpolate_baked_brir(brir, 60.0, method="timealign")
+    lm, _ = interpolate_baked_brir(brir, 60.0, method="minphase")
+    band = slice(5, 512 // 4)  # skip DC / very low bins
+    eps = 1e-9
+    mt, mm = _direct_mag(lt)[band], _direct_mag(lm)[band]
+    pmn, pmx = p_min[band] + eps, p_max[band] + eps
+    # minphase: never drops meaningfully below the parents' lower envelope (geometric interior).
+    assert np.min(mm / pmn) > 0.85
+    assert np.max(mm / pmx) < 1.15
+    # timealign: dips well below both parents somewhere → spurious cancellation comb.
+    assert np.min(mt / pmn) < 0.7
+
+
+def test_minphase_itd_still_interpolates():
+    brir = _synthetic_set()
+    left, right = interpolate_baked_brir(brir, 60.0, method="minphase")
+    itd = estimate_delay(right) - estimate_delay(left)
+    lo, hi = brir.index("L"), brir.index("SL")
+    itd_lo = estimate_delay(brir.right[lo]) - estimate_delay(brir.left[lo])
+    itd_hi = estimate_delay(brir.right[hi]) - estimate_delay(brir.left[hi])
+    assert itd_lo < itd < itd_hi
+
+
+def test_minphase_exact_at_measured_direction():
+    brir = _synthetic_set()
+    i = brir.index("SL")
+    left, right = interpolate_baked_brir(brir, SPEAKER_LAYOUT_7P1["SL"][0], method="minphase")
+    assert np.array_equal(left, brir.left[i]) and np.array_equal(right, brir.right[i])
+
+
+def test_invalid_method_raises():
+    brir = _synthetic_set()
+    with pytest.raises(ValueError):
+        interpolate_baked_brir(brir, 60.0, method="bogus")
+
+
+# --- notch-frequency-warping interpolation (B1.10) --------------------------
+
+
+def _notched_pair_set(f_lo_hz=6000.0, f_hi_hz=9000.0):
+    # Two adjacent ring speakers (L@30°, SL@90°) whose directs each have ONE clean
+    # pinna-like notch, at different frequencies: a Gaussian magnitude dip rebuilt
+    # as a minimum-phase impulse placed at `base`.
+    base = 60
+    nfft = 512
+    freqs = np.fft.rfftfreq(nfft, 1 / FS)
+    left = np.zeros((2, N))
+    right = np.zeros((2, N))
+    for row, f in ((0, f_lo_hz), (1, f_hi_hz)):
+        mag = 1.0 - 0.95 * np.exp(-(((freqs - f) / 800.0) ** 2))
+        mp = _min_phase_from_magnitude(mag, nfft)
+        left[row, base : base + nfft] = mp[: min(nfft, N - base)]
+        right[row] = left[row]
+    return BakedBRIRSet(channels=("L", "SL"), left=left, right=right, samplerate=FS)
+
+
+def _deepest_notch_hz(ir, split=240, nfft=1024):
+    seg = np.pad(ir[:split], (0, split))
+    t = estimate_delay(seg)
+    mag = np.abs(np.fft.rfft(fractional_delay(seg, -t)[:split], n=nfft))
+    freqs = np.fft.rfftfreq(nfft, 1 / FS)
+    band = (freqs >= 5000) & (freqs <= 11000)
+    logm = 20 * np.log10(np.maximum(mag, 1e-9))
+    idx = np.where(band)[0]
+    return float(freqs[idx[int(np.argmin(logm[idx]))]])
+
+
+def test_notchwarp_slides_notch_to_interpolated_frequency():
+    # Neighbours notch at 6 k and 9 k; the 60°(=midway L↔SL) interp should put a
+    # SINGLE notch near 7.5 k, not keep both at 6 k and 9 k (what a plain mag blend
+    # does). Check the deepest notch is near the interpolated frequency.
+    brir = _notched_pair_set(6000.0, 9000.0)
+    left, _ = interpolate_baked_brir(brir, 60.0, method="notchwarp")
+    f = _deepest_notch_hz(left)
+    assert 6800.0 < f < 8200.0  # ≈ 7.5 kHz, the interpolated notch
+
+
+def test_notchwarp_matches_measured_notch_at_the_endpoints():
+    # Near a speaker the warped notch coincides with that speaker's own notch.
+    brir = _notched_pair_set(6000.0, 9000.0)
+    left, _ = interpolate_baked_brir(brir, 40.0, method="notchwarp")  # close to L(30°)
+    assert _deepest_notch_hz(left) < 7000.0  # pulled toward L's 6 kHz notch
+
+
+def test_notchwarp_continuous_across_midpoint():
+    # The excess-phase blend must be continuous across frac=0.5 (no nearer-neighbour
+    # switch): the interpolated BRIR just below vs just above the L↔SL midpoint (60°)
+    # should differ only slightly, not jump. Pins the group-delay-step fix.
+    brir = _notched_pair_set(6000.0, 9000.0)
+    lo_a, _ = interpolate_baked_brir(brir, 59.0, method="notchwarp")
+    lo_b, _ = interpolate_baked_brir(brir, 61.0, method="notchwarp")
+    direct_a, direct_b = lo_a[:240], lo_b[:240]
+    step = np.max(np.abs(direct_a - direct_b))
+    scale = np.max(np.abs(direct_a))
+    assert step < 0.15 * scale  # smooth across the midpoint, no ~discontinuous jump
+
+
+def test_notchwarp_applies_excess_phase_not_plain_minphase():
+    # notchwarp must keep real excess phase → its direct differs from a plain
+    # minimum-phase reconstruction of the same (warped) magnitude.
+    brir = _notched_pair_set(6000.0, 9000.0)
+    nw, _ = interpolate_baked_brir(brir, 60.0, method="notchwarp")
+    mp, _ = interpolate_baked_brir(brir, 60.0, method="minphase")
+    assert not np.allclose(nw[:240], mp[:240], atol=1e-6)
