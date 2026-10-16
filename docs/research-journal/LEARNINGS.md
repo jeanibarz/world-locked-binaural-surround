@@ -288,3 +288,12 @@ full story.
     and the rate/jitter stats), so the tests are deterministic and need **no real
     sleeps** and no hardware — and a clean `stop()` on an endless generator is testable.
     (→ [19](19-head-tracker.md))
+43. **Build the world head-rotation from per-axis angle *deltas from neutral*, mapped
+    to world axes, and defer the camera's sign to a host flag.** calibrate takes
+    `(yaw,pitch,roll)` relative to a neutral "screen-centre" pose and composes
+    `Rz(Δyaw)·Ry(Δpitch)·Rx(Δroll)` with yaw→world-up, pitch→world-left,
+    roll→world-front — so neutral = identity and +yaw shifts every azimuth by −yaw
+    (the B1.4 world-lock property), unit-testable headless. Which way the *camera*
+    calls "+yaw" is hardware-dependent: expose `yaw_sign`/`pitch_sign`/`roll_sign`
+    (default +1) and confirm them once on the host, rather than hard-coding a guess.
+    (→ [20](20-calibration-camera-to-world.md))

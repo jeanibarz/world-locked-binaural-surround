@@ -23,7 +23,7 @@ requirements: [`../requirements.md`](../requirements.md).
 |---|---|---|
 | M0 | Foundations: repo, docs, dev env, spikes | ● done (B0.5/B0.7 are latency follow-ups) |
 | M1 | Static binaural render engine (7.1 SOFA → stereo) | ● core done (B1.7 head-rot interp remains) |
-| M2 | Head-pose tracker (camera → smoothed az/el/roll) | ◑ in progress (B2.1 tracker+1€ done; B2.2 calibration remains) |
+| M2 | Head-pose tracker (camera → smoothed az/el/roll) | ● done (B2.1 tracker+1€, B2.2 calibration; axis signs host-confirmed) |
 | M3 | World-lock: tracker ↔ render, world-fixed speaker | ☐ |
 | M4 | End-to-end on Windows (virtual device → headphone) | ☐ |
 | M5 | Live EQ filters & presets | ◑ in progress (B5.1 EQ engine done; comp+EQ render integration + presets remain) |
@@ -58,6 +58,7 @@ The ordered work blocks live in [`../backlog.md`](../backlog.md).
 | 17 | [Interpolation method & the back gap](17-interpolation-method-and-the-back-gap.md) | B1.10: evaluated timealign/minphase/notchwarp 4 ways; picked notchwarp on a *generic* judge + partial ear test. **Superseded by entry 18.** Standing finding: the 90° back gap is broken for all methods (owner's rear BRIRs front/back-ambiguous) — a data problem. |
 | 18 | [Nearest default, no flips](18-nearest-default-no-flips.md) | B1.12: the mixed-rig judge `pooled5` (dense cue-decomposed map) **and** the ear agree — **`nearest` real BRIR wins** (25° vs 43/51°, best on the trustworthy lateral axis too). Synthesis methods flip front↔back (the worst error); nearest only drifts in azimuth. Default → `nearest`; smooth rotation is the render-layer crossfade. Reverses entry 17's default. |
 | 19 | [Head-pose tracker](19-head-tracker.md) | B2.1: `binaural_headtracker.tracking` — 1€ filter (latency/jitter knobs), per-axis `PoseFilter`, threaded `HeadTracker` over an abstract pose source (recorded-clip in tests, MediaPipe webcam in the host spike), publishing a smoothed latest pose + rate/jitter stats. 14 headless tests, no real sleeps. The `latest()` seam is where B3.1 plugs in. |
+| 20 | [Calibration: camera→world](20-calibration-camera-to-world.md) | B2.2: `calibrate` — neutral "screen-centre" pose + the deferred Euler→world-rotation mapping (yaw→+z, pitch→+y, roll→+x), so `head_rotation(cal,pose)` feeds `world.head_relative_directions`. Verified: neutral→identity→nominal layout; +30° yaw ⇒ every az −30° (world-lock) through a calibrated pose. Camera signs host-confirmed. M2 complete. |
 
 See also [`LEARNINGS.md`](LEARNINGS.md) — the cumulative, numbered lessons.
 
