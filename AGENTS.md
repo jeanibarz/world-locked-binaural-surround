@@ -117,9 +117,43 @@ camera) are runnable **from here**, not blocked:
   record an RFC-style journal entry proposing a direction and proceed with the
   best-justified option rather than stalling.
 
+## Analysis depth — extract the maximum (NON-NEGOTIABLE)
+
+One experiment, one average, and a couple of aggregate stats is **not** an
+analysis — it is the *start* of one. Shallow "ran it, averaged it, done" is the
+single biggest failure mode here; catch yourself in it. Before concluding
+**anything**, at high effort:
+
+- **Use every tool and knowledge source you have — all of them.** You are not
+  limited to a Python REPL. Reach for: the sibling's **synthetic-listener judge**
+  (`binaural_localization.second_listener`) and its **pinna-notch toolkit**
+  (`binaural_localization.notch`) and DTF/interpolation code; the domain
+  **knowledge bases** via `kb search` / the `kb-scout` agent (`hrtf-individualization`,
+  `auditory-localization-models`, `sound-source-localization`,
+  `experiment-methodology`, …); the research literature; subagents for parallel
+  analysis. Leaving a relevant instrument unused is a defect, not a shortcut.
+- **Analyse from every angle, never one.** Per-item *and* aggregate; over time
+  *and* over frequency; per-channel *and* per-direction; distributions, outliers
+  and trends — not just the mean. The mean hides exactly the structure that
+  explains the phenomenon (an L/R asymmetry, a per-direction dip, a reverb-tail
+  wander all vanish into an average).
+- **When you have multiple evaluators/judges, run MANY evaluations and
+  triangulate.** Cross-check every claim by an independent method. A conclusion
+  only one metric supports is a *hypothesis*, not a finding; several cheap probes
+  that agree beat one headline number.
+- **Let the ear (and the judge) arbitrate, then find the metric that agrees.**
+  If a measurement disagrees with perception, the measurement is the wrong proxy
+  — keep digging for the right one (see LEARNINGS L33, the DRR correction).
+- Conclude only when the evidence is **exhausted and converges**, and record what
+  you **ruled out**, not just what you found.
+
+This is how the research moves toward the correct direction. Depth first.
+
 ## The sibling project
 
 `../binaural-localization` is the research project building the **synthetic-listener
 judge** and HRIR/EQ findings this project reuses for calibration (FR-10/11). Read
 its `docs/research-journal/` when working calibration blocks; do not duplicate its
-work — depend on it.
+work — depend on it. It also carries reusable analysis instruments to bring to bear
+(per *Analysis depth* above): `second_listener` (localization judge), `notch`
+(pinna-notch metrics), `dtf`, and the `eqapo` engine.
