@@ -110,3 +110,20 @@ full story.
     channel → that channel's exact BRIR) and sanity-check real data by **ITD sign**
     — ILD is unreliable here because the owner's real-head BRIRs are left/right
     asymmetric. (→ [07](07-static-binaural-renderer.md))
+21. **Interpolate HRIRs by time-alignment, never by averaging samples.** Summing
+    two IRs whose arrivals differ by a delay comb-filters them (periodic magnitude
+    nulls) and destroys the ITD. Instead estimate each neighbour's broadband delay
+    *per ear*, advance each to a common origin, blend the aligned IRs, then
+    re-apply the weighted-mean delay — the ITD is carried as an explicit, smoothly
+    interpolated delay. On KEMAR leave-one-out this is ~2.7x closer to the true
+    measured IR than naive averaging (2.50 vs 6.81 dB LSD). k-NN inverse-distance
+    weights (p=2) suffice for M1 and need no sphere triangulation; VBAP/barycentric
+    is a later refinement (B1.8). (→ [08](08-direction-interpolation.md))
+22. **Estimate an IR's arrival delay from the Hilbert (analytic-signal) envelope
+    peak, not argmax(|ir|).** A real HRIR has several comparable sample peaks
+    (pinna lobes), so the raw peak hops between them and the derived ITD jumps
+    (8 samples across 5 deg on KEMAR — an artefact); the envelope has one smooth
+    broadband maximum and the ITD comes out monotone (0 -> ~35 smp / 0.73 ms over
+    0->90 deg). The raw-peak estimator passed every *synthetic* delta test and only
+    failed on real data — validate delay estimators on measured HRIRs.
+    (→ [08](08-direction-interpolation.md))

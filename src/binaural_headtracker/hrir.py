@@ -115,9 +115,23 @@ class HRIRSet:
         return nearest_index(self.directions, az, el)
 
     def nearest_irs(self, az: float, el: float) -> tuple[np.ndarray, np.ndarray]:
-        """Nearest-direction ``(left_ir, right_ir)`` (B1.2 adds interpolation)."""
+        """Nearest-direction ``(left_ir, right_ir)`` (uninterpolated)."""
         i = self.nearest(az, el)
         return self.left[i], self.right[i]
+
+    def interpolated_irs(
+        self, az: float, el: float, k: int = 3, power: float = 2.0
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """ITD-aware interpolated ``(left_ir, right_ir)`` for any ``(az, el)``.
+
+        Blends the ``k`` nearest measured directions with inverse-distance
+        weights, time-aligning per ear so the interaural/inter-direction delay
+        interpolates without comb-filtering. See
+        :func:`binaural_headtracker.interpolate.interpolate_hrir` (B1.2).
+        """
+        from .interpolate import interpolate_hrir  # local import avoids a cycle
+
+        return interpolate_hrir(self, az, el, k=k, power=power)
 
     def ipsi_contra(self, az: float, el: float) -> tuple[np.ndarray, np.ndarray]:
         """Nearest ``(ipsilateral, contralateral)`` IRs for a source at ``(az, el)``.

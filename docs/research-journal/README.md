@@ -46,6 +46,7 @@ The ordered work blocks live in [`../backlog.md`](../backlog.md).
 | 05 | [Head-tracker spike](05-head-tracker-spike.md) | MediaPipe FaceLandmarker → yaw/pitch/roll from the webcam; inference ~**12 ms** (p95 14.6), but the C270's ~15 fps capture is the real bottleneck. |
 | 06 | [HRIR/SOFA loader](06-hrir-sofa-loader.md) | Read SOFA via h5py → directions + per-ear IRs + engine-rate resample; validated on MIT KEMAR (ipsi/contra 4:1 head shadow confirms the convention). |
 | 07 | [Static binaural renderer](07-static-binaural-renderer.md) | 7.1 → stereo from the owner's 8 baked Audeze BRIRs (convolve + per-ear sum); per-speaker ITD signs all correct; the EQ chain is deferred to M5. |
+| 08 | [Direction interpolation](08-direction-interpolation.md) | ITD-aware time-alignment interpolation over a SOFA set (Hilbert-envelope delay + fractional shift + k-NN blend); KEMAR leave-one-out LSD 2.50 vs 6.81 dB naive. |
 
 See also [`LEARNINGS.md`](LEARNINGS.md) — the cumulative, numbered lessons.
 

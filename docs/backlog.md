@@ -45,8 +45,13 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   nearest lookup, ipsi/contra, polyphase resample). 12 tests on a synthetic SOFA +
   pure math; validated on MIT KEMAR (710 dirs, ipsi/contra 4:1 head shadow). h5py
   added to baseline. See journal 06.)_
-- [ ] **B1.2** Direction interpolation: given (az,el), return an interpolated
+- [x] **B1.2** Direction interpolation: given (az,el), return an interpolated
   HRIR (nearest → bilinear/VBAP, ITD-aware). Tested against known directions.
+  _(`binaural_headtracker.interpolate`: ITD-aware **time-alignment** interpolation
+  — Hilbert-envelope delay estimate + FFT fractional shift + k-NN inverse-distance
+  blend (`interpolate_hrir`, `HRIRSet.interpolated_irs`). 17 tests; exact at
+  measured dirs; KEMAR leave-one-out LSD **2.50 vs 6.81 dB** naive, ITD smooth
+  0→~35 smp. See journal 08.)_
 - [ ] **B1.3** Partitioned-FFT convolution engine: per-channel real-time convolve
   with overlap-save; correctness + latency test vs. `scipy.fftconvolve`.
 - [ ] **B1.4** 7.1 world layout model (screen-relative positions, configurable
@@ -138,6 +143,11 @@ _(the chain appends here as it learns)_
   only after a blocking full-buffer write) and added `--out-device/--in-device`
   overrides. Owner declined to lower the live buffer, so a single over-buffered
   point stands; see journal 04.)_
+- [ ] **B1.8** Barycentric / Delaunay-VBAP direction interpolation: replace the
+  k-NN inverse-distance weighting (B1.2) with a triangulated-sphere barycentric
+  blend (smoother across the grid, no third-neighbour pull past the two bracketing
+  measurements). Only if grid artefacts show up under fast head motion in M3;
+  B1.2's k-NN is sufficient for the MVP. _(from journal 08)_
 - [ ] **B0.7** Raise the head-tracking update rate: the C270 gives ~15 fps @
   640×480 (~66 ms/frame), which dominates the <50 ms tracking budget while
   inference is only ~12 ms (journal 05). Evaluate MJPG fourcc / lower resolution /
