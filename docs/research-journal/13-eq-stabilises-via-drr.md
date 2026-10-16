@@ -43,8 +43,10 @@ direct wavefront) over energy in the diffuse tail (8–68 ms after onset), in dB
 
 ## Result
 
-DRR is higher with the full chain on 7 of 8 channels, and the **rear/side
-channels — the ones the owner flagged as unstable — gain the most**:
+DRR is higher with the full chain on 7 of 8 channels. The dramatic standout is
+**rear-right (RR, +5.1 dB)** — the channel the owner flagged — whose bake-only
+tail is *louder* than its direct sound; the other rear/side channels gain
+moderately (SL +2.6, SR +1.8, RL +1.6) and the fronts least (R ~0):
 
 | channel | DRR bake | DRR full | Δ |
 |---|--:|--:|--:|
@@ -62,8 +64,22 @@ In the bake, **RR's diffuse tail is 5 dB *louder* than its direct sound** (DRR
 −5.1 dB) — so the rear-right image has almost nothing fixed to hold onto and
 wanders badly. The full chain pulls it to ~0 dB. The tail does **not** become
 directional (its interaural coherence stays ~0.0–0.09 either way) — the EQ makes
-it *quieter relative to the direct hit*, not *directional*. That is exactly the
-mechanism the owner described, and it matches the listening test.
+it *quieter relative to the direct hit*, not *directional*. This is the mechanism
+the owner described, and it is consistent with the A/B listening (bake wanders,
+full steady).
+
+**Caveats.** (a) The DRR here uses an *early*-reverb tail window (8–68 ms), the
+textbook DRR definition and a scale-invariant ratio (so a flat gain change cannot
+move it — only differential direct-vs-tail spectral shaping can); the owner's
+wander is loudest at *clip-end* (the exposed late tail), which DRR indexes via the
+tail's relative spectral level but does not measure directly. (b) The measured
++1.9 dB is the **full chain** (per-ear comp *and* the symmetric subjective EQ)
+vs bake — the per-ear comp carries the 2.93 dB interaural change (entry 12), while
+the subjective EQ's HF boost is the main common-mode spectral tilt; we did not
+split DRR by sub-stage. (c) Ground truth is single-listener, non-blind — so DRR
+"supports", not "proves"; its weight comes from being a *pre-existing* principled
+cue (precedence effect) whose rear-right prediction then bore out, not a metric
+fit after the fact.
 
 ## Decision / next
 
