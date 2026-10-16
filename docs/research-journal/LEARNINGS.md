@@ -319,3 +319,20 @@ full story.
     from a plain convolution for no gain). Keep the world-lock geometry out of the
     renderer: pass it only the source's head-relative azimuth, computed in the tested
     `calibrate`/`world` layer via a one-"speaker" `source_layout`. (→ [22](22-live-world-lock.md))
+46. **A real-time audio callback must not assume a fixed buffer size, and must not let an
+    exception escape.** WASAPI (and most backends) call back with a *variable* frame count,
+    not your `blocksize`. If the callback assumes `frames == block_size` it raises, and a
+    raised callback **silently aborts** the PortAudio stream — the classic "video runs, no
+    sound." Decouple the engine's fixed processing block from the callback: render fixed
+    blocks into a small `pending` buffer and serve whatever `frames` are requested; wrap the
+    body in try/except and surface the error to the main loop (zero-fill the output) instead
+    of dying mutely. This only ever showed on a real device — headless tests all passed.
+    (→ [23](23-device-pickers-and-host-bringup.md))
+47. **Estimate head pose from the un-mirrored frame; mirror only the display.** A webcam
+    preview is flipped so it reads like a mirror, but feeding that flipped frame to the pose
+    estimator **negates yaw** — so the world-lock reverses and the source *tracks the head*
+    instead of staying fixed. Detect on the true frame and flip only what's drawn (flip the
+    landmark x if there's an overlay). Keeps the `yaw_sign=+1` convention (L43) consistent
+    and fixes the sign at the root rather than papering over it with a flag. Predicted by the
+    B6.1 review of the un-tested cv2 shell; confirmed only by a live head turn on the host —
+    hardware is the only real test of a sign. (→ [23](23-device-pickers-and-host-bringup.md))

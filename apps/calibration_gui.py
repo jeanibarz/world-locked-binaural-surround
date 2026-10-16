@@ -12,6 +12,7 @@ radar geometry (`radar`, unit-tested). Only the camera, MediaPipe and the OpenCV
 are host-side, so this runs on the Windows host, not CI/WSL:
 
     py -3.12 apps/calibration_gui.py --model face_landmarker.task
+    # a pre-launch menu picks the camera; --no-dialog uses --camera N instead.
     # flags: --camera 0  --min-cutoff 1.0 --beta 0.3  --yaw-sign ±1 --pitch-sign ±1 --roll-sign ±1
 
 The sign flags confirm the camera's axis directions against the live feed (B2.2): turn
@@ -28,6 +29,7 @@ from pathlib import Path
 import numpy as np
 
 from binaural_headtracker.calibrate import HeadCalibration, calibrate_neutral, directions_for_pose
+from binaural_headtracker.devices import camera_choices, probe_cameras, settings_dialog
 from binaural_headtracker.head_pose import head_pose_from_matrix
 from binaural_headtracker.radar import azimuth_to_radar_xy, nearest_front_channel
 from binaural_headtracker.tracking import HeadPose, PoseFilter
@@ -65,12 +67,13 @@ def _draw_hud(frame, pose: HeadPose) -> None:
         _text(frame, f"{val:+5.1f}", x0 + 104, y, ACCENT)
 
 
-def _draw_landmarks(frame, landmarks) -> None:
+def _draw_landmarks(frame, landmarks, *, mirror=False) -> None:
     import cv2
 
     h, w = frame.shape[:2]
     for lm in landmarks:
-        cv2.circle(frame, (int(lm.x * w), int(lm.y * h)), 1, ACCENT, -1, cv2.LINE_AA)
+        x = (1.0 - lm.x) if mirror else lm.x  # landmarks come from the un-mirrored frame
+        cv2.circle(frame, (int(x * w), int(lm.y * h)), 1, ACCENT, -1, cv2.LINE_AA)
 
 
 def _draw_radar(canvas, cx, cy, R, dirs, channels, nearest_i) -> None:
@@ -105,6 +108,8 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--model", type=Path, required=True, help="FaceLandmarker .task path")
     p.add_argument("--camera", type=int, default=0)
+    p.add_argument("--no-dialog", action="store_true",
+                   help="skip the camera-picker menu and use --camera")
     p.add_argument("--min-cutoff", type=float, default=1.0)
     p.add_argument("--beta", type=float, default=0.3)
     p.add_argument("--yaw-sign", type=float, default=1.0)
@@ -112,7 +117,16 @@ def main(argv=None) -> int:
     p.add_argument("--roll-sign", type=float, default=1.0)
     args = p.parse_args(argv)
 
-    cap = cv2.VideoCapture(args.camera)
+    cam_index = args.camera
+    if not args.no_dialog:
+        picked = settings_dialog(camera_choices(probe_cameras()), [],
+                                 title="Calibration — camera", camera_default=args.camera)
+        if picked is None:
+            return 0  # cancelled
+        if picked["camera"] is not None:
+            cam_index = picked["camera"]
+
+    cap = cv2.VideoCapture(cam_index)
     detector = vision.FaceLandmarker.create_from_options(vision.FaceLandmarkerOptions(
         base_options=mp.tasks.BaseOptions(model_asset_path=str(args.model)),
         output_facial_transformation_matrixes=True, num_faces=1))
@@ -132,9 +146,12 @@ def main(argv=None) -> int:
             continue
         now = time.monotonic()
         times.append(now)
-        frame = cv2.flip(frame, 1)  # mirror, so moving left looks left
+        # Estimate the pose from the TRUE (un-mirrored) frame so yaw keeps its real sign
+        # (mirroring would invert it → the radar swings the wrong way); mirror only for
+        # display and flip the landmark x so the overlay still lines up.
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         result = detector.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
+        frame = cv2.flip(frame, 1)  # mirror, so moving left looks left
         pose = None
         if result.facial_transformation_matrixes:
             mat = np.asarray(result.facial_transformation_matrixes[0])
@@ -142,7 +159,7 @@ def main(argv=None) -> int:
             pose = pose_filter.update(HeadPose(yaw, pitch, roll, now))
             recent.append(pose)
             if result.face_landmarks:
-                _draw_landmarks(frame, result.face_landmarks[0])
+                _draw_landmarks(frame, result.face_landmarks[0], mirror=True)
             _draw_hud(frame, pose)
 
         canvas = np.full((CAM_H + BAR, CAM_W + RAD_W, 3), BG, np.uint8)
