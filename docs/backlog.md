@@ -52,8 +52,14 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   blend (`interpolate_hrir`, `HRIRSet.interpolated_irs`). 17 tests; exact at
   measured dirs; KEMAR leave-one-out LSD **2.50 vs 6.81 dB** naive, ITD smooth
   0→~35 smp. See journal 08.)_
-- [ ] **B1.3** Partitioned-FFT convolution engine: per-channel real-time convolve
+- [x] **B1.3** Partitioned-FFT convolution engine: per-channel real-time convolve
   with overlap-save; correctness + latency test vs. `scipy.fftconvolve`.
+  _(`binaural_headtracker.convolve`: `PartitionedConvolver` (uniformly-partitioned
+  overlap-save, single channel) + `StereoConvolver` (C-in→stereo, live counterpart
+  of B1.6's `render_7p1_to_stereo`) + `convolve_stream` helper. 38 tests; streamed
+  output == `scipy.fftconvolve` to **5.7e-14**; latency = one block, no extra
+  algorithmic delay; 7.1→stereo (200 ms BRIRs) **3.2×RT at block 256 (5.3 ms)**,
+  1.0×RT at 128. Default prototype block = 256 @ 48 kHz. See journal 09.)_
 - [ ] **B1.4** 7.1 world layout model (screen-relative positions, configurable
   distance/scale) → per-channel (az,el) for a *fixed* head. Tested.
 - [ ] **B1.5** Wire B1.1–B1.4 into a static renderer: 7.1 PCM in → stereo out,
@@ -148,6 +154,12 @@ _(the chain appends here as it learns)_
   blend (smoother across the grid, no third-neighbour pull past the two bracketing
   measurements). Only if grid artefacts show up under fast head motion in M3;
   B1.2's k-NN is sufficient for the MVP. _(from journal 08)_
+- [ ] **B1.9** Vectorise the partitioned convolver: replace the per-partition and
+  per-channel Python loops in `convolve.py` with stacked `H`/FDL tensordot MACs and
+  FFTs batched across partitions and channels, to reclaim real-time headroom at a
+  128-sample (2.67 ms) block in pure Python (currently only 1.0×RT for 8-ch
+  7.1→stereo; block 256 already clears the § 7 budget). Only if M4 needs a sub-5 ms
+  block before the M8 native port. _(from journal 09)_
 - [ ] **B0.7** Raise the head-tracking update rate: the C270 gives ~15 fps @
   640×480 (~66 ms/frame), which dominates the <50 ms tracking budget while
   inference is only ~12 ms (journal 05). Evaluate MJPG fourcc / lower resolution /

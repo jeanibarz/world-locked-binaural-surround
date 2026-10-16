@@ -136,8 +136,9 @@ def render_7p1_to_stereo(pcm: np.ndarray, brir: BakedBRIRSet) -> np.ndarray:
     """Convolve a 7.1 PCM block with the per-speaker BRIRs → stereo (fixed head).
 
     ``pcm`` is ``(M, C)`` with columns in ``brir.channels`` order. Returns
-    ``(M + N - 1, 2)`` (full linear convolution; the real-time partitioned engine
-    is B1.3). The left output is the sum of every channel convolved with its
+    ``(M + N - 1, 2)`` (full linear convolution; the block-by-block real-time
+    counterpart is :class:`binaural_headtracker.convolve.StereoConvolver`, B1.3).
+    The left output is the sum of every channel convolved with its
     left-ear IR, likewise the right — exactly the EqualizerAPO baked config's
     per-ear convolve-and-sum.
     """
