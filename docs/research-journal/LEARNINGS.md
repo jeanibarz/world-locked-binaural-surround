@@ -297,3 +297,11 @@ full story.
     calls "+yaw" is hardware-dependent: expose `yaw_sign`/`pitch_sign`/`roll_sign`
     (default +1) and confirm them once on the host, rather than hard-coding a guess.
     (→ [20](20-calibration-camera-to-world.md))
+44. **Split a GUI into tested geometry + a thin host drawing shell.** The calibration
+    console's azimuth-radar math (`radar.azimuth_to_radar_xy`, `nearest_front_channel`)
+    lives in `src/` with unit tests; the OpenCV window (`apps/calibration_gui.py`) only
+    *draws* — composing the tested `radar` + tracker + `calibrate` + `world`. So the
+    part that can be wrong (coordinate mapping, nearest selection) is covered headless,
+    and the uncoverable part (camera + a cv2 window) stays a minimal host shell. Mock
+    the whole screen first (the owner picked layout A from a high-fidelity mockup)
+    before writing pixels. (→ [21](21-calibration-gui.md))
