@@ -113,9 +113,12 @@ def test_onset_ignores_a_loud_late_reflection():
     # whole-BRIR argmax onset would lock onto the reflection and corrupt the direct.
     clean = _synthetic_set()
     doctored = _synthetic_set()
-    lo = doctored.index("L")
-    doctored.left[lo, 1500] = 5.0  # tail reflection 5x the direct delta
-    doctored.right[lo, 1500] = 5.0
+    # Inject into BOTH bracketing speakers (L and SL), both ears — onset is a min()
+    # across all four, so a reflection in one channel alone would be masked.
+    for ch in ("L", "SL"):
+        i = doctored.index(ch)
+        doctored.left[i, 1500] = 5.0  # tail reflection 5x the direct delta
+        doctored.right[i, 1500] = 5.0
     left_c, _ = interpolate_baked_brir(clean, 60.0)
     left_d, _ = interpolate_baked_brir(doctored, 60.0)
     assert np.allclose(left_d[:180], left_c[:180], atol=1e-12)  # direct unaffected
