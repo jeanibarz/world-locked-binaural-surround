@@ -116,8 +116,14 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   (recorded-clip in tests, MediaPipe webcam in `spikes/b2_1_head_tracker.py`),
   publishing a smoothed `latest()` + rate/jitter `stats`. 14 headless tests, no
   real sleeps. The `latest()` seam is where B3.1 couples. See journal 19.)_
-- [ ] **B2.2** Calibration: define the neutral "looking at screen centre" pose;
+- [x] **B2.2** Calibration: define the neutral "looking at screen centre" pose;
   map camera frame → world/screen frame.
+  _(`binaural_headtracker.calibrate`: `calibrate_neutral` (average "screen-centre"
+  samples) + `head_rotation(cal, pose)` = `Rz(Δyaw)·Ry(Δpitch)·Rx(Δroll)` on
+  per-axis deltas from neutral (yaw→world +z, pitch→+y, roll→+x) → feeds
+  `world.head_relative_directions`. 18 tests: neutral→identity→nominal, +30° yaw ⇒
+  az −30° (world-lock), pitch→elevation, sign flip. Per-axis signs host-confirmed.
+  See journal 20.)_
 
 ## M3 — World-lock (the core effect)
 
