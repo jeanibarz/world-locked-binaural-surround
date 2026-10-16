@@ -305,3 +305,17 @@ full story.
     and the uncoverable part (camera + a cv2 window) stays a minimal host shell. Mock
     the whole screen first (the owner picked layout A from a high-fidelity mockup)
     before writing pixels. (→ [21](21-calibration-gui.md))
+45. **Crossfade a time-varying convolution on the input *gain* into persistent
+    per-filter voices — don't swap the filter.** Hard-swapping the active BRIR clicks
+    and jumps the long room tail. Instead keep one continuous `StereoConvolver` per BRIR
+    and, when the nearest changes, ramp the source's input gain from the old voice to
+    the new over a few ms; the retired voice keeps convolving the trailing zeros so its
+    tail rings out naturally and is reaped once drained. This is physically correct
+    (each voice is an uninterrupted convolution) and click-free: on a steady tone the
+    worst sample-to-sample step at the swap drops to the tone's *own* slew (≈3.8× below a
+    hard switch) and plateaus by ~5 ms, so there is no artifact above the signal. The
+    pool stays cheap — steady state runs 1 voice, a transition overlaps 2, never more.
+    Start the first voice at full gain (a fade-in from silence would make startup differ
+    from a plain convolution for no gain). Keep the world-lock geometry out of the
+    renderer: pass it only the source's head-relative azimuth, computed in the tested
+    `calibrate`/`world` layer via a one-"speaker" `source_layout`. (→ [22](22-live-world-lock.md))
