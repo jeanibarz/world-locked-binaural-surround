@@ -48,6 +48,7 @@ The ordered work blocks live in [`../backlog.md`](../backlog.md).
 | 07 | [Static binaural renderer](07-static-binaural-renderer.md) | 7.1 → stereo from the owner's 8 baked Audeze BRIRs (convolve + per-ear sum); per-speaker ITD signs all correct; the EQ chain is deferred to M5. |
 | 08 | [Direction interpolation](08-direction-interpolation.md) | ITD-aware time-alignment interpolation over a SOFA set (Hilbert-envelope delay + fractional shift + k-NN blend); KEMAR leave-one-out LSD 2.50 vs 6.81 dB naive. |
 | 09 | [Partitioned convolution](09-partitioned-convolution.md) | Real-time uniformly-partitioned overlap-save FFT convolver (single-channel + 7.1→stereo); matches `fftconvolve` to 1e-14, latency = one block; 7.1→stereo 3.2×RT at block 256 (5.3 ms). |
+| 10 | [World layout model](10-world-layout-model.md) | Screen-relative 3-D speaker positions → per-channel (az,el); the full `Rᵀ(pᵢ−p_h)` projection defaulting to the fixed head; reproduces the nominal 7.1 angles exactly, yaw shifts every azimuth by −yaw. |
 
 See also [`LEARNINGS.md`](LEARNINGS.md) — the cumulative, numbered lessons.
 

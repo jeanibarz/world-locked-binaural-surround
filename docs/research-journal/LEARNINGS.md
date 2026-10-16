@@ -147,3 +147,25 @@ full story.
     cheap correctness oracle for any future convolution refactor (native port,
     vectorisation): stream a random signal + flush, diff against `fftconvolve`.
     (→ [09](09-partitioned-convolution.md))
+26. **One world frame for geometry *and* HRIR lookup: `+x=front, +y=left,
+    +z=up`.** Then `az = atan2(y, x)` (CCW from front, +90° = left ear) and
+    `el = asin(z/r)` match the SOFA/HRIR azimuth convention (L19) and the nominal
+    `SPEAKER_LAYOUT_7P1`, so world positions project straight to the `(az, el)`
+    the HRIR lookup wants with no conversion layer. Return signed azimuth in
+    `(-180, 180]` to round-trip the signed layout; the lookup mods to `[0, 360)`.
+    (→ [10](10-world-layout-model.md))
+27. **Build the fixed-head layout as the full world-lock projection, not a
+    special case.** `d_i = Rᵀ(p_i − p_h)` with head rotation `R` and position
+    `p_h` as defaulted arguments (identity / origin = neutral head); the fixed
+    head is just the default, and M3/B3.1 couples the tracker by *passing a
+    matrix* — no rewrite. The effect is then unit-testable before any audio: a
+    head yaw of +θ shifts every speaker azimuth by −θ. Keep the Euler→`R` mapping
+    **out** of this module — sign/axis and the neutral pose bind to the tracker
+    and belong to calibration (B2.2/B3.1, per `head_pose.py`).
+    (→ [10](10-world-layout-model.md))
+28. **Verify a geometry module by two independent routes to the same numbers.**
+    The projected fixed-head angles must equal the hand-written nominal layout
+    (`SPEAKER_LAYOUT_7P1`), and `direction_to_unit`/`unit_to_direction` must
+    round-trip — a coordinate bug desynchronises the two routes. Distance/scale
+    being direction-invariant for a centred head is a third cheap invariant.
+    (→ [10](10-world-layout-model.md))
