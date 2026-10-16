@@ -127,8 +127,21 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
 
 ## M3 — World-lock (the core effect)
 
-- [ ] **B3.1** Couple tracker → render: per frame compute head-frame speaker
+- [x] **B3.1** Couple tracker → render: per frame compute head-frame speaker
   directions `Rᵀ(p_i−p_h)` and update the convolution click-free (crossfade).
+  _(`binaural_headtracker.live_render`: a single **world-fixed** mono source steered
+  head-relative through the **nearest** baked BRIR (journal 18), each BRIR a persistent
+  `StereoConvolver` *voice*; on a nearest-BRIR flip the source is crossfaded **into** the
+  new voice over `fade_ms` while the retired voice rings out its room tail — click-free
+  with no spectral synthesis. World-lock geometry stays in the tested layer via a
+  one-"speaker" `source_layout` + `calibrate.directions_for_pose`. 16 tests: LFE-excluded
+  nearest selection + wrap, static source == plain BRIR convolution to 1e-9, transition
+  reaches the new BRIR's exact steady state, crossfade cuts the worst sample-step ~3.8×
+  (down to the signal's own slew = fully artifact-free), pose→azimuth world-lock sign.
+  Host demo `apps/live_tracker_audio.py` (camera → tracker → renderer → `sounddevice`,
+  loops the owner's snare, `--record` dumps the heard wav + az track for a reproducible
+  A/B). Steady state = 1 voice, transitions peak at 2 (mean 1.34 over a full sweep).
+  Windows/VoiceMeeter routing deferred to M4. See journal 22.)_
 - [ ] **B3.2** Perceptual demo: a world-fixed virtual speaker that stays put when
   the head turns; capture a short A/B (head-locked vs world-locked) for review.
 
@@ -234,9 +247,11 @@ _(the chain appends here as it learns)_
   flip front↔back (the worst error) while nearest only drifts in azimuth. Smooth
   rotation is the **render layer's** crossfade, not a synthesised in-between spectrum.
   _(journals 17→18; reverses the notchwarp default.)_
-- [ ] **B3.1 note** When the tracker→render coupling lands, it **must crossfade**
+- [x] **B3.1 note** When the tracker→render coupling lands, it **must crossfade**
   between successive `nearest` BRIRs click-free as the head/source moves (the rotating
-  demo proves the shape via Hann overlap-add). _(journal 18)_
+  demo proves the shape via Hann overlap-add). _(journal 18)_ **Done in B3.1** — the
+  crossfade is on the input **gain** into persistent per-BRIR voices (retired voices
+  drain their tail), measured click-free down to the signal's own slew. See journal 22.
 - [ ] **B1.11** **Rear front/back is a data problem, not interpolation.** Journals
   17/18 (judge + sibling 18/19) showed the owner's measured RL/RR BRIRs read as
   front/back-ambiguous, so *no* rotation method (incl. nearest) fixes the back gap.

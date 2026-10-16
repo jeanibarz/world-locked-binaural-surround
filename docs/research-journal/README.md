@@ -24,7 +24,7 @@ requirements: [`../requirements.md`](../requirements.md).
 | M0 | Foundations: repo, docs, dev env, spikes | ● done (B0.5/B0.7 are latency follow-ups) |
 | M1 | Static binaural render engine (7.1 SOFA → stereo) | ● core done (B1.7 head-rot interp remains) |
 | M2 | Head-pose tracker (camera → smoothed az/el/roll) | ● done (B2.1 tracker+1€, B2.2 calibration; axis signs host-confirmed) |
-| M3 | World-lock: tracker ↔ render, world-fixed speaker | ☐ |
+| M3 | World-lock: tracker ↔ render, world-fixed speaker | ◑ in progress (B3.1 live core + host app done, click-free; B3.2 A/B capture + host listening remain) |
 | M4 | End-to-end on Windows (virtual device → headphone) | ☐ |
 | M5 | Live EQ filters & presets | ◑ in progress (B5.1 EQ engine done; comp+EQ render integration + presets remain) |
 | M6 | GUI | ☐ |
@@ -60,6 +60,7 @@ The ordered work blocks live in [`../backlog.md`](../backlog.md).
 | 19 | [Head-pose tracker](19-head-tracker.md) | B2.1: `binaural_headtracker.tracking` — 1€ filter (latency/jitter knobs), per-axis `PoseFilter`, threaded `HeadTracker` over an abstract pose source (recorded-clip in tests, MediaPipe webcam in the host spike), publishing a smoothed latest pose + rate/jitter stats. 14 headless tests, no real sleeps. The `latest()` seam is where B3.1 plugs in. |
 | 20 | [Calibration: camera→world](20-calibration-camera-to-world.md) | B2.2: `calibrate` — neutral "screen-centre" pose + the deferred Euler→world-rotation mapping (yaw→+z, pitch→+y, roll→+x), so `head_rotation(cal,pose)` feeds `world.head_relative_directions`. Verified: neutral→identity→nominal layout; +30° yaw ⇒ every az −30° (world-lock) through a calibrated pose. Camera signs host-confirmed. M2 complete. |
 | 21 | [Calibration console GUI](21-calibration-gui.md) | B6.1 (first GUI slice): a VR-style OpenCV console — live camera + face mesh + pose HUD beside a top-down world-locked azimuth radar (nearest speaker highlighted), **C** to recenter. Portable `radar` geometry (5 tests) + a host-only cv2 shell composed from the tracker/calibrate/world. The live proof of world-lock before audio. |
+| 22 | [Live world-lock](22-live-world-lock.md) | B3.1: tracker→render. A single world-fixed source (the snare loop) steered head-relative through the **nearest** BRIR (journal 18), each BRIR a persistent convolver *voice*; on a flip the source crossfades **into** the new voice while the old rings out — click-free (worst sample-step down to the signal's own slew, ~3.8× below a hard switch; 1 voice steady, 2 in transition). `live_render` core (16 tests) + a host `sounddevice`+camera demo with `--record`. World-lock geometry reused from calibrate/world. M4 does the Windows routing. |
 
 See also [`LEARNINGS.md`](LEARNINGS.md) — the cumulative, numbered lessons.
 
