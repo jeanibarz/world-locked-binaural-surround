@@ -132,25 +132,47 @@ def load_baked_brir(
     return BakedBRIRSet(channels=tuple(channels), left=left, right=right, samplerate=int(rate))
 
 
+def convolve_and_sum_stereo(
+    pcm: np.ndarray, left: np.ndarray, right: np.ndarray
+) -> np.ndarray:
+    """Offline per-channel convolve-and-sum → stereo, from raw ``(C, N)`` IR banks.
+
+    ``pcm`` is ``(M, C)`` with columns aligned to the ``C`` rows of ``left`` and
+    ``right`` (one left-ear and one right-ear IR per channel). Returns
+    ``(M + N - 1, 2)`` — the left output is the sum of every channel convolved
+    with its left-ear IR, likewise the right.
+
+    This is the shared offline kernel of the static renderer. Both the baked-BRIR
+    path (:func:`render_7p1_to_stereo`, B1.6) and the generic-SOFA path
+    (:mod:`binaural_headtracker.render`, B1.5) feed it their own IR banks; the
+    block-by-block real-time counterpart is
+    :class:`binaural_headtracker.convolve.StereoConvolver` (B1.3).
+    """
+    pcm = np.asarray(pcm, dtype=np.float64)
+    left = np.asarray(left, dtype=np.float64)
+    right = np.asarray(right, dtype=np.float64)
+    if left.shape != right.shape or left.ndim != 2:
+        raise ValueError("left/right IR banks must share shape (C, N)")
+    n_channels, n_taps = left.shape
+    if pcm.ndim != 2 or pcm.shape[1] != n_channels:
+        raise ValueError(f"pcm must be (M, {n_channels}); got {pcm.shape}")
+    out_len = pcm.shape[0] + n_taps - 1
+    out = np.zeros((out_len, 2))
+    for c in range(n_channels):
+        x = pcm[:, c]
+        if not np.any(x):
+            continue
+        out[:, 0] += fftconvolve(x, left[c])[:out_len]
+        out[:, 1] += fftconvolve(x, right[c])[:out_len]
+    return out
+
+
 def render_7p1_to_stereo(pcm: np.ndarray, brir: BakedBRIRSet) -> np.ndarray:
     """Convolve a 7.1 PCM block with the per-speaker BRIRs → stereo (fixed head).
 
     ``pcm`` is ``(M, C)`` with columns in ``brir.channels`` order. Returns
-    ``(M + N - 1, 2)`` (full linear convolution; the block-by-block real-time
-    counterpart is :class:`binaural_headtracker.convolve.StereoConvolver`, B1.3).
-    The left output is the sum of every channel convolved with its
-    left-ear IR, likewise the right — exactly the EqualizerAPO baked config's
-    per-ear convolve-and-sum.
+    ``(M + N - 1, 2)`` (full linear convolution) — exactly the EqualizerAPO baked
+    config's per-ear convolve-and-sum. Thin wrapper over
+    :func:`convolve_and_sum_stereo`.
     """
-    pcm = np.asarray(pcm, dtype=np.float64)
-    if pcm.ndim != 2 or pcm.shape[1] != brir.n_channels:
-        raise ValueError(f"pcm must be (M, {brir.n_channels}); got {pcm.shape}")
-    out_len = pcm.shape[0] + brir.n_taps - 1
-    out = np.zeros((out_len, 2))
-    for c in range(brir.n_channels):
-        x = pcm[:, c]
-        if not np.any(x):
-            continue
-        out[:, 0] += fftconvolve(x, brir.left[c])[:out_len]
-        out[:, 1] += fftconvolve(x, brir.right[c])[:out_len]
-    return out
+    return convolve_and_sum_stereo(pcm, brir.left, brir.right)
