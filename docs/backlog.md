@@ -161,8 +161,13 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
 
 ## M6 — GUI
 
-- [ ] **B6.1** Minimal control GUI: device pickers, layout editor, HRIR chooser,
+- [~] **B6.1** Minimal control GUI: device pickers, layout editor, HRIR chooser,
   live EQ, tracker calibration.
+  _(First slice done — the **tracker-calibration console**: `apps/calibration_gui.py`
+  (host OpenCV), layout A chosen from a mockup — live camera + face mesh + pose HUD
+  beside a world-locked azimuth radar (nearest speaker highlighted), `C` to recenter,
+  `Q` to quit. Portable `binaural_headtracker.radar` geometry (5 tests). See journal 21.
+  Remaining for B6.1: device pickers, layout editor, HRIR chooser, live EQ controls.)_
 
 ## M7 — AI-judge calibration
 
