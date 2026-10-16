@@ -26,7 +26,7 @@ requirements: [`../requirements.md`](../requirements.md).
 | M2 | Head-pose tracker (camera → smoothed az/el/roll) | ☐ |
 | M3 | World-lock: tracker ↔ render, world-fixed speaker | ☐ |
 | M4 | End-to-end on Windows (virtual device → headphone) | ☐ |
-| M5 | Live EQ filters & presets | ☐ |
+| M5 | Live EQ filters & presets | ◑ in progress (B5.1 EQ engine done; comp+EQ render integration + presets remain) |
 | M6 | GUI | ☐ |
 | M7 | AI-judge calibration loop | ☐ |
 | M8 | Latency hardening (native hot path) | ☐ |
@@ -52,6 +52,7 @@ The ordered work blocks live in [`../backlog.md`](../backlog.md).
 | 11 | [Static SOFA renderer](11-static-sofa-renderer.md) | Wired B1.1–B1.4 into `binaural_headtracker.render` (generic-SOFA 7.1→stereo, fixed head): layout → per-speaker HRIR lookup → convolve-and-sum; offline render == the B1.3 streaming engine to 1e-9; world-lock seam (head_rotation) ready for M3. |
 | 12 | [EqualizerAPO offline comparison](12-eqapo-offline-comparison.md) | Our render == EQ-APO's bake to 2.8e-17; the subjective EQ is interaurally symmetric (0.16 dB) so it can't change ITD/ILD. **Its stability conclusion is corrected by entry 13** (ITD/coherence was the wrong proxy). |
 | 13 | [EQ stabilises via DRR](13-eq-stabilises-via-drr.md) | Correction to 12: listening showed bake wanders, full is steady. The EQ *does* steady the image — not via geometry but by raising the direct-to-reverberant ratio (+1.9 dB mean, +5.1 dB on the worst rear channel), burying the diffuse tail under the direct hit. Elevates B5 (load-bearing, not cosmetic). |
+| 14 | [Parametric EQ engine](14-parametric-eq-engine.md) | B5.1: `binaural_headtracker.eq` — EqualizerAPO-faithful RBJ biquads (PK/LS/HS…), stateful streaming cascade (block==offline), per-channel/bus `ParametricEQ` with glitch-free live retune. Ported the semantics (not the heavy sibling pkg); byte-exact parity (0.0) with the sibling on all 70 of the owner's real filters. |
 
 See also [`LEARNINGS.md`](LEARNINGS.md) — the cumulative, numbered lessons.
 

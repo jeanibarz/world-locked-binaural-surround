@@ -216,3 +216,12 @@ full story.
     making the tail directional. Two independent levers on the wander: raise DRR
     (EQ/comp, B5) and/or separate direct from tail (B1.7).
     (→ [13](13-eq-stabilises-via-drr.md))
+35. **"Depend, don't duplicate" is about logic/research, not a small standard
+    kernel — and the runtime *shape* matters.** The sibling's EqualizerAPO engine is
+    faithful but *offline* (impulse reconstruction) and drags TensorFlow+soundfile;
+    the product needs a *live, dep-light block-processor*. So we **ported** the RBJ
+    biquad math (a ~60-line standard kernel) into `eq.py` rather than importing the
+    package, and kept the sibling for offline verification only. Make such a port
+    literal and checkable: byte-exact parity (0.0 coeff diff on all 70 of the
+    owner's real filters) proves the semantics are identical, so reuse ≡ port here.
+    (→ [14](14-parametric-eq-engine.md))

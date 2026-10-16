@@ -125,20 +125,22 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
 
 ## M5 — Live filters & presets
 
-- [ ] **B5.1** Per-channel + bus parametric EQ (biquads), changeable live without
+- [x] **B5.1** Per-channel + bus parametric EQ (biquads), changeable live without
   glitches (reuse EqualizerAPO semantics from the sibling project).
-  _(Note: **load-bearing, not cosmetic.** Beyond timbre/headphone-matching (FR-8),
-  the comp+EQ chain materially **steadies the perceived spatial image** by raising
-  the direct-to-reverberant ratio — the owner auditioned bake-only as spatially
-  *wandering* and the full chain as steady, and a DRR measurement confirms it
-  (+1.9 dB mean, +5.1 dB on rear-right). So the product's static renderer should
-  emit the full chain, not the bare bake (journal 13). The sibling
-  `binaural_localization.eqapo` already has a faithful, unit-tested RBJ-biquad
-  engine + EqualizerAPO config interpreter; the open design question is **depend on
-  it vs port a live/per-channel/head-tracked engine into our renderer** (AGENTS
-  "depend, don't duplicate" vs the live glitch-free + head-tracked requirement —
-  flag to the owner). See `spikes/b5_eqapo_offline_compare.py`, which reproduces
-  the owner's whole chain offline and reports the DRR.)_
+  _(`binaural_headtracker.eq`: RBJ-cookbook biquads (PK/LS/HS/LP/HP/NO/AP) +
+  EqualizerAPO `Filter:` parser + stateful streaming `BiquadCascade` (block==offline)
+  + per-channel/bus `ParametricEQ` with a glitch-free crossfade retune. **Ported** the
+  sibling's semantics into a dep-light live block-processor rather than importing its
+  offline/heavy package (the depend-vs-port fork, resolved; see journal 14). 20 tests;
+  **byte-exact parity (0.0) with the sibling on all 70 of the owner's real filters**,
+  so our EQ == EqualizerAPO. Load-bearing for the image, not cosmetic (journal 13).)_
+- [ ] **B5.3** **Full-chain render integration:** wire a per-ear comp FIR (a
+  convolution — reuse `convolve`/`surround`) + the per-channel and bus
+  `ParametricEQ` (B5.1) into the render path, so the static renderer emits the full
+  comp+EQ-equivalent output (not the bare bake). Verify offline against the
+  sibling's full-chain effective BRIR (the B5 spike already reconstructs it). This is
+  what makes the renderer both *sound* and *localise* right — closes the "moving
+  snare" loop (journal 13/14). _(discovered from journal 14)_
 - [ ] **B5.2** Preset save/load (layout + HRIR + EQ + tracker calib).
 
 ## M6 — GUI
