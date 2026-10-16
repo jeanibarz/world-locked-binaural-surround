@@ -70,10 +70,18 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   reproduces `SPEAKER_LAYOUT_7P1` exactly, a head yaw of +θ shifts every azimuth
   by −θ (the world-lock mechanic, unit-tested). Euler→R mapping left to B2.2/B3.1.
   See journal 10.)_
-- [ ] **B1.5** Wire B1.1–B1.4 into a static renderer: 7.1 PCM in → stereo out,
+- [x] **B1.5** Wire B1.1–B1.4 into a static renderer: 7.1 PCM in → stereo out,
   offline-verified on a test signal (e.g. a known pan). No tracking yet.
-  _(Note: a static renderer already exists for the **owner's baked BRIR set** via
-  B1.6; B1.5 remains for the **generic SOFA** path through B1.1–B1.4.)_
+  _(`binaural_headtracker.render`: `build_speaker_hrirs` projects each speaker via
+  `layout.head_relative_directions()` and looks its direction up in the SOFA set
+  (`HRIRSet.interpolated_irs`) → a `SpeakerHRIRBank` `(C,N)` IR bank;
+  `.render`/`render_layout_to_stereo` convolve-and-sum offline (shared
+  `surround.convolve_and_sum_stereo` kernel), `.streaming_convolver` hands the
+  bank to the B1.3 engine. 15 tests; offline render **== the B1.3 `StereoConvolver`
+  stream to 1e-9**, impulse-per-channel reproduces that speaker's HRIR, ITD/ILD
+  signs correct, +30° head yaw swings the front speaker to −30° (the world-lock
+  seam, ready for M3). With B1.6 this makes M1's static engine complete for both
+  the generic-SOFA and baked-BRIR paths. See journal 11.)_
 - [x] **B1.6** Static 7.1 → binaural renderer from the owner's **baked BRIR set**
   (8 fixed-direction Audeze LCD-GX BRIRs): per-channel convolve + per-ear sum,
   offline. `binaural_headtracker.surround` (`BakedBRIRSet`, `load_baked_brir`,

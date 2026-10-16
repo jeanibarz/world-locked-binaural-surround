@@ -22,7 +22,7 @@ requirements: [`../requirements.md`](../requirements.md).
 | Milestone | Goal | Status |
 |---|---|---|
 | M0 | Foundations: repo, docs, dev env, spikes | ● done (B0.5/B0.7 are latency follow-ups) |
-| M1 | Static binaural render engine (7.1 SOFA → stereo) | ◑ in progress |
+| M1 | Static binaural render engine (7.1 SOFA → stereo) | ● core done (B1.7 head-rot interp remains) |
 | M2 | Head-pose tracker (camera → smoothed az/el/roll) | ☐ |
 | M3 | World-lock: tracker ↔ render, world-fixed speaker | ☐ |
 | M4 | End-to-end on Windows (virtual device → headphone) | ☐ |
@@ -49,6 +49,7 @@ The ordered work blocks live in [`../backlog.md`](../backlog.md).
 | 08 | [Direction interpolation](08-direction-interpolation.md) | ITD-aware time-alignment interpolation over a SOFA set (Hilbert-envelope delay + fractional shift + k-NN blend); KEMAR leave-one-out LSD 2.50 vs 6.81 dB naive. |
 | 09 | [Partitioned convolution](09-partitioned-convolution.md) | Real-time uniformly-partitioned overlap-save FFT convolver (single-channel + 7.1→stereo); matches `fftconvolve` to 1e-14, latency = one block; 7.1→stereo 3.2×RT at block 256 (5.3 ms). |
 | 10 | [World layout model](10-world-layout-model.md) | Screen-relative 3-D speaker positions → per-channel (az,el); the full `Rᵀ(pᵢ−p_h)` projection defaulting to the fixed head; reproduces the nominal 7.1 angles exactly, yaw shifts every azimuth by −yaw. |
+| 11 | [Static SOFA renderer](11-static-sofa-renderer.md) | Wired B1.1–B1.4 into `binaural_headtracker.render` (generic-SOFA 7.1→stereo, fixed head): layout → per-speaker HRIR lookup → convolve-and-sum; offline render == the B1.3 streaming engine to 1e-9; world-lock seam (head_rotation) ready for M3. |
 
 See also [`LEARNINGS.md`](LEARNINGS.md) — the cumulative, numbered lessons.
 

@@ -169,3 +169,22 @@ full story.
     round-trip — a coordinate bug desynchronises the two routes. Distance/scale
     being direction-invariant for a centred head is a third cheap invariant.
     (→ [10](10-world-layout-model.md))
+29. **Integration blocks that join well-factored modules are mostly wiring.**
+    The B1.5 static renderer is one direction-lookup loop —
+    `layout.head_relative_directions()` → `HRIRSet.interpolated_irs()` → a
+    per-channel `(C, N)` IR bank → the shared convolve-and-sum — because
+    B1.1–B1.4 were each built to the same `(az, el)` / `(C, N)` contract. Design
+    the seams up front and the join needs no new DSP. Extract the shared kernel
+    (`surround.convolve_and_sum_stereo`) so the baked (B1.6) and SOFA (B1.5)
+    paths don't duplicate the convolution loop. (→ [11](11-static-sofa-renderer.md))
+30. **Make the offline renderer and the real-time engine the same computation and
+    assert it.** B1.5's offline batch render equals the B1.3 `StereoConvolver`
+    block stream to 1e-9, so the simple offline path is a ground-truth oracle for
+    the harder-to-inspect streaming path and any future divergence (native port,
+    vectorisation) is caught immediately. (→ [11](11-static-sofa-renderer.md))
+31. **A fresh `git worktree` has no `.venv`: run `uv sync --extra dev` before
+    `uv run pytest`.** Otherwise `uv run pytest` composes a transient env that
+    silently drops baseline deps (e.g. `h5py`) and fails with a misleading
+    `ModuleNotFoundError`. It is a toolchain artifact, not a code regression —
+    verify against a known-good checkout before suspecting the diff.
+    (→ [11](11-static-sofa-renderer.md))
