@@ -90,6 +90,26 @@ def windowed_itd_coh(stereo, fs, win=1024, hop=512, thresh_db=-40.0):
     return np.array(lags), np.array(cohs)
 
 
+def direct_reverb_ratio(ir_stereo, fs, direct_ms=2.0, gap_ms=8.0, tail_ms=60.0):
+    """Direct-to-reverberant ratio (dB) of one channel's stereo BRIR.
+
+    Energy in a +/-``direct_ms`` window around the onset (the direct wavefront)
+    over energy in the diffuse tail from ``gap_ms`` to ``gap_ms+tail_ms`` after it.
+    A common-to-both-ears EQ cannot change ITD/ILD, but by boosting the bands where
+    the broadband direct transient lives (and the HF-poor diffuse tail does not) it
+    *raises* DRR — making the stable direct image dominate the undirected tail. This
+    is the perceptual lever the ITD/coherence metric misses.
+    """
+    left, right = ir_stereo
+    onset = int(np.argmax(np.abs(left) + np.abs(right)))
+    dn, gn, tn = (int(ms * fs / 1000) for ms in (direct_ms, gap_ms, tail_ms))
+    direct = ir_stereo[:, max(0, onset - dn) : onset + dn]
+    tail = ir_stereo[:, onset + gn : onset + gn + tn]
+    e_direct = float(np.sum(direct**2))
+    e_tail = float(np.sum(tail**2)) + 1e-20
+    return 10.0 * np.log10(e_direct / e_tail)
+
+
 def tail_fade(stereo, fs, seconds=0.5):
     """Raised-cosine fade over the last `seconds` (tames the exposed reverb tail)."""
     n = min(int(seconds * fs), stereo.shape[0])
@@ -198,8 +218,21 @@ def main() -> int:
         )
     print("\nmeans:  "
           f"ITDstd bake={np.std(agg['bake'][0]):.1f} full={np.std(agg['full'][0]):.1f}  "
-          f"(lower=steadier image) | "
+          f"(interaural GEOMETRY only - NOT perceived stability) | "
           f"coh bake={np.mean(agg['bake'][1]):.3f} full={np.mean(agg['full'][1]):.3f}")
+
+    # (4b) direct-to-reverberant ratio — the perceptual lever the ITD metric misses.
+    # Listening ground truth: bake wanders, full is steady. DRR explains it: the EQ
+    # lifts the direct hit over the diffuse tail, so the tail stops smearing the image.
+    print(f"\n{'channel':8} {'DRR bake dB':>11} {'DRR full dB':>11} {'delta dB':>9}")
+    deltas = []
+    for i, ch in enumerate(CHANNELS_71):
+        db = direct_reverb_ratio(br["bake"][i], fs)
+        df = direct_reverb_ratio(br["full"][i], fs)
+        deltas.append(df - db)
+        print(f"{ch:8} {db:11.1f} {df:11.1f} {df - db:9.1f}")
+    print(f"mean DRR gain from the chain = {np.mean(deltas):+.1f} dB "
+          f"(>0 => more direct-dominant => steadier perceived image; worst channels gain most)")
 
     # (5) audition WAVs
     if not args.no_wav:

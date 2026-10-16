@@ -191,18 +191,28 @@ full story.
 32. **A filter applied equally to both ears preserves the interaural cues exactly
     — it re-timbres without changing the image geometry.** The owner's big
     subjective EQ is under `Channel: L R` (same biquads on L and R), so it leaves
-    ITD/ILD untouched (0.16 dB L-vs-R asymmetry). Caveat: a common filter can still
-    shift the *perceived* image by reweighting direct-vs-diffuse energy, so symmetry
-    alone doesn't prove "no effect" — confirm with a stability metric (here the full
-    chain was no steadier). Only a *per-ear-asymmetric* stage (the comp FIR, HRIRs,
-    the convolution itself) changes the image geometry; when chasing a *spatial*
-    symptom, start with the interaurally-asymmetric parts of the chain.
-    (→ [12](12-eqapo-offline-comparison.md))
-33. **Don't ship a diagnosis as a conclusion — verify it against ground truth
-    before acting on it.** An earlier session *guessed* the missing EQ stabilised
-    the image and nearly motivated building B5 to "fix" it; reconstructing the
-    real EqualizerAPO chain offline (reusing the sibling's LTI engine) showed the
-    opposite — our render is EQ-APO's bake to 2.8e-17, and the EQ doesn't steady
-    the image at all. The "moving snare" is the BRIR reverb tail (→ B1.7), not the
-    EQ. Reuse the sibling's faithful engine for such checks; depend, don't
-    duplicate. (→ [12](12-eqapo-offline-comparison.md))
+    ITD/ILD untouched (0.16 dB L-vs-R asymmetry). **But "interaural geometry
+    unchanged" is NOT "perceived image unchanged":** a common filter still shifts
+    the perceived image by reweighting direct-vs-diffuse energy (entry 13). Only a
+    *per-ear-asymmetric* stage changes the geometry; but *perceived* spatial
+    stability also depends on the direct/reverb balance, which a both-ears EQ moves.
+    (→ [12](12-eqapo-offline-comparison.md), [13](13-eq-stabilises-via-drr.md))
+33. **Verify a diagnosis against ground truth — and make sure your metric measures
+    what the human actually perceives.** Entry 12 "verified" the EQ's effect with an
+    interaural ITD/coherence metric and concluded the EQ doesn't steady the image;
+    the owner then *listened* and heard the opposite. The metric measured interaural
+    *geometry* (correctly unchanged) but not perceived stability, which tracks the
+    direct-to-reverberant ratio (entry 13). Reproducing the real chain offline
+    (reuse the sibling engine; depend, don't duplicate) is necessary but not
+    sufficient — a wrong proxy gives a confident wrong answer. Let the ear arbitrate,
+    then find the metric that agrees with it.
+    (→ [12](12-eqapo-offline-comparison.md), [13](13-eq-stabilises-via-drr.md))
+34. **For a reverberant source, perceived image stability ≈ direct-to-reverberant
+    ratio (DRR), and a both-ears EQ moves it.** The diffuse reverb tail has no fixed
+    direction, so when it is loud relative to the direct hit the image wanders; the
+    owner's EQ (big HF boost) lifts the broadband direct transient far more than the
+    HF-poor diffuse tail, raising DRR (+1.9 dB mean, +5.1 dB on rear-right, whose
+    bake tail was *louder* than its direct sound) and steadying the image — without
+    making the tail directional. Two independent levers on the wander: raise DRR
+    (EQ/comp, B5) and/or separate direct from tail (B1.7).
+    (→ [13](13-eq-stabilises-via-drr.md))
