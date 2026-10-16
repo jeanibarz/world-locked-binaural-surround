@@ -239,3 +239,11 @@ full story.
     which is why it localises across wide gaps where panning goes diffuse. (B1.7,
     the sparse-baked counterpart of B1.2's dense-SOFA interpolation.)
     (→ [15](15-baked-brir-interpolation.md))
+37. **Depend on *validated* sibling artifacts through a registry with provenance,
+    not by filename.** A dozen un-annotated `saved_model/*.keras` made "use the best
+    mixed-rig judge" a guess — and a wrong guess gives confidently-wrong scores. The
+    fix is a contract: the producer publishes a model only once trained+validated,
+    with metadata (rigs, metrics, provenance) + an `index.json` "best"; the consumer
+    resolves it (`judge_registry.best_judge()`) and never hard-codes a path. Keep the
+    consumer pure-python so importing it doesn't drag the producer's ML deps.
+    (→ [16](16-judge-model-registry.md))
