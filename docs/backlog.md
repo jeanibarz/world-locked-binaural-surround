@@ -155,8 +155,17 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
 
 ## M7 — AI-judge calibration
 
+- [x] **B7.0** Judge-model **registry** consumer: resolve the *best validated*
+  trained judge the sibling publishes, without guessing which `saved_model/*.keras`
+  is current. `binaural_headtracker.judge_registry` (pure-python, no TF) reads the
+  shared registry (`../binaural-localization/models/registry/`, override via
+  `$BHT_JUDGE_REGISTRY`): `best_judge()` → model path + metadata/metrics. Registry
+  contract v1 (layout + metadata schema) is in the module docstring; the sibling
+  publishes validated models there (delegated to its task to implement + train the
+  pooled mixed-rig judge). 7 tests on a mock registry. _(owner request)_
 - [ ] **B7.1** Integrate the `binaural-localization` synthetic-listener judge to
-  score a candidate HRIR/EQ configuration.
+  score a candidate HRIR/EQ configuration. _(uses B7.0's `judge_registry.best_judge()`
+  to pick the judge; the offline scoring harness runs in the sibling env.)_
 - [ ] **B7.2** Guided blind A/B / staircase calibration harness; validate on the
   synthetic listener before the human.
 
