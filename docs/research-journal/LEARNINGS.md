@@ -188,12 +188,15 @@ full story.
     `ModuleNotFoundError`. It is a toolchain artifact, not a code regression —
     verify against a known-good checkout before suspecting the diff.
     (→ [11](11-static-sofa-renderer.md))
-32. **A filter applied equally to both ears is interaurally transparent — it
-    re-timbres, it cannot move the image.** The owner's big subjective EQ is under
-    `Channel: L R` (same biquads on L and R), so it changes tone, not ITD/ILD
-    (proven: 0.16 dB L-vs-R asymmetry). Only a *per-ear-asymmetric* stage (the comp
-    FIR, HRIRs, the convolution itself) can change spatial image. When chasing a
-    *spatial* symptom, look only at the interaurally-asymmetric parts of the chain.
+32. **A filter applied equally to both ears preserves the interaural cues exactly
+    — it re-timbres without changing the image geometry.** The owner's big
+    subjective EQ is under `Channel: L R` (same biquads on L and R), so it leaves
+    ITD/ILD untouched (0.16 dB L-vs-R asymmetry). Caveat: a common filter can still
+    shift the *perceived* image by reweighting direct-vs-diffuse energy, so symmetry
+    alone doesn't prove "no effect" — confirm with a stability metric (here the full
+    chain was no steadier). Only a *per-ear-asymmetric* stage (the comp FIR, HRIRs,
+    the convolution itself) changes the image geometry; when chasing a *spatial*
+    symptom, start with the interaurally-asymmetric parts of the chain.
     (→ [12](12-eqapo-offline-comparison.md))
 33. **Don't ship a diagnosis as a conclusion — verify it against ground truth
     before acting on it.** An earlier session *guessed* the missing EQ stabilised

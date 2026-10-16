@@ -38,9 +38,12 @@ it*, so the spike reuses it rather than re-implementing EQ in this repo.
 
 If the previous session was right, adding the comp+EQ stage should measurably
 **steady** the interaural image (lower ITD variance, higher interaural coherence),
-especially on the diffuse rear/side channels. If the subjective EQ is applied
-equally to both ears, it is interaurally symmetric and *cannot* change the image
-at all — only the per-ear comp could.
+especially on the diffuse rear/side channels. A subjective EQ applied equally to
+both ears is interaurally symmetric — it preserves the per-frequency interaural
+cues (ILD/IPD) **exactly**, so it cannot change the image *geometry*. (It could in
+principle still shift the *perceived* image by spectrally reweighting direct-vs-
+diffuse energy — which is the earlier hypothesis's own proposed mechanism — so
+symmetry alone does not settle it; the stability metric below tests that directly.)
 
 ## Method
 
@@ -65,11 +68,14 @@ at all — only the per-ear comp could.
 bake stage — settled numerically, not just by the LTI argument. There is no
 rendering bug.
 
-**2. The subjective EQ is interaurally symmetric — timbre only.**
+**2. The subjective EQ is interaurally symmetric.**
 `bake+comp → full` interaural asymmetry = **0.16 dB** ≈ 0: the 31-filter EQ
 (`Channel: L R`) multiplies both ears by the *same* transfer function, so it
-changes tone, **not** the image. The per-ear comp *does* change the interaural
-relationship (`bake → bake+comp` = **2.93 dB**).
+preserves the per-frequency interaural cues exactly — it re-timbres both ears
+equally and cannot change the image *geometry*. (On its own this does not rule out
+a perceived shift from direct-vs-diffuse spectral reweighting; result 3 settles
+that empirically.) The per-ear comp *does* change the interaural relationship
+(`bake → bake+comp` = **2.93 dB**).
 
 **3. Nothing in the chain stabilises the image.** Mean over positions:
 
@@ -85,15 +91,19 @@ marginally **worse** (34.4, 0.391), not better. **The previous session's
 
 ## Decision / next
 
-- **The missing comp+EQ does not explain the "movement."** It cannot: the
-  subjective EQ is interaurally symmetric (proven, 0.16 dB), and the per-ear comp
-  does not improve interaural stability. So the earlier guess was wrong.
-- **The real end-of-clip wander is the BRIR reverb tail**, independent of the EQ:
-  while the snare plays, the direct sound localises it; when it stops, only the
-  diffuse ~500 ms room tail remains, which has no fixed direction, so the image
-  "wanders." Confirmed earlier by the ITD jumping only at clip-end; mitigated here
-  by a 0.5 s tail fade. The proper fix is **B1.7** (separate the direct-path
-  wavefront from the room tail), *not* B5.
+- **The missing comp+EQ does not explain the "movement."** Empirically the full
+  chain is no steadier than the bake (result 3) — the refutation that carries the
+  conclusion. Consistent with that, the subjective EQ is interaurally symmetric
+  (0.16 dB, so it preserves the image geometry) and the per-ear comp does not
+  improve interaural stability. So the earlier guess was wrong.
+- **The real end-of-clip wander is the BRIR reverb tail**, independent of the EQ.
+  This spike establishes the negative half directly: the EQ is ruled out, and
+  since each test clip is a *single* speaker, the wander must be *intra*-BRIR
+  (direct → tail), not cross-channel. The positive localisation — that it is the
+  tail specifically — rests on the earlier observation that the ITD jumps only at
+  clip-end, when the dry snare stops and only the diffuse ~500 ms room tail (no
+  fixed direction) remains. Mitigated here by a 0.5 s tail fade; the proper fix is
+  **B1.7** (separate the direct-path wavefront from the room tail), *not* B5.
 - **Any A/B difference the owner perceives vs EqualizerAPO is timbral / salience**
   (the chain's large LF/HF boosts change tone and how prominent the diffuse tail
   is relative to the direct hit), **not a spatial-rendering difference** — our
