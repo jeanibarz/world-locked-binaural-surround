@@ -90,6 +90,62 @@ def _bracket(ring: list[tuple[int, float]], az: float) -> tuple[int, int, float]
     return ring[0][0], ring[0][0], 0.0
 
 
+def _min_phase_from_magnitude(mag_half: np.ndarray, nfft: int) -> np.ndarray:
+    """Minimum-phase impulse (length ``nfft``) with the given rfft magnitude.
+
+    Real-cepstrum method: fold the cepstrum onto the causal side so the phase
+    becomes the Hilbert transform of the log-magnitude. Used to rebuild a single
+    clean impulse from an *interpolated magnitude* — unlike a complex/time-domain
+    blend, a magnitude blend cannot cancel, so no comb-filtering.
+    """
+    full = np.concatenate([mag_half, mag_half[-2:0:-1]])  # mirror to length nfft
+    log_mag = np.log(np.maximum(full, 1e-12))
+    cep = np.fft.ifft(log_mag).real
+    win = np.zeros(nfft)
+    win[0] = 1.0
+    half = nfft // 2
+    win[1:half] = 2.0
+    win[half] = 1.0  # (win[half+1:] stays 0)
+    mp_spectrum = np.exp(np.fft.fft(cep * win))
+    return np.fft.ifft(mp_spectrum).real
+
+
+def _interp_ear_minphase(
+    ir_lo: np.ndarray, ir_hi: np.ndarray, w_lo: float, w_hi: float, split: int
+) -> np.ndarray:
+    """One ear, comb-free: interpolate the direct's **log-magnitude**, rebuild a
+    minimum-phase impulse, and apply the separately-interpolated **ITD**; tail
+    equal-power in place.
+
+    Blending magnitudes (not complex IRs) avoids the phase cancellation that the
+    time-domain blend produces where two HRTFs' pinna notches differ — the source
+    of the rotation smear across wide speaker gaps.
+    """
+    n = ir_lo.size
+    split = min(split, n)
+    pad = split
+    dlo = np.zeros(split + pad)
+    dhi = np.zeros(split + pad)
+    dlo[:split] = ir_lo[:split]
+    dhi[:split] = ir_hi[:split]
+    t_lo, t_hi = estimate_delay(dlo), estimate_delay(dhi)
+    # Align each direct to a common origin so magnitudes are of the wavefront itself.
+    alo = fractional_delay(dlo, -t_lo)
+    ahi = fractional_delay(dhi, -t_hi)
+    nfft = 1 << int(np.ceil(np.log2(max(256, 2 * split))))
+    mlo = np.abs(np.fft.rfft(alo, n=nfft))
+    mhi = np.abs(np.fft.rfft(ahi, n=nfft))
+    log_blend = w_lo * np.log(np.maximum(mlo, 1e-12)) + w_hi * np.log(np.maximum(mhi, 1e-12))
+    mp = _min_phase_from_magnitude(np.exp(log_blend), nfft)
+    # Place the (causal) min-phase direct at the interpolated arrival delay.
+    tstar = w_lo * t_lo + w_hi * t_hi
+    placed = fractional_delay(np.concatenate([mp[:split], np.zeros(pad)]), tstar)
+    out = np.zeros(n)
+    out[:split] = placed[:split]
+    out[split:] = np.sqrt(w_lo) * ir_lo[split:] + np.sqrt(w_hi) * ir_hi[split:]
+    return out
+
+
 def _interp_ear(
     ir_lo: np.ndarray, ir_hi: np.ndarray, w_lo: float, w_hi: float, split: int
 ) -> np.ndarray:
@@ -121,16 +177,30 @@ def interpolate_baked_brir(
     brir: BakedBRIRSet,
     az: float,
     *,
+    method: str = "minphase",
     direct_ms: float = DEFAULT_DIRECT_MS,
     directional: tuple[str, ...] = DIRECTIONAL_7P1,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Synthesise a ``(left, right)`` BRIR for azimuth ``az`` (deg, horizontal).
 
-    Brackets ``az`` between the two adjacent ring speakers and blends them by the
-    direct/tail scheme above. At (within :data:`EXACT_TOL_DEG` of) a measured speaker
-    the exact measured BRIR is returned unchanged. ``direct_ms`` sets the direct
-    window length; the room tail beyond it is held (blended in place), not aligned.
+    Brackets ``az`` between the two adjacent ring speakers and blends them. At
+    (within :data:`EXACT_TOL_DEG` of) a measured speaker the exact measured BRIR is
+    returned unchanged. ``direct_ms`` sets the direct window; the room tail beyond
+    it is always held (equal-power blend in place), not aligned.
+
+    ``method`` selects how the **direct** wavefront is interpolated:
+
+    * ``"minphase"`` (default) — interpolate the direct's log-magnitude and rebuild
+      a minimum-phase impulse, then apply the interpolated ITD. Blending magnitudes
+      cannot cancel, so it does **not** comb-filter where the two HRTFs' pinna
+      notches differ (the fix for rotation smear across wide gaps).
+    * ``"timealign"`` — time-align the two directs and blend them in the time
+      domain, then re-delay. Simpler, but the complex sum combs between dissimilar
+      directions. Kept for comparison.
     """
+    if method not in ("minphase", "timealign"):
+        raise ValueError(f"method must be 'minphase' or 'timealign'; got {method!r}")
+    ear = _interp_ear_minphase if method == "minphase" else _interp_ear
     ring = ring_azimuths(brir, directional)
     az_n = az % 360.0
 
@@ -153,6 +223,6 @@ def interpolate_baked_brir(
     )
     split = int(round(onset + direct_ms * brir.samplerate / 1000.0))
 
-    left = _interp_ear(brir.left[ch_lo], brir.left[ch_hi], w_lo, w_hi, split)
-    right = _interp_ear(brir.right[ch_lo], brir.right[ch_hi], w_lo, w_hi, split)
+    left = ear(brir.left[ch_lo], brir.left[ch_hi], w_lo, w_hi, split)
+    right = ear(brir.right[ch_lo], brir.right[ch_hi], w_lo, w_hi, split)
     return left, right

@@ -14,10 +14,11 @@ import pytest
 
 from binaural_headtracker.baked_interp import (
     DIRECTIONAL_7P1,
+    _min_phase_from_magnitude,
     interpolate_baked_brir,
     ring_azimuths,
 )
-from binaural_headtracker.interpolate import estimate_delay
+from binaural_headtracker.interpolate import estimate_delay, fractional_delay
 from binaural_headtracker.surround import SPEAKER_LAYOUT_7P1, BakedBRIRSet
 
 FS = 48000
@@ -151,3 +152,84 @@ def test_rejects_set_without_two_directional_speakers():
                        samplerate=FS)
     with pytest.raises(ValueError):
         interpolate_baked_brir(one, 10.0)
+
+
+# --- minimum-phase magnitude-domain interpolation (comb-free, B1.10) --------
+
+
+def test_min_phase_reconstruction_preserves_magnitude_and_is_causal():
+    # A known FIR's magnitude, rebuilt as minimum-phase, must keep that magnitude
+    # and be causal/front-loaded (min-phase packs energy earliest).
+    nfft = 512
+    h = np.array([1.0, -0.8, 0.5, 0.2, -0.3])
+    mag = np.abs(np.fft.rfft(h, n=nfft))
+    mp = _min_phase_from_magnitude(mag, nfft)
+    assert np.allclose(np.abs(np.fft.rfft(mp, n=nfft)), mag, atol=1e-6)
+    # min-phase ⇒ most energy in the first few samples
+    cum = np.cumsum(mp**2) / np.sum(mp**2)
+    assert cum[8] > 0.9
+
+
+def _comb_pair_set(delay_lo=6, delay_hi=11):
+    # Two adjacent ring speakers (L @30°, SL @90°) whose direct paths are comb
+    # filters (delta + reflection) with nulls at DIFFERENT frequencies.
+    base = 60
+    left = np.zeros((2, N))
+    right = np.zeros((2, N))
+    for row, dly in ((0, delay_lo), (1, delay_hi)):
+        for ch in (left, right):
+            ch[row, base] = 1.0
+            ch[row, base + dly] = 0.9  # reflection → spectral comb at fs/(2*dly)
+    return BakedBRIRSet(channels=("L", "SL"), left=left, right=right, samplerate=FS)
+
+
+def _direct_mag(ir, split=240, nfft=512):
+    """Onset-aligned magnitude spectrum of a direct window (placement delay removed)."""
+    seg = np.pad(ir[:split], (0, split))
+    t = estimate_delay(seg)
+    return np.abs(np.fft.rfft(fractional_delay(seg, -t)[:split], n=nfft))
+
+
+def test_minphase_stays_within_parent_envelope_timealign_combs_below_it():
+    # At 60° (midway L↔SL), the two directs are combs with nulls at different freqs.
+    # minphase blends LOG-MAGNITUDE → weighted geometric mean, which stays pointwise
+    # within [min,max] of the parents (keeps real notches, invents none). timealign
+    # is a COMPLEX sum that cancels where phases oppose → dips BELOW both parents,
+    # i.e. a spurious comb. That below-the-envelope dip is the rotation smear.
+    brir = _comb_pair_set()
+    mlo, mhi = _direct_mag(brir.left[0]), _direct_mag(brir.left[1])
+    p_min, p_max = np.minimum(mlo, mhi), np.maximum(mlo, mhi)
+    lt, _ = interpolate_baked_brir(brir, 60.0, method="timealign")
+    lm, _ = interpolate_baked_brir(brir, 60.0, method="minphase")
+    band = slice(5, 512 // 4)  # skip DC / very low bins
+    eps = 1e-9
+    mt, mm = _direct_mag(lt)[band], _direct_mag(lm)[band]
+    pmn, pmx = p_min[band] + eps, p_max[band] + eps
+    # minphase: never drops meaningfully below the parents' lower envelope (geometric interior).
+    assert np.min(mm / pmn) > 0.85
+    assert np.max(mm / pmx) < 1.15
+    # timealign: dips well below both parents somewhere → spurious cancellation comb.
+    assert np.min(mt / pmn) < 0.7
+
+
+def test_minphase_itd_still_interpolates():
+    brir = _synthetic_set()
+    left, right = interpolate_baked_brir(brir, 60.0, method="minphase")
+    itd = estimate_delay(right) - estimate_delay(left)
+    lo, hi = brir.index("L"), brir.index("SL")
+    itd_lo = estimate_delay(brir.right[lo]) - estimate_delay(brir.left[lo])
+    itd_hi = estimate_delay(brir.right[hi]) - estimate_delay(brir.left[hi])
+    assert itd_lo < itd < itd_hi
+
+
+def test_minphase_exact_at_measured_direction():
+    brir = _synthetic_set()
+    i = brir.index("SL")
+    left, right = interpolate_baked_brir(brir, SPEAKER_LAYOUT_7P1["SL"][0], method="minphase")
+    assert np.array_equal(left, brir.left[i]) and np.array_equal(right, brir.right[i])
+
+
+def test_invalid_method_raises():
+    brir = _synthetic_set()
+    with pytest.raises(ValueError):
+        interpolate_baked_brir(brir, 60.0, method="bogus")
