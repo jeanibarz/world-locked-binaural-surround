@@ -24,12 +24,16 @@ from __future__ import annotations
 
 import math
 import threading
+from collections import deque
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, replace
 
 import numpy as np
 
 DEFAULT_RATE_HZ = 30.0  # fallback dt for the first sample / non-increasing timestamps
+STATS_WINDOW = 600  # keep only the last N sample timestamps (~ seconds at 30–120 Hz)
+                    # so a long-lived/live source doesn't grow memory and stats stay
+                    # a *recent* rate/jitter, not a drifting lifetime average.
 
 
 @dataclass(frozen=True)
@@ -59,6 +63,8 @@ class OneEuroFilter:
     def __init__(self, min_cutoff: float = 1.0, beta: float = 0.0, d_cutoff: float = 1.0) -> None:
         if min_cutoff <= 0 or d_cutoff <= 0:
             raise ValueError("min_cutoff and d_cutoff must be > 0")
+        if beta < 0:
+            raise ValueError("beta must be >= 0 (a negative beta can drive the cutoff < 0)")
         self.min_cutoff = float(min_cutoff)
         self.beta = float(beta)
         self.d_cutoff = float(d_cutoff)
@@ -126,7 +132,7 @@ class HeadTracker:
         self._filter = PoseFilter(min_cutoff, beta, d_cutoff)
         self._lock = threading.Lock()
         self._latest: HeadPose | None = None
-        self._times: list[float] = []  # sample timestamps, for rate/jitter
+        self._times: deque[float] = deque(maxlen=STATS_WINDOW)  # recent sample times
         self._running = False
         self._thread: threading.Thread | None = None
 
@@ -157,7 +163,7 @@ class HeadTracker:
             return self._latest
 
     def stats(self) -> dict:
-        """Update-rate and jitter from the sample timestamps seen so far."""
+        """Update-rate and jitter over the last :data:`STATS_WINDOW` samples."""
         with self._lock:
             times = list(self._times)
         if len(times) < 2:
@@ -179,7 +185,14 @@ class HeadTracker:
         return not self._thread.is_alive()
 
     def stop(self, timeout: float = 1.0) -> None:
-        """Signal the worker to stop and join it (for infinite/live sources)."""
+        """Signal the worker to stop and join it (for infinite/live sources).
+
+        The worker re-checks the stop flag each loop, but it cannot interrupt a
+        *blocked* ``next(source)`` (e.g. a stalled camera read): in that case the
+        thread keeps waiting until the source returns, and ``stop`` returns after
+        ``timeout`` with the thread still alive. It is ``daemon=True``, so the
+        process can still exit. Once stopped, a tracker is not restartable.
+        """
         self._running = False
         if self._thread is not None:
             self._thread.join(timeout)

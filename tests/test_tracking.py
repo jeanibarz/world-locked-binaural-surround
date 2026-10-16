@@ -156,3 +156,17 @@ def test_context_manager_starts_and_stops():
     with HeadTracker(_clip(range(30))) as tr:
         tr.wait(2.0)
         assert tr.latest() is not None
+
+
+def test_negative_beta_rejected():
+    with pytest.raises(ValueError):
+        OneEuroFilter(min_cutoff=1.0, beta=-0.1)
+
+
+def test_stats_window_is_bounded():
+    from binaural_headtracker.tracking import STATS_WINDOW
+    clip = _clip(range(STATS_WINDOW + 200), fs=FS)  # more samples than the window
+    tr = HeadTracker(clip)
+    tr.start()
+    assert tr.wait(5.0)
+    assert tr.stats()["n"] == STATS_WINDOW  # only the recent window is retained
