@@ -88,12 +88,17 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   `render_7p1_to_stereo`, `SPEAKER_LAYOUT_7P1`); 9 tests; validated on the real
   set (per-speaker ITD signs all correct). The comp FIR + parametric EQ are the
   M5/B5 post-stage. _(owner request; see journal 07)_
-- [ ] **B1.7** Head-rotation interpolation over the owner's **8 fixed BRIRs**:
+- [x] **B1.7** Head-rotation interpolation over the owner's **8 fixed BRIRs**:
   approximate a rotated head by **ITD resynthesis + magnitude blending** between
   the nearest speaker BRIRs (time-alignment interpolation on the direct-path
   wavefront; room tail held fixed). Coarse with 8 points, but usable for modest
   turns — the owner's "vary ITD + blend signals" idea. Distinct from **B1.2** (the
   generic continuous-SOFA interpolation). _(owner request; see journal 07)_
+  _(`binaural_headtracker.baked_interp.interpolate_baked_brir`: bracket az between
+  the 2 adjacent ring speakers → direct/tail split → ITD-resynth + magnitude-blend
+  the direct, hold the diffuse tail in place. 12 tests (exact at measured az, ITD
+  interpolates + monotonic, tail held, single clean arrival across the back gap,
+  wrap-around). Rotating-snare demo regenerated through it. See journal 15.)_
   **One of two levers on the "moving snare"** the owner heard — the wander is the
   undirected BRIR reverb tail; separating the direct-path wavefront from the held
   room tail attacks it at the source (and is needed anyway so the tail doesn't

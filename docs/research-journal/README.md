@@ -53,6 +53,7 @@ The ordered work blocks live in [`../backlog.md`](../backlog.md).
 | 12 | [EqualizerAPO offline comparison](12-eqapo-offline-comparison.md) | Our render == EQ-APO's bake to 2.8e-17; the subjective EQ is interaurally symmetric (0.16 dB) so it can't change ITD/ILD. **Its stability conclusion is corrected by entry 13** (ITD/coherence was the wrong proxy). |
 | 13 | [EQ stabilises via DRR](13-eq-stabilises-via-drr.md) | Correction to 12: listening showed bake wanders, full is steady. The EQ *does* steady the image — not via geometry but by raising the direct-to-reverberant ratio (+1.9 dB mean, +5.1 dB on the worst rear channel), burying the diffuse tail under the direct hit. Elevates B5 (load-bearing, not cosmetic). |
 | 14 | [Parametric EQ engine](14-parametric-eq-engine.md) | B5.1: `binaural_headtracker.eq` — EqualizerAPO-faithful RBJ biquads (PK/LS/HS…), stateful streaming cascade (block==offline), per-channel/bus `ParametricEQ` with glitch-free live retune. Ported the semantics (not the heavy sibling pkg); byte-exact parity (0.0) with the sibling on all 70 of the owner's real filters. |
+| 15 | [Baked-BRIR interpolation](15-baked-brir-interpolation.md) | B1.7: `baked_interp` — synthesise a BRIR at any azimuth over the owner's 8 fixed speakers by bracketing + direct/tail split (ITD-resynth & blend the direct, hold the diffuse tail). Single clean phantom across the back gap, unlike amplitude panning. Rotating snare demo regenerated through it. |
 
 See also [`LEARNINGS.md`](LEARNINGS.md) — the cumulative, numbered lessons.
 
