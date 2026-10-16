@@ -9,8 +9,9 @@ TensorFlow), so importing it costs nothing: it only *locates* a model and return
 its path + metadata; whatever actually loads the keras model (an eval script) runs
 in the sibling's environment with that path.
 
-Registry contract (v1) — a directory (default ``../binaural-localization/models/
-registry``, override with ``$BHT_JUDGE_REGISTRY``) laid out as::
+Registry contract (v1) — a shared, persistent, non-versioned directory (default
+``/mnt/d/binaural-models/registry``, override with ``$JUDGE_MODEL_REGISTRY``; the
+same env var binaural-localization honours when it publishes) laid out as::
 
     registry/
       index.json                 {"best": "<name>", "models": [...], "updated_utc": ...}
@@ -35,14 +36,18 @@ from pathlib import Path
 RANK_METRIC = "cross_rig_qe_pct"
 
 
+#: Shared, persistent, non-versioned registry both repos publish to / read from
+#: (a 4 TB drive outside any git worktree, so it survives branch/worktree switches).
+DEFAULT_REGISTRY = Path("/mnt/d/binaural-models/registry")
+
+#: Env var that overrides the location (honoured by this repo AND binaural-localization).
+REGISTRY_ENV = "JUDGE_MODEL_REGISTRY"
+
+
 def registry_dir() -> Path:
-    """The model-registry directory: ``$BHT_JUDGE_REGISTRY`` or the sibling default."""
-    env = os.environ.get("BHT_JUDGE_REGISTRY")
-    if env:
-        return Path(env).expanduser()
-    # .../binaural-headtracker[-worktree]/src/binaural_headtracker/judge_registry.py
-    # → /home/.../git  → binaural-localization/models/registry (sibling on disk).
-    return Path(__file__).resolve().parents[3] / "binaural-localization" / "models" / "registry"
+    """The model-registry directory: ``$JUDGE_MODEL_REGISTRY`` or :data:`DEFAULT_REGISTRY`."""
+    env = os.environ.get(REGISTRY_ENV)
+    return Path(env).expanduser() if env else DEFAULT_REGISTRY
 
 
 @dataclass(frozen=True)
@@ -70,7 +75,7 @@ def _require_registry(registry: Path | None) -> Path:
         raise FileNotFoundError(
             f"judge registry not found at {reg}. The sibling binaural-localization "
             f"must publish validated judges there (see the registry contract), or set "
-            f"$BHT_JUDGE_REGISTRY."
+            f"$JUDGE_MODEL_REGISTRY."
         )
     return reg
 

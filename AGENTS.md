@@ -157,3 +157,15 @@ its `docs/research-journal/` when working calibration blocks; do not duplicate i
 work — depend on it. It also carries reusable analysis instruments to bring to bear
 (per *Analysis depth* above): `second_listener` (localization judge), `notch`
 (pinna-notch metrics), `dtf`, and the `eqapo` engine.
+
+### Where to find judge models (the registry)
+
+Trained localization judges are published to a **shared, persistent, non-versioned
+registry** — default **`/mnt/d/binaural-models/registry/`** (a 4 TB drive outside
+every worktree, so it survives branch switches), override with
+**`$JUDGE_MODEL_REGISTRY`** (binaural-localization honours the same var). **Never
+guess which `saved_model/*.keras` to use** — resolve the best validated judge with
+`binaural_headtracker.judge_registry.best_judge()` (pure-python; returns the model
+path + metadata/metrics). Current best: **`pooled5_distribution_v1`** (pooled 5-rig,
+cross-rig QE 9.0%, in-domain 0.44%). The keras model loads in the *sibling's* env;
+this repo only resolves the path. See `judge_registry` for the contract.
