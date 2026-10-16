@@ -220,15 +220,22 @@ def _interp_ear_notchwarp(
         )
     else:
         mag = np.exp(w_lo * log_lo + w_hi * log_hi)  # no clear notch → plain mag blend
-    # Reconstruct = minimum-phase of the (warped) magnitude × the nearer neighbour's
-    # EXCESS (all-pass) phase. Using the full phase would re-impose that neighbour's
-    # own magnitude notch; the excess phase carries the externalisation cue without
-    # the magnitude coupling, so the warped notch survives AND the image stays out.
+    # Reconstruct = minimum-phase of the (warped) magnitude × a blended EXCESS
+    # (all-pass) phase. Using the full phase would re-impose a neighbour's own
+    # magnitude notch; the excess phase carries the externalisation cue without the
+    # magnitude coupling, so the warped notch survives AND the image stays out.
+    # Blend BOTH neighbours' excess by weight (not a nearer-neighbour switch), so the
+    # phase is continuous across frac=0.5 — a hard switch stepped the group delay at
+    # every inter-speaker midpoint, a plausible source of rotation instability.
     mp_spec = np.fft.rfft(_min_phase_from_magnitude(mag, nfft), n=nfft)
-    near = Alo if w_lo >= w_hi else Ahi
-    near_mp = np.fft.rfft(_min_phase_from_magnitude(np.abs(near), nfft), n=nfft)
-    excess = near / (near_mp + 1e-12)
-    excess /= np.abs(excess) + 1e-12  # force unit magnitude (pure all-pass)
+
+    def _excess(spec):
+        amp = np.fft.rfft(_min_phase_from_magnitude(np.abs(spec), nfft), n=nfft)
+        e = spec / (amp + 1e-12)
+        return e / (np.abs(e) + 1e-12)  # force unit magnitude (pure all-pass)
+
+    excess = w_lo * _excess(Alo) + w_hi * _excess(Ahi)
+    excess /= np.abs(excess) + 1e-12  # renormalise the blend to unit all-pass
     direct = np.fft.irfft(mp_spec * excess, n=nfft)
     placed = fractional_delay(
         np.concatenate([direct[:split], np.zeros(pad)]), w_lo * t_lo + w_hi * t_hi

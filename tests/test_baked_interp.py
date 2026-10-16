@@ -281,3 +281,25 @@ def test_notchwarp_matches_measured_notch_at_the_endpoints():
     brir = _notched_pair_set(6000.0, 9000.0)
     left, _ = interpolate_baked_brir(brir, 40.0, method="notchwarp")  # close to L(30°)
     assert _deepest_notch_hz(left) < 7000.0  # pulled toward L's 6 kHz notch
+
+
+def test_notchwarp_continuous_across_midpoint():
+    # The excess-phase blend must be continuous across frac=0.5 (no nearer-neighbour
+    # switch): the interpolated BRIR just below vs just above the L↔SL midpoint (60°)
+    # should differ only slightly, not jump. Pins the group-delay-step fix.
+    brir = _notched_pair_set(6000.0, 9000.0)
+    lo_a, _ = interpolate_baked_brir(brir, 59.0, method="notchwarp")
+    lo_b, _ = interpolate_baked_brir(brir, 61.0, method="notchwarp")
+    direct_a, direct_b = lo_a[:240], lo_b[:240]
+    step = np.max(np.abs(direct_a - direct_b))
+    scale = np.max(np.abs(direct_a))
+    assert step < 0.15 * scale  # smooth across the midpoint, no ~discontinuous jump
+
+
+def test_notchwarp_applies_excess_phase_not_plain_minphase():
+    # notchwarp must keep real excess phase → its direct differs from a plain
+    # minimum-phase reconstruction of the same (warped) magnitude.
+    brir = _notched_pair_set(6000.0, 9000.0)
+    nw, _ = interpolate_baked_brir(brir, 60.0, method="notchwarp")
+    mp, _ = interpolate_baked_brir(brir, 60.0, method="minphase")
+    assert not np.allclose(nw[:240], mp[:240], atol=1e-6)
