@@ -180,7 +180,23 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   (host OpenCV), layout A chosen from a mockup — live camera + face mesh + pose HUD
   beside a world-locked azimuth radar (nearest speaker highlighted), `C` to recenter,
   `Q` to quit. Portable `binaural_headtracker.radar` geometry (5 tests). See journal 21.
-  Remaining for B6.1: device pickers, layout editor, HRIR chooser, live EQ controls.)_
+  Remaining for B6.1: layout editor, HRIR chooser, live EQ controls.)_
+- [x] **B6.2** Device pickers (camera + audio output) for the host GUIs, plus the
+  live bring-up fixes found testing on the Windows host.
+  _(`binaural_headtracker.devices`: tested pure selection logic — `output_device_choices`
+  (filter to output-capable, label with host-API + channels, mark the default),
+  `camera_choices`, `resolve_output_device` (index or name-substring → index, loud on a
+  typo), `default_choice_label` — 8 tests; plus host-only enumeration (`probe_cameras`,
+  `query_output_devices`) and a Tk pre-launch `settings_dialog` (lazy imports, CI-safe).
+  Wired into both apps: `live_tracker_audio.py` (camera + audio), `calibration_gui.py`
+  (camera). **Validated live on the host** — the owner ran the live world-lock end-to-end
+  (snare stays fixed when turning). Host fixes in the same block: (a) audio callback made
+  robust to WASAPI's variable buffer size (render fixed blocks into a pending buffer; surface
+  callback errors) — "picture but no sound" was the stream aborting; (b) estimate the head
+  pose from the **un-mirrored** frame (mirror only the display) so yaw keeps its real sign —
+  the mirror had inverted it, making the source track the head instead of the world. AGENTS.md
+  now documents how to launch the host GUIs (interop, `sys.path` injection, local-`C:` model
+  copy). See journal 23.)_
 
 ## M7 — AI-judge calibration
 

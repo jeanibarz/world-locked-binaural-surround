@@ -101,6 +101,46 @@ camera) are runnable **from here**, not blocked:
 - Do **not** record an audio/camera block as "blocked on WSL" — drive the
   Windows Python. (See journal 02.)
 
+### Running the host GUI apps (camera + audio + a window) — ON WINDOWS, not WSL
+
+The interactive apps in `apps/` (`calibration_gui.py`, `live_tracker_audio.py`) and
+the vision/audio spikes need a **real webcam, a real audio output, and a display** —
+they **must run on the Windows host**, never under WSL (no `/dev/video*`, no WASAPI,
+and the package's `cv2`/`mediapipe`/`sounddevice` aren't even installed on the WSL
+side). Drive them through interop with the **host** Python, which *does* have those
+libs (`py.exe -3.12` → `C:\Users\<user>\AppData\Local\Programs\Python\Python312`). The
+recipe, with the two gotchas that will otherwise waste a launch:
+
+1. **Inject the package via `sys.path`, not `PYTHONPATH`.** The host Python does not
+   have `binaural_headtracker` installed, and on this box `PYTHONPATH` is overridden by
+   the environment, so exporting it does nothing. Instead run a tiny **host-local**
+   launcher that prepends the worktree's `src` and `apps` to `sys.path` and calls the
+   app's `main()`. A `\\wsl.localhost\<distro>\home\...\src` **UNC path imports fine**
+   from Windows Python — that is the supported way to run the WSL worktree's code on the
+   host without installing anything:
+   ```python
+   # C:\...\launch.py
+   import sys
+   sys.path[:0] = [r'\\wsl.localhost\Ubuntu-22.04\home\jean\git\<worktree>\apps',
+                   r'\\wsl.localhost\Ubuntu-22.04\home\jean\git\<worktree>\src']
+   import live_tracker_audio as app  # or calibration_gui
+   raise SystemExit(app.main())
+   ```
+   Then `py.exe -3.12 C:\...\launch.py <the app's --flags>`. (`wslpath -w <path>` gives
+   the UNC path for a worktree file.) Launch it with the Bash tool's
+   **`run_in_background`** — it's a long-lived GUI; the completion notice is the user
+   quitting (or a crash to read).
+2. **MediaPipe can't open a UNC model path.** `cv2`/`sounddevice`/imports take UNC, but
+   the FaceLandmarker C++ loader throws `FileNotFoundError` on `\\wsl.localhost\...` —
+   **copy the `.task` to a local `C:` path** and pass that as `--model`. (Baked BRIR dirs
+   and source WAVs are already real `C:` paths, so they're fine.)
+
+Host assets (owner's, kept out of git): the FaceLandmarker model
+`spikes/models/face_landmarker.task` (download per `spikes/b0_4_head_tracker.py`; also
+keep a local-`C:` copy for MediaPipe), the baked BRIR dir (`docs/baked-brir-setup.md`),
+and dry source WAVs (e.g. `caisse_claire_*`). A WSLg Tk window can **preview** a dialog
+from WSL, but the camera + audio always run on the host. (See journal 02; B6.2.)
+
 ## Working discipline
 
 - **Prototype in Python first** for fast iteration, but the language is **not

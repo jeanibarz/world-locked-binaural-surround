@@ -27,7 +27,7 @@ requirements: [`../requirements.md`](../requirements.md).
 | M3 | World-lock: tracker ↔ render, world-fixed speaker | ◑ in progress (B3.1 live core + host app done, click-free; B3.2 A/B capture + host listening remain) |
 | M4 | End-to-end on Windows (virtual device → headphone) | ☐ |
 | M5 | Live EQ filters & presets | ◑ in progress (B5.1 EQ engine done; comp+EQ render integration + presets remain) |
-| M6 | GUI | ☐ |
+| M6 | GUI | ◑ in progress (B6.1 calibration console; B6.2 device pickers + host bring-up, validated live) |
 | M7 | AI-judge calibration loop | ☐ |
 | M8 | Latency hardening (native hot path) | ☐ |
 | M9 | HRIR fine-tuning, packaging, donationware release | ☐ |
@@ -61,6 +61,7 @@ The ordered work blocks live in [`../backlog.md`](../backlog.md).
 | 20 | [Calibration: camera→world](20-calibration-camera-to-world.md) | B2.2: `calibrate` — neutral "screen-centre" pose + the deferred Euler→world-rotation mapping (yaw→+z, pitch→+y, roll→+x), so `head_rotation(cal,pose)` feeds `world.head_relative_directions`. Verified: neutral→identity→nominal layout; +30° yaw ⇒ every az −30° (world-lock) through a calibrated pose. Camera signs host-confirmed. M2 complete. |
 | 21 | [Calibration console GUI](21-calibration-gui.md) | B6.1 (first GUI slice): a VR-style OpenCV console — live camera + face mesh + pose HUD beside a top-down world-locked azimuth radar (nearest speaker highlighted), **C** to recenter. Portable `radar` geometry (5 tests) + a host-only cv2 shell composed from the tracker/calibrate/world. The live proof of world-lock before audio. |
 | 22 | [Live world-lock](22-live-world-lock.md) | B3.1: tracker→render. A single world-fixed source (the snare loop) steered head-relative through the **nearest** BRIR (journal 18), each BRIR a persistent convolver *voice*; on a flip the source crossfades **into** the new voice while the old rings out — click-free (worst sample-step down to the signal's own slew, ~3.8× below a hard switch; 1 voice steady, 2 in transition). `live_render` core (16 tests) + a host `sounddevice`+camera demo with `--record`. World-lock geometry reused from calibrate/world. M4 does the Windows routing. |
+| 23 | [Device pickers + host bring-up](23-device-pickers-and-host-bringup.md) | B6.2: camera + audio-output pickers (tested `devices` logic + a Tk pre-launch menu) for both host GUIs, and the **first live host run** of the world-lock — validated by the owner. Host testing caught two real bugs headless tests missed: the audio callback aborted on WASAPI's variable buffer (fixed: render into a pending buffer, surface errors), and the mirror-before-detect **inverted yaw** (fixed: estimate pose on the un-mirrored frame; plus a live **F** flip toggle). AGENTS.md now documents the host-launch recipe. Next: M4. |
 
 See also [`LEARNINGS.md`](LEARNINGS.md) — the cumulative, numbered lessons.
 

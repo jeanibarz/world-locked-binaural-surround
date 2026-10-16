@@ -14,12 +14,16 @@ Run on the Windows host (camera + audio), e.g.::
 
     py -3.12 apps/live_tracker_audio.py --model face_landmarker.task \
         --brir-dir path/to/baked --source caisse_claire.wav
+    # a pre-launch menu picks the camera + audio output; --no-dialog uses the flags
+    # (--camera N, --audio-device "<name|index>") for a scripted/reproducible run.
     # --world-az 0   (place the source straight ahead; try 90 for a side source)
     # --record out/run  -> writes out/run.wav (what you heard) + out/run.npz (az track)
     # sign flags as in the calibration GUI: --yaw-sign ±1 --pitch-sign ±1 --roll-sign ±1
 
 Recenter with **C** (sets the current pose as "looking at screen centre", like a VR
-headset); quit with **Q**. The ``.npz`` azimuth track re-renders the exact run offline
+headset); **F** mirrors the azimuth L/R live (if a flipped feed turns the world-lock the
+wrong way, with no rebuild — also ``--flip-az``); quit with **Q**. The ``.npz`` azimuth
+track re-renders the exact run offline
 via ``live_render.render_world_locked`` for a reproducible A/B (B3.2).
 """
 
@@ -34,6 +38,13 @@ from pathlib import Path
 import numpy as np
 
 from binaural_headtracker.calibrate import HeadCalibration, calibrate_neutral, directions_for_pose
+from binaural_headtracker.devices import (
+    camera_choices,
+    probe_cameras,
+    query_output_devices,
+    resolve_output_device,
+    settings_dialog,
+)
 from binaural_headtracker.head_pose import head_pose_from_matrix
 from binaural_headtracker.live_render import WorldLockedSource, source_layout
 from binaural_headtracker.surround import load_baked_brir
@@ -82,6 +93,12 @@ def main(argv=None) -> int:
     p.add_argument("--source", type=Path, required=True, help="dry mono loop WAV (e.g. snare)")
     p.add_argument("--world-az", type=float, default=0.0, help="world azimuth of the source")
     p.add_argument("--camera", type=int, default=0)
+    p.add_argument("--audio-device", default=None,
+                   help="output device index or name substring (default: system default)")
+    p.add_argument("--no-dialog", action="store_true",
+                   help="skip the device-picker menu and use --camera/--audio-device")
+    p.add_argument("--flip-az", action="store_true",
+                   help="mirror azimuth L/R (also toggled live with F) for a flipped feed")
     p.add_argument("--block", type=int, default=256)
     p.add_argument("--fade-ms", type=float, default=20.0)
     p.add_argument("--gain", type=float, default=1.0, help="output gain (headroom)")
@@ -100,6 +117,22 @@ def main(argv=None) -> int:
     renderer = WorldLockedSource(brir, block_size=args.block, fade_ms=args.fade_ms)
     layout = source_layout(world_az_deg=args.world_az)
 
+    # Pick the camera + audio output. A pre-launch dialog (dropdowns) by default; the
+    # --camera/--audio-device flags are the scripted path and the dialog's defaults.
+    audio_devs, default_audio = query_output_devices()
+    cam_index, audio_index = args.camera, resolve_output_device(args.audio_device, audio_devs)
+    if not args.no_dialog:
+        cams = camera_choices(probe_cameras())
+        picked = settings_dialog(cams, audio_devs, title="Live world-lock — devices",
+                                 camera_default=args.camera,
+                                 audio_default=audio_index if audio_index is not None
+                                 else default_audio)
+        if picked is None:
+            return 0  # cancelled
+        cam_index = picked["camera"] if picked["camera"] is not None else args.camera
+        audio_index = picked["audio_device"]
+    print(f"camera {cam_index}   audio device {audio_index if audio_index is not None else 'default'}")  # noqa: E501
+
     # Shared head-relative source azimuth: written by the camera thread, read by audio.
     state = {"az": args.world_az, "active": "--", "cal": HeadCalibration(
         0.0, 0.0, 0.0, args.yaw_sign, args.pitch_sign, args.roll_sign)}
@@ -107,41 +140,60 @@ def main(argv=None) -> int:
     recorded: list[np.ndarray] = []
     az_track: list[float] = []
     pos = 0  # read cursor into the looping source
+    pending = np.zeros((0, 2))  # rendered-but-not-yet-output stereo
+    cb_error: list[BaseException] = []
 
     def audio_cb(outdata, frames, _time, status):  # noqa: ANN001
-        nonlocal pos
-        if status:
-            pass  # xruns are expected under load; keep going
-        # Pull `frames` samples from the looping source.
-        idx = (pos + np.arange(frames)) % loop.size
-        block = loop[idx]
-        pos = int((pos + frames) % loop.size)
-        with lock:
-            az = state["az"]
-        stereo = renderer.process_block(block, az) * args.gain
-        outdata[:] = stereo.astype(np.float32)
-        if args.record is not None:
-            recorded.append(stereo.copy())
-            az_track.append(az)
+        # WASAPI does not hand us a fixed buffer size, so decouple the renderer's fixed
+        # block from `frames`: render in block_size chunks into `pending` until we have
+        # enough, output `frames`, keep the remainder. Any error is surfaced to the main
+        # loop (a raised callback silently aborts the PortAudio stream = picture, no sound).
+        nonlocal pos, pending
+        try:
+            while pending.shape[0] < frames:
+                idx = (pos + np.arange(args.block)) % loop.size
+                mono = loop[idx]
+                pos = int((pos + args.block) % loop.size)
+                with lock:
+                    az = state["az"]
+                stereo = renderer.process_block(mono, az) * args.gain
+                pending = np.concatenate([pending, stereo], axis=0)
+                if args.record is not None:
+                    recorded.append(stereo.copy())
+                    az_track.append(az)
+            outdata[:] = pending[:frames].astype(np.float32)
+            pending = pending[frames:]
+        except BaseException as exc:  # noqa: BLE001
+            cb_error.append(exc)
+            outdata.fill(0)
 
     detector = vision.FaceLandmarker.create_from_options(vision.FaceLandmarkerOptions(
         base_options=mp.tasks.BaseOptions(model_asset_path=str(args.model)),
         output_facial_transformation_matrixes=True, num_faces=1))
-    cap = cv2.VideoCapture(args.camera)
+    cap = cv2.VideoCapture(cam_index)
     recent: deque[HeadPose] = deque(maxlen=20)
     pose_filter = PoseFilter(args.min_cutoff, args.beta)
+    flip_az = args.flip_az
     win = "Binaural head-tracker — live world-lock"
 
+    dev_name = sd.query_devices(audio_index)["name"] if audio_index is not None else "default"
+    print(f"playing to: {dev_name}  @ {brir.samplerate} Hz")
     with sd.OutputStream(samplerate=brir.samplerate, channels=2, blocksize=args.block,
-                         dtype="float32", callback=audio_cb):
+                         dtype="float32", device=audio_index, callback=audio_cb):
         while True:
+            if cb_error:
+                print(f"audio callback error: {cb_error[0]!r}")
+                break
             ok, frame = cap.read()
             if not ok:
                 continue
             now = time.monotonic()
-            frame = cv2.flip(frame, 1)
+            # Estimate the pose from the TRUE (un-mirrored) frame so yaw keeps its real
+            # sign (mirroring flips left/right and would invert it → world-lock reversed,
+            # the source tracking with the head). Mirror only the displayed image below.
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             result = detector.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
+            frame = cv2.flip(frame, 1)  # mirror for display only (no overlay to realign)
             if result.facial_transformation_matrixes:
                 yaw, pitch, roll = head_pose_from_matrix(
                     np.asarray(result.facial_transformation_matrixes[0]))
@@ -150,19 +202,25 @@ def main(argv=None) -> int:
                 with lock:
                     cal = state["cal"]
                 src_az = float(directions_for_pose(cal, pose, layout)[0][0])
+                if flip_az:
+                    src_az = -src_az  # left/right mirror, for a horizontally-flipped feed
                 with lock:
                     state["az"] = src_az
-                cv2.putText(frame, f"yaw {pose.yaw:+5.1f}  src az {src_az:+6.1f}",
+                cv2.putText(frame, f"yaw {pose.yaw:+5.1f}  src az {src_az:+6.1f}"
+                            f"{'  [flip]' if flip_az else ''}",
                             (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.6, ACCENT, 1, cv2.LINE_AA)
             else:
                 cv2.putText(frame, "no face", (12, 28),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, MUTED, 1, cv2.LINE_AA)
-            cv2.putText(frame, "[C] recenter   [Q] quit", (12, frame.shape[0] - 14),
+            cv2.putText(frame, "[C] recenter   [F] flip L/R   [Q] quit",
+                        (12, frame.shape[0] - 14),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, FG, 1, cv2.LINE_AA)
             cv2.imshow(win, frame)
             key = cv2.waitKey(1) & 0xFF
             if key in (ord("q"), 27):
                 break
+            if key == ord("f"):
+                flip_az = not flip_az  # toggle live if the world-lock turns the wrong way
             if key == ord("c") and recent:
                 new_cal = calibrate_neutral(list(recent), yaw_sign=args.yaw_sign,
                                             pitch_sign=args.pitch_sign, roll_sign=args.roll_sign)
