@@ -206,9 +206,12 @@ def test_head_yaw_swings_every_azimuth_by_minus_yaw():
     static = build_speaker_hrirs(hs, layout_7p1())
     turned = build_speaker_hrirs(hs, layout_7p1(), head_rotation=R)
 
-    ci = static.channels.index("C")  # front speaker, az 0 at neutral
-    assert static.directions[ci, 0] == pytest.approx(0.0, abs=1e-9)
-    assert turned.directions[ci, 0] == pytest.approx(-30.0, abs=1e-6)
+    # Every speaker azimuth shifts by -30deg (elevation unchanged), compared as a
+    # wrapped angular difference so -30 vs 330 etc. match.
+    for i in range(static.n_channels):
+        diff = (turned.directions[i, 0] - static.directions[i, 0] + 180.0) % 360.0 - 180.0
+        assert diff == pytest.approx(-30.0, abs=1e-6)
+        assert turned.directions[i, 1] == pytest.approx(static.directions[i, 1], abs=1e-6)
     # A real rotation changes the lookup, so the rendered IRs differ.
     assert not np.allclose(static.left, turned.left)
 
