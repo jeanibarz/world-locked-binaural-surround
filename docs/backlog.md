@@ -60,8 +60,16 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   output == `scipy.fftconvolve` to **5.7e-14**; latency = one block, no extra
   algorithmic delay; 7.1→stereo (200 ms BRIRs) **3.2×RT at block 256 (5.3 ms)**,
   1.0×RT at 128. Default prototype block = 256 @ 48 kHz. See journal 09.)_
-- [ ] **B1.4** 7.1 world layout model (screen-relative positions, configurable
+- [x] **B1.4** 7.1 world layout model (screen-relative positions, configurable
   distance/scale) → per-channel (az,el) for a *fixed* head. Tested.
+  _(`binaural_headtracker.world`: right-handed world frame (`+x`=front, `+y`=left,
+  `+z`=up) so `az=atan2(y,x)`/`el=asin(z/r)` match the HRIR convention;
+  `WorldLayout` holds 3-D positions, `head_relative_directions` is the full
+  `Rᵀ(pᵢ−p_h)` projection defaulting to the fixed neutral head; `layout_7p1`
+  builds the nominal ring (configurable distance/scale per FR-3). 25 tests;
+  reproduces `SPEAKER_LAYOUT_7P1` exactly, a head yaw of +θ shifts every azimuth
+  by −θ (the world-lock mechanic, unit-tested). Euler→R mapping left to B2.2/B3.1.
+  See journal 10.)_
 - [ ] **B1.5** Wire B1.1–B1.4 into a static renderer: 7.1 PCM in → stereo out,
   offline-verified on a test signal (e.g. a known pan). No tracking yet.
   _(Note: a static renderer already exists for the **owner's baked BRIR set** via
