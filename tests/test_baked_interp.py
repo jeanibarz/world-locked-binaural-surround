@@ -83,14 +83,43 @@ def test_itd_is_monotonic_sweeping_front_to_left():
     assert np.all(np.diff(itds) > -1e-6)  # non-decreasing left-ear lead toward 90°
 
 
-def test_tail_is_blended_in_place_not_time_aligned():
-    # The tail of a 60° interp (midway L↔SL, equal weights) must equal the pairwise-
-    # weighted sum of the two speakers' tails held in place (no time-alignment).
+def test_tail_is_blended_in_place_equal_power():
+    # The tail of a 60° interp (midway L↔SL) must be the two speakers' tails summed
+    # in place (no time-alignment) with EQUAL-POWER weights sqrt(0.5), not linear 0.5.
     brir = _synthetic_set()
     left, _ = interpolate_baked_brir(brir, 60.0)
     lo, sl = brir.index("L"), brir.index("SL")
-    expected = 0.5 * brir.left[lo, SPLIT + 50 :] + 0.5 * brir.left[sl, SPLIT + 50 :]
+    g = np.sqrt(0.5)
+    expected = g * brir.left[lo, SPLIT + 50 :] + g * brir.left[sl, SPLIT + 50 :]
     assert np.allclose(left[SPLIT + 50 :], expected, atol=1e-12)
+
+
+def test_tail_power_is_preserved_across_the_pan():
+    # Decorrelated tails: the blended tail's power at any pan position must stay ~the
+    # endpoint power (no ~3 dB dip at midpoints). Check RMS across L→SL in dB.
+    brir = _synthetic_set()
+    lo = brir.index("L")
+    ref = np.sqrt(np.mean(brir.left[lo, SPLIT:] ** 2))  # an endpoint tail RMS
+    for az in (30.0, 45.0, 60.0, 75.0, 90.0):  # L(30) → SL(90)
+        left, _ = interpolate_baked_brir(brir, az)
+        rms = np.sqrt(np.mean(left[SPLIT:] ** 2))
+        assert abs(20 * np.log10(rms / ref)) < 1.0  # within 1 dB everywhere
+
+
+def test_onset_ignores_a_loud_late_reflection():
+    # A reflection in the tail LOUDER than the direct must NOT drag the onset/split
+    # (early-window search). Proof: the interpolated DIRECT region is identical with
+    # and without the reflection — the reflection stays in the (held) tail. The old
+    # whole-BRIR argmax onset would lock onto the reflection and corrupt the direct.
+    clean = _synthetic_set()
+    doctored = _synthetic_set()
+    lo = doctored.index("L")
+    doctored.left[lo, 1500] = 5.0  # tail reflection 5x the direct delta
+    doctored.right[lo, 1500] = 5.0
+    left_c, _ = interpolate_baked_brir(clean, 60.0)
+    left_d, _ = interpolate_baked_brir(doctored, 60.0)
+    assert np.allclose(left_d[:180], left_c[:180], atol=1e-12)  # direct unaffected
+    assert abs(left_d[1500]) > 3.0  # the reflection is held in place in the tail
 
 
 def test_back_gap_interpolation_is_a_single_arrival():

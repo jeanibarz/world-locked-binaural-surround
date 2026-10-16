@@ -17,9 +17,10 @@ the signals"** — applied to the **direct-path wavefront only**:
    delay — resynthesising a single, clean ITD at the in-between angle (the
    time-alignment interpolation of B1.2, here on just the direct part so the sharp
    wavefront doesn't comb-filter).
-4. **Tail:** blend the neighbours' tails **in place** (no time-alignment) — the
-   diffuse tail has no direction to interpolate and must not be smeared by the
-   direct delay. Holding it fixed keeps the room intact.
+4. **Tail:** blend the neighbours' tails **in place** (no time-alignment), with
+   **equal-power** weights — the diffuse tail has no direction to interpolate and
+   must not be smeared by the direct delay. The tails are decorrelated, so a linear
+   sum dips ~3 dB at the midpoint; ``sqrt(weight)`` holds the room level constant.
 
 Coarse with 8 points, but usable for modest angles — and, unlike amplitude panning
 between two whole BRIRs (two room tails, two directions at once), it renders a
@@ -42,6 +43,12 @@ DIRECTIONAL_7P1: tuple[str, ...] = ("L", "R", "C", "SL", "SR", "RL", "RR")
 # Default direct-window length after the arrival (ms). ~3 ms covers the direct
 # wavefront + earliest head response without reaching into the dense room tail.
 DEFAULT_DIRECT_MS = 3.0
+
+# Window (ms from the IR start) in which to find the direct-path onset. The direct
+# arrival is the loudest thing in the first few ms; restricting the search here
+# keeps a strong late reflection or the dense tail from capturing the global peak
+# (``estimate_delay`` is a whole-signal argmax, tuned for anechoic HRIRs).
+ONSET_SEARCH_MS = 10.0
 
 # A target within this many degrees of a measured speaker is treated as exact.
 EXACT_TOL_DEG = 1e-6
@@ -98,10 +105,15 @@ def _interp_ear(
     t_lo, t_hi = estimate_delay(dlo), estimate_delay(dhi)
     aligned = w_lo * fractional_delay(dlo, -t_lo) + w_hi * fractional_delay(dhi, -t_hi)
     direct = fractional_delay(aligned, w_lo * t_lo + w_hi * t_hi)[:split]
-    # --- tail: blend in place (diffuse, no direction to align) ------------------
+    # --- tail: equal-power blend in place (diffuse, decorrelated, no direction) --
+    # The two tails are decorrelated, so a linear w_lo+w_hi=1 sum is a *power* sum
+    # that dips ~3 dB at the midpoint (the reverb would audibly dim between
+    # speakers). Equal-power weights g=sqrt(w) keep g_lo^2+g_hi^2 = w_lo+w_hi = 1,
+    # so the room level stays constant across the pan. No time-alignment (shifting
+    # two different tails and summing would comb-filter).
     out = np.zeros(n)
     out[:split] = direct
-    out[split:] = w_lo * ir_lo[split:] + w_hi * ir_hi[split:]
+    out[split:] = np.sqrt(w_lo) * ir_lo[split:] + np.sqrt(w_hi) * ir_hi[split:]
     return out
 
 
@@ -131,10 +143,13 @@ def interpolate_baked_brir(
     w_lo, w_hi = 1.0 - frac, frac
 
     # Direct window = the arrival region plus `direct_ms`, measured from the earliest
-    # onset across the two bracketing BRIRs (so both share one tail boundary).
+    # onset across the two bracketing BRIRs (so both share one tail boundary). The
+    # onset is searched only in the first `ONSET_SEARCH_MS` so a loud late reflection
+    # or the dense tail cannot capture the (whole-signal) argmax.
+    early = max(1, int(round(ONSET_SEARCH_MS * brir.samplerate / 1000.0)))
     onset = min(
-        estimate_delay(brir.left[ch_lo]), estimate_delay(brir.right[ch_lo]),
-        estimate_delay(brir.left[ch_hi]), estimate_delay(brir.right[ch_hi]),
+        estimate_delay(brir.left[ch_lo][:early]), estimate_delay(brir.right[ch_lo][:early]),
+        estimate_delay(brir.left[ch_hi][:early]), estimate_delay(brir.right[ch_hi][:early]),
     )
     split = int(round(onset + direct_ms * brir.samplerate / 1000.0))
 

@@ -38,20 +38,30 @@ once, so the phantom is diffuse, worst across the 90° gap at the back.
    *interpolated* delay — a single resynthesised ITD at the in-between angle
    (B1.2's time-alignment idea, restricted to the direct so the sharp wavefront
    isn't comb-filtered). Reuses `interpolate.estimate_delay` / `fractional_delay`.
-4. **Tail:** blend the neighbours' tails **in place** (weighted sum, no shift) —
-   the diffuse room held intact.
+4. **Tail:** blend the neighbours' tails **in place** (no shift) with **equal-power**
+   weights (`sqrt(weight)`) — the tails are decorrelated, so a linear sum would dip
+   ~3 dB at the midpoint (the room would audibly dim between speakers); equal-power
+   holds the room level constant across the pan.
+
+The direct-onset search is restricted to the first `ONSET_SEARCH_MS` (10 ms) so a
+loud late reflection can't capture the (whole-signal) Hilbert argmax and drag the
+direct/tail split into the reverb.
 
 An exact measured azimuth returns the measured BRIR untouched.
 
 ## Result
 
-B1.7 **done**. 12 tests (187 total, ruff clean), on a synthetic ring whose direct
+B1.7 **done**. 14 tests (189 total, ruff clean), on a synthetic ring whose direct
 deltas encode a toy ITD:
 
 - Measured azimuths reproduce exactly.
 - Between two speakers the arrival ITD interpolates (≈ the pairwise mean) and is
   **monotonic** sweeping front→left.
-- The tail is the in-place weighted blend (not time-aligned) — verified sample-wise.
+- The tail is the in-place **equal-power** blend (not time-aligned) — verified
+  sample-wise, and its **power is held within 1 dB** across the whole L→SL pan (no
+  ~3 dB midpoint dip, which a linear sum of decorrelated tails would give).
+- A loud late reflection in the tail does **not** move the direct/tail split (the
+  direct region is byte-identical with and without it) — the early-window onset.
 - Across the wide **back gap** (RL 135° → RR 225°), the midpoint is a **single
   clean arrival** (one dominant direct peak ≤ 4 samples wide), not two — the whole
   point versus amplitude panning.
