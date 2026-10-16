@@ -225,3 +225,13 @@ full story.
     literal and checkable: byte-exact parity (0.0 coeff diff on all 70 of the
     owner's real filters) proves the semantics are identical, so reuse ≡ port here.
     (→ [14](14-parametric-eq-engine.md))
+36. **Interpolate a reverberant BRIR by splitting direct from tail: align/blend the
+    direct, hold the tail.** The direct wavefront carries the direction (ITD/ILD),
+    so time-align it to a common origin, magnitude-blend the neighbours, and re-apply
+    the *interpolated* delay (resynthesised ITD). The diffuse tail has no direction —
+    blend it **in place**; time-aligning it (shifting two different room tails and
+    summing) comb-filters. This renders a *single* clean phantom at the true angle,
+    unlike amplitude-panning two whole BRIRs (two directions + two tails at once),
+    which is why it localises across wide gaps where panning goes diffuse. (B1.7,
+    the sparse-baked counterpart of B1.2's dense-SOFA interpolation.)
+    (→ [15](15-baked-brir-interpolation.md))
