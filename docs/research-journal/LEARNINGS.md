@@ -247,3 +247,20 @@ full story.
     resolves it (`judge_registry.best_judge()`) and never hard-codes a path. Keep the
     consumer pure-python so importing it doesn't drag the producer's ML deps.
     (→ [16](16-judge-model-registry.md))
+38. **To interpolate an HRTF comb-free AND keep externalisation, warp the notch and
+    reuse the EXCESS phase.** Slide the single pinna notch from each neighbour's
+    frequency to the interpolated one (frequency-warped magnitude → one moving notch,
+    not two), and reconstruct as minimum-phase-of-that-magnitude × the nearer
+    neighbour's *excess* (all-pass) phase. Plain min-phase is comb-free but discards
+    excess phase → flat/"less distant" (owner-rejected); keeping the *full* phase
+    re-imposes that neighbour's own notch; the excess phase is the part that carries
+    externalisation without the magnitude coupling. notchwarp beat timealign/minphase
+    by the judge and the ear. (→ [17](17-interpolation-method-and-the-back-gap.md))
+39. **Some "rendering" defects are data defects — triangulate before polishing the
+    algorithm.** The rotation confusion survived every interpolation method because
+    the owner's measured *rear* BRIRs are themselves front/back-ambiguous (judge +
+    sibling entries 18/19): no blend of ambiguous endpoints yields a correct back
+    cue. The judge made this visible and method-independent. When multiple methods
+    all fail the same way, suspect the inputs, not the method — the fix moves to
+    better rear cues / HRTF selection, not more interpolation.
+    (→ [17](17-interpolation-method-and-the-back-gap.md))
