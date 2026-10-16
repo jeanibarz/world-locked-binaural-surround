@@ -277,35 +277,44 @@ def interpolate_baked_brir(
     brir: BakedBRIRSet,
     az: float,
     *,
-    method: str = "notchwarp",
+    method: str = "nearest",
     direct_ms: float = DEFAULT_DIRECT_MS,
     directional: tuple[str, ...] = DIRECTIONAL_7P1,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Synthesise a ``(left, right)`` BRIR for azimuth ``az`` (deg, horizontal).
+    """Return a ``(left, right)`` BRIR for azimuth ``az`` (deg, horizontal).
 
-    Brackets ``az`` between the two adjacent ring speakers and blends them. At
-    (within :data:`EXACT_TOL_DEG` of) a measured speaker the exact measured BRIR is
-    returned unchanged. ``direct_ms`` sets the direct window; the room tail beyond
-    it is always held (equal-power blend in place), not aligned.
+    ``method`` selects how a non-measured azimuth is produced:
 
-    ``method`` selects how the **direct** wavefront is interpolated:
+    * ``"nearest"`` (default) — return the **nearest measured ring speaker's real
+      BRIR**, unmodified. No spectral synthesis: this localises best by both the
+      synthetic-listener judge (pooled5: 25° vs 43–51° for the synthesis methods, on
+      the *trustworthy lateral axis* too) and in listening. The synthesis methods
+      below buy a smooth phantom at the cost of **front↔back hemisphere flips** — the
+      most disturbing error class (journal 18); nearest only drifts slightly in
+      azimuth, which is far less wrong perceptually. **Smooth rotation is the render
+      layer's job** (crossfade between successive BRIRs as the source moves, e.g. the
+      overlap-add in the rotating demo / B3.1), not this per-azimuth lookup.
+    * ``"notchwarp"`` — slide the single N1 pinna notch (frequency-warped magnitude)
+      + nearer-neighbour excess phase. Comb-free, keeps externalisation, but the
+      notch-warp can push the front/back cue → confident rear flips in wide gaps.
+    * ``"timealign"`` — time-align the two bracketing directs and blend in time; real
+      phase, but the complex sum combs between dissimilar directions.
+    * ``"minphase"`` — plain minimum-phase of the magnitude blend + ITD; comb-free
+      but flattens externalisation.
 
-    * ``"notchwarp"`` (default) — slide the single N1 pinna notch from each
-      neighbour's frequency to the interpolated one (frequency-warped magnitude, so
-      one notch moves instead of two overlapping), reconstructed as minimum-phase of
-      the warped magnitude × the **nearer** neighbour's *excess* (all-pass) phase —
-      so it is comb-free AND keeps externalisation. Best of the three by the
-      synthetic-listener judge and in listening (journal).
-    * ``"timealign"`` — time-align the two directs and blend them in the time
-      domain, then re-delay. Keeps the real measured phase, but the complex sum
-      combs between dissimilar directions (spurious nulls in the wide gaps).
-    * ``"minphase"`` — interpolate the direct's log-magnitude and rebuild a plain
-      minimum-phase impulse, then apply the interpolated ITD. Comb-free, but
-      discarding the excess phase flattens externalisation — perceptually rejected
-      in listening. Kept for comparison/analysis.
+    For the synthesis methods: bracket ``az`` between the two adjacent speakers and
+    blend their directs (per ``direct_ms``); the room tail is held (equal-power blend
+    in place). An exact measured azimuth returns that speaker unchanged.
     """
-    if method not in ("timealign", "minphase", "notchwarp"):
-        raise ValueError(f"method must be 'timealign', 'minphase' or 'notchwarp'; got {method!r}")
+    if method not in ("nearest", "timealign", "minphase", "notchwarp"):
+        raise ValueError(
+            f"method must be 'nearest', 'timealign', 'minphase' or 'notchwarp'; got {method!r}"
+        )
+    ring = ring_azimuths(brir, directional)
+    if method == "nearest":
+        az_n = az % 360.0
+        idx = min(ring, key=lambda t: min((az_n - t[1]) % 360.0, (t[1] - az_n) % 360.0))[0]
+        return brir.left[idx].copy(), brir.right[idx].copy()
     if method == "minphase":
         def ear(lo, hi, wl, wh, sp):
             return _interp_ear_minphase(lo, hi, wl, wh, sp)
@@ -315,7 +324,6 @@ def interpolate_baked_brir(
     else:
         def ear(lo, hi, wl, wh, sp):
             return _interp_ear(lo, hi, wl, wh, sp)
-    ring = ring_azimuths(brir, directional)
     az_n = az % 360.0
 
     # Exact hit → return the measured BRIR untouched.

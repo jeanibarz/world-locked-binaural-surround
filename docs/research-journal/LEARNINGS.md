@@ -264,3 +264,19 @@ full story.
     all fail the same way, suspect the inputs, not the method — the fix moves to
     better rear cues / HRTF selection, not more interpolation.
     (→ [17](17-interpolation-method-and-the-back-gap.md))
+40. **A stable image with a small azimuth error beats one that jumps hemispheres —
+    front↔back flips are the worst error class.** Spectral HRTF interpolation buys a
+    smooth phantom at the cost of occasional confident front↔back flips (it perturbs
+    the pinna-notch cue that *is* the front/back cue); the owner heard those rapid
+    front/back jumps as far more "wrong" than steady, slightly-off placement. Prefer
+    a method that never flips even if it is a little less "accurate" on paper. This is
+    why `nearest` (real measured BRIR, no synthesis) beat every interpolation by both
+    the mixed-rig judge and the ear. (→ [18](18-nearest-default-no-flips.md))
+41. **For a sparse measured set, prefer the nearest REAL response + a render-layer
+    crossfade over synthesising in-between spectra.** Real BRIRs carry real cues (the
+    judge rewards it, the ear confirms it); a synthesised in-between spectrum belongs
+    to no real direction and misreads. Make smoothness the *renderer's* job (crossfade
+    between successive real BRIRs as the source moves), not the per-azimuth lookup's.
+    Also: do not lock a default on a *generic* judge + a partial ear test — wait for
+    the owner's best (mixed-rig) judge and a full A/B; entry 17's notchwarp default was
+    reversed once they were in. (→ [18](18-nearest-default-no-flips.md))

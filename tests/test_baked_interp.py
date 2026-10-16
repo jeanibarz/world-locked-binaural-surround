@@ -66,7 +66,7 @@ def test_itd_interpolates_between_two_speakers():
     # 60° sits midway between L (30°) and SL (90°). Its ITD should land between the
     # two neighbours' ITDs, ~their mean (equal weights at the midpoint).
     brir = _synthetic_set()
-    left, right = interpolate_baked_brir(brir, 60.0)
+    left, right = interpolate_baked_brir(brir, 60.0, method="timealign")  # synthesis
     itd = estimate_delay(right) - estimate_delay(left)  # >0 ⇒ left ear earlier
     lo, hi = brir.index("L"), brir.index("SL")
     itd_lo = estimate_delay(brir.right[lo]) - estimate_delay(brir.left[lo])
@@ -79,7 +79,7 @@ def test_itd_is_monotonic_sweeping_front_to_left():
     brir = _synthetic_set()
     itds = []
     for az in range(0, 91, 15):
-        left, right = interpolate_baked_brir(brir, float(az))
+        left, right = interpolate_baked_brir(brir, float(az), method="timealign")
         itds.append(estimate_delay(right) - estimate_delay(left))
     assert np.all(np.diff(itds) > -1e-6)  # non-decreasing left-ear lead toward 90°
 
@@ -88,7 +88,7 @@ def test_tail_is_blended_in_place_equal_power():
     # The tail of a 60° interp (midway L↔SL) must be the two speakers' tails summed
     # in place (no time-alignment) with EQUAL-POWER weights sqrt(0.5), not linear 0.5.
     brir = _synthetic_set()
-    left, _ = interpolate_baked_brir(brir, 60.0)
+    left, _ = interpolate_baked_brir(brir, 60.0, method="timealign")  # synthesis
     lo, sl = brir.index("L"), brir.index("SL")
     g = np.sqrt(0.5)
     expected = g * brir.left[lo, SPLIT + 50 :] + g * brir.left[sl, SPLIT + 50 :]
@@ -303,3 +303,37 @@ def test_notchwarp_applies_excess_phase_not_plain_minphase():
     nw, _ = interpolate_baked_brir(brir, 60.0, method="notchwarp")
     mp, _ = interpolate_baked_brir(brir, 60.0, method="minphase")
     assert not np.allclose(nw[:240], mp[:240], atol=1e-6)
+
+
+# --- nearest (the default): no synthesis, return the nearest real BRIR ----------
+
+
+def test_nearest_is_the_default_method():
+    # Default must be 'nearest' now: at an in-between azimuth it returns a *measured*
+    # speaker's BRIR verbatim (not a synthesised blend).
+    brir = _synthetic_set()
+    default_l, default_r = interpolate_baked_brir(brir, 55.0)
+    near_l, near_r = interpolate_baked_brir(brir, 55.0, method="nearest")
+    assert np.array_equal(default_l, near_l) and np.array_equal(default_r, near_r)
+
+
+def test_nearest_returns_the_nearest_measured_speaker():
+    brir = _synthetic_set()
+    # 55° is closer to L(30°) gap... actually nearest ring speaker to 55° is SL(90)? no:
+    # |55-30|=25 vs |55-90|=35 → L. Check a few unambiguous ones.
+    for az, ch in [(28.0, "L"), (88.0, "SL"), (10.0, "C"), (272.0, "SR"), (133.0, "RL")]:
+        left, right = interpolate_baked_brir(brir, az, method="nearest")
+        i = brir.index(ch)
+        assert np.array_equal(left, brir.left[i]), f"az {az} should snap to {ch}"
+        assert np.array_equal(right, brir.right[i])
+
+
+def test_nearest_never_synthesises_only_eight_distinct_outputs():
+    # Across the whole circle, nearest yields only the measured BRIRs — so it can't
+    # introduce a phantom spectrum (the source of the front/back flips). Every output
+    # equals one of the measured left-ear IRs exactly.
+    brir = _synthetic_set()
+    measured = [brir.left[i] for i in range(brir.n_channels)]
+    for az in range(0, 360, 11):
+        left, _ = interpolate_baked_brir(brir, float(az), method="nearest")
+        assert any(np.array_equal(left, m) for m in measured)
