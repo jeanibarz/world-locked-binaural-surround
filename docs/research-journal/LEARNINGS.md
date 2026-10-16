@@ -127,3 +127,23 @@ full story.
     0->90 deg). The raw-peak estimator passed every *synthetic* delta test and only
     failed on real data — validate delay estimators on measured HRIRs.
     (→ [08](08-direction-interpolation.md))
+23. **Uniformly-partitioned overlap-save (UPOLS) makes block size a free latency
+    knob.** Chop the filter into `P = ceil(N/B)` parts of `B` taps, pre-FFT each to
+    `2B` points, keep a frequency-domain delay line of the last `P` input windows,
+    and per block do one `2B` FFT + `P` complex MACs + one `2B` IFFT. Per-block
+    cost is `O(P)` MACs plus two fixed FFTs — constant in the filter length for a
+    fixed block — and the only latency is the one block of input buffering (no
+    extra algorithmic delay). (→ [09](09-partitioned-convolution.md))
+24. **In a Python convolution prototype the bottleneck is per-call overhead, not
+    arithmetic.** An 8-channel 7.1→stereo mix (16 convolvers × up to 75 partitions)
+    runs only 1.0×RT at a 128-sample block but 3.2×RT at 256, because the cost is
+    the number of Python iterations (channels × partitions), not FLOPs. Larger
+    blocks trade latency for fewer, bigger iterations; vectorising the MAC/FFT
+    across partitions and channels is the lever to pull before going native.
+    (→ [09](09-partitioned-convolution.md))
+25. **Overlap-save (FFT `2B`, hop `B`) puts the alias-free linear-convolution
+    samples in the second half of each IFFT, and the streamed result equals the
+    offline `scipy.signal.fftconvolve` to ~1e-14.** That exact equivalence is a
+    cheap correctness oracle for any future convolution refactor (native port,
+    vectorisation): stream a random signal + flush, diff against `fftconvolve`.
+    (→ [09](09-partitioned-convolution.md))
