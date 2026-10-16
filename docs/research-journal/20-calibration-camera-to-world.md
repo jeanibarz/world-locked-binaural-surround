@@ -22,11 +22,12 @@ anchored on a neutral "looking at screen centre" pose, so the scene world-locks.
   about world front (`+x`), composed `R = Rz(Δyaw)·Ry(Δpitch)·Rx(Δroll)` on the
   per-axis deltas from neutral. This is the relabelling from the camera-frame Euler
   (`head_pose`, yaw about the camera's Y) to the world frame.
-- **Sign per axis** (`yaw_sign`/`pitch_sign`/`roll_sign`, default +1) — which way the
+- **Sign per axis** (`yaw_sign=+1`, `pitch_sign=-1`, `roll_sign=+1`) — which way the
   camera calls "+yaw" is hardware-dependent; exposed to be confirmed once on the host
   against the live camera (as B0.4 characterised the range), since it can't be
-  verified headless. Defaults give the correct world-lock *direction* assuming
-  +yaw = turning left, +pitch = nodding up.
+  verified headless. The defaults give the correct world-lock *direction* assuming
+  **+yaw = turning left** (→ front speaker to the right, az −Δyaw) and **+pitch =
+  nodding up** (→ scene drops below the gaze, el < 0, hence `pitch_sign=-1`).
 
 ## Result
 
@@ -38,7 +39,9 @@ through a calibrated pose:
 - **at the neutral pose `R = I` and the layout = its nominal 7.1 angles**;
 - **a head yaw of +30° shifts every speaker azimuth by −30°** (elevation unchanged) —
   the exact world-lock mechanic B1.4 unit-tested, now driven by a calibrated head pose;
-- a pitch Δ tilts the front-centre speaker in elevation (azimuth unchanged on the
+- nodding up (+pitch) drops the front-centre speaker *below* the gaze (el −20° for
+  +20°, the correct world-lock direction; the test pins the sign, not just the
+  magnitude), azimuth unchanged on the
   median plane);
 - a flipped `yaw_sign` reverses the azimuth shift.
 

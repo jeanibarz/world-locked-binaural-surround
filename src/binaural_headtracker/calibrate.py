@@ -20,10 +20,12 @@ Two jobs:
    mechanic B1.4 unit-tests.
 
 The per-axis **sign** (which way the camera calls "+yaw") is hardware/convention
-dependent and is exposed as ``yaw_sign``/``pitch_sign``/``roll_sign`` (default +1),
-to be confirmed once on the host against the live camera (as B0.4 characterised the
-range) — the defaults give the correct world-lock *direction* under the assumption
-that +yaw = turning left, +pitch = nodding up.
+dependent and is exposed as ``yaw_sign``/``pitch_sign``/``roll_sign``, to be confirmed
+once on the host against the live camera (as B0.4 characterised the range). The
+defaults — ``yaw_sign=+1``, ``pitch_sign=-1``, ``roll_sign=+1`` — give the correct
+world-lock *direction* under the assumption that **+yaw = turning left** and
+**+pitch = nodding up**: turning left sends a world-fixed front speaker to the right
+(az −Δyaw), and nodding up sends it *below* the gaze (el < 0, hence ``pitch_sign=-1``).
 
 Pure numpy; unit-tested headless.
 """
@@ -65,7 +67,7 @@ class HeadCalibration:
     pitch0: float
     roll0: float
     yaw_sign: float = 1.0
-    pitch_sign: float = 1.0
+    pitch_sign: float = -1.0  # +pitch = nodding up ⇒ world-fixed scene tilts down (el<0)
     roll_sign: float = 1.0
 
 
@@ -73,7 +75,7 @@ def calibrate_neutral(
     poses,
     *,
     yaw_sign: float = 1.0,
-    pitch_sign: float = 1.0,
+    pitch_sign: float = -1.0,
     roll_sign: float = 1.0,
 ) -> HeadCalibration:
     """Average a set of neutral samples (looking at screen centre) → a calibration.
@@ -111,11 +113,13 @@ def head_rotation(cal: HeadCalibration, pose: HeadPose) -> np.ndarray:
     return _rot_z(dyaw) @ _rot_y(dpitch) @ _rot_x(droll)
 
 
-def head_relative_directions(
+def directions_for_pose(
     cal: HeadCalibration, pose: HeadPose, layout: WorldLayout
 ) -> np.ndarray:
     """Per-channel ``(az, el)`` (deg) for the current head pose — the world-lock output.
 
     Convenience: ``layout.head_relative_directions(head_rotation=head_rotation(cal, pose))``.
+    Named distinctly from `WorldLayout.head_relative_directions` (which it wraps) to
+    keep the B3.1 pipeline readable.
     """
     return layout.head_relative_directions(head_rotation=head_rotation(cal, pose))
