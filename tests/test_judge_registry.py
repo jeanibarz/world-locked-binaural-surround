@@ -81,7 +81,7 @@ def test_missing_registry_raises_helpful_error(tmp_path):
 def test_env_override(tmp_path, monkeypatch):
     reg = _registry(tmp_path)
     _write_model(reg, "pooled_v1", cross_rig_qe=30.0)
-    monkeypatch.setenv("BHT_JUDGE_REGISTRY", str(reg))
+    monkeypatch.setenv("JUDGE_MODEL_REGISTRY", str(reg))
     assert jr.registry_dir() == reg
     assert jr.best_judge().name == "pooled_v1"  # uses the env registry
 
