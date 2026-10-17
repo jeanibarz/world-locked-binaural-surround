@@ -365,3 +365,21 @@ full story.
     `\\wsl.localhost\…` cwd that path resolves into the WSL filesystem and CuPy loads the wrong
     CUDA. Also pin a consistent CUDA-12 runtime wheel set (`nvidia-*-cu12`) when the system
     toolkit is an older CUDA, or cuFFT/nvrtc break. (→ [24](24-voicemeeter-passthrough.md))
+52. **Never do heavy DSP inside a real-time audio callback — render on a worker thread.** The
+    8-ch BRIR convolution (tens of ms, GPU sync) run inside the WASAPI capture callback held the
+    GIL and blocked, starving *both* audio callbacks: effective throughput collapsed to ~31 kHz
+    and audio dropped constantly — while PortAudio's own underflow flag stayed silent, so the
+    bug is invisible unless you measure effective rates. The callback must only enqueue (capture)
+    or drain (output) and return in microseconds; a dedicated worker thread does the render and
+    the FIFO cushion absorbs its jitter. Proven by A/B: a trivial render over the identical I/O
+    bridge sustained a flawless 48 kHz, 0 underruns. (→ [24](24-voicemeeter-passthrough.md))
+53. **Diagnose hardware audio by driving a KNOWN signal through the real path and measuring —
+    not by ear, and not by trusting headless tests.** Channel order, sample rates, real-time
+    timing and spectral coloration are properties of the device path, invisible to unit tests.
+    Feed a distinct tone per channel to recover the true capture order before assuming it matches
+    your code; feed broadband per channel and compare input/output spectra to find lost bass or
+    coloration. This found that the capture order *did* match, every channel renders, but the
+    baked BRIRs roll off sub-bass ~−20 dB — so the **LFE** (pure sub-bass) disappears: route a
+    non-directional LFE flat to both ears, don't convolve it through a bass-dead directional
+    HRIR. Toolkit: `spikes/b4_1_loopback_diag.py`; method: the `audio-loopback-diagnostics`
+    skill. (→ [24](24-voicemeeter-passthrough.md))

@@ -163,16 +163,27 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   voice pool offline to 1e-9** over a head sweep — so only a batched partitioned convolution
   is host-only (`gpu_render.GpuBusConvolver`/`GpuWorldLocked7p1`, CuPy, ~6× RT at block 256,
   full tail). Capture and output run on independent clocks, bridged by a primed silence-cushion
-  FIFO with bounded backlog. 6 new tests (neutral == static render, LFE not steered, yaw steers
-  a channel to the rotated BRIR, bus-mix == voice pool); 278 total, ruff clean. Host-only legs
-  (loopback capture, CuPy, camera, the duplex) can only be exercised on the Windows+RTX host —
-  the owner's live no-dropout run is the remaining acceptance check. See journal 24.)_
+  FIFO with bounded backlog. The render runs on a **worker thread**, not in the audio callback —
+  live testing showed rendering inside the WASAPI capture callback collapses throughput to
+  ~31 kHz and drops constantly (GIL + GPU sync starve the callbacks); the worker keeps the
+  callbacks microsecond-light and sustains 48 kHz drop-free. 6 new tests (neutral == static
+  render, LFE not steered, yaw steers a channel to the rotated BRIR, bus-mix == voice pool);
+  278 total, ruff clean. **Validated live on the host**: continuous, drop-free 7.1 passthrough
+  with correct channel routing (confirmed via the loopback diagnostics — `spikes/b4_1_loopback_diag.py`
+  / the `audio-loopback-diagnostics` skill). Remaining "sounds wrong" is render quality, not B4.1
+  plumbing: LFE loses its bass through a sub-bass-dead BRIR (→ B4.3) and the bare bake lacks the
+  headphone comp+EQ chain (→ B5.3). See journal 24.)_
 - [~] **B4.2** Graceful degradation: camera loss → freeze/fade; device change
   handling.
   _(Partial, landed with B4.1: the passthrough app already handles **camera loss** — hold the
   last head pose (audio keeps world-locking), keep the window + keys alive, and reopen the
   camera periodically rather than spin blind. Remaining: audio **device-change** handling
   (headphone/virtual-device hot-swap) and a deliberate fade. See journal 24.)_
+- [ ] **B4.3** Non-directional LFE: route the .1 channel flat to both ears (optionally
+  low-passed), not convolved through the directional BRIR. The baked BRIRs roll off sub-bass
+  ~−20 dB (journal 24 loopback diagnostics), so the pure-sub-bass LFE disappears when steered.
+  Update `WorldLocked7p1`/static render + the `test_7p1_lfe_is_not_steered` expectation.
+  _(discovered live, journal 24)_
 
 ## M5 — Live filters & presets
 

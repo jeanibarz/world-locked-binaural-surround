@@ -12,11 +12,13 @@ on the computer — a game, a film, music — becomes head-tracked and world-loc
 Set VoiceMeeter so it does **not** also route to the headphones (disable the A1 that
 points at them); this engine is the only thing feeding them, so there's no double audio.
 
-Two streams bridged by a stereo FIFO: an input callback captures 8ch and renders to stereo
-(it has the freshest head pose), an output callback drains the FIFO to the headphones. The
-8-channel capture is only exposed on MME/DirectSound (WASAPI caps the VAIO bus at 2ch), so
-the input leg has more latency than the WASAPI output — fine for a first end-to-end; the
-native low-latency hot path is M8. Composed from tested parts (`live_render.WorldLocked7p1`,
+Three decoupled stages so the render never blocks a real-time audio callback: the capture
+callback only *enqueues* the raw 8ch frames; a **render worker thread** world-locks them to
+stereo (the heavy GPU convolution lives here, with the freshest head pose) and fills a FIFO;
+the output callback drains the FIFO to the headphones. Rendering in the callback itself
+starves the audio threads (GIL + GPU sync) and drops audio — the worker keeps the callbacks
+microsecond-light and the cushion absorbs the render's jitter. Composed from tested parts
+(`live_render.WorldLocked7p1`,
 `calibrate`, `world`, `tracking`, `devices`); only the camera, MediaPipe and the two
 `sounddevice` streams are host-side, so this runs on the Windows host, not CI/WSL.
 
@@ -141,7 +143,7 @@ def main(argv=None) -> int:
     print(f"block {args.block}  latency cushion ~{args.latency_ms:.0f} ms")
 
     # Shared state: per-channel head-relative azimuth (written by the camera thread, read by
-    # the audio input callback). Start at the neutral (fixed-head) directions.
+    # the render worker). Start at the neutral (fixed-head) directions.
     state = {
         "az": layout.head_relative_directions()[:, 0].copy(),
         "cal": HeadCalibration(0.0, 0.0, 0.0, args.yaw_sign, args.pitch_sign, args.roll_sign),
@@ -157,36 +159,62 @@ def main(argv=None) -> int:
     cb_error: list[BaseException] = []
     max_backlog = cushion * 4
 
+    # The render must NOT run in the audio callback: the full 8-ch BRIR convolution (tens of
+    # ms, GPU sync) would hold the GIL and starve the capture/output callbacks, collapsing
+    # throughput and dropping audio (measured: ~31 kHz effective, constant drops). Instead the
+    # capture callback only *enqueues* the raw frames and returns in microseconds; a dedicated
+    # worker thread drains the queue, renders, and fills the output FIFO. The callbacks stay
+    # light, and the render's jitter is absorbed by the cushion — click-free, no dropouts.
+    in_q: deque[np.ndarray] = deque()
+    in_q_lock = threading.Lock()
+    stop_worker = threading.Event()
     mon = {"t": 0.0}
 
     def pa_in_cb(in_data, frame_count, _ti, _status):  # noqa: ANN001  (PyAudio loopback)
         try:
-            with lock:
-                az = state["az"]
+            # astype(copy) is essential: PyAudio reuses in_data after we return.
             cap = np.frombuffer(in_data, dtype=np.float32).reshape(-1, in_ch).astype(np.float64)
-            if args.monitor:
-                tnow = time.monotonic()
-                if tnow - mon["t"] > 1.0:
-                    mon["t"] = tnow
-                    rms = np.sqrt((cap ** 2).mean(axis=0) + 1e-20)
-                    labels = " ".join(f"{c}={v:.3f}" for c, v in zip(brir.channels, rms,
-                                                                      strict=True))
-                    print("in RMS  " + labels, flush=True)
-            buf = np.concatenate([in_tail["buf"], cap], axis=0)
-            i = 0
-            rendered = []
-            while buf.shape[0] - i >= args.block:
-                rendered.append(renderer.process_block(buf[i : i + args.block], az) * args.gain)
-                i += args.block
-            in_tail["buf"] = buf[i:]
-            if rendered:
-                with fifo_lock:
-                    out_fifo.extend(rendered)
-                    while len(out_fifo) > max_backlog:  # bound latency: drop oldest
-                        out_fifo.popleft()
+            with in_q_lock:
+                in_q.append(cap)
         except BaseException as exc:  # noqa: BLE001
             cb_error.append(exc)
         return (None, pawp.paContinue)
+
+    def render_worker() -> None:
+        """Drain captured 7.1 → world-lock render → output FIFO, off the audio threads."""
+        while not stop_worker.is_set():
+            with in_q_lock:
+                chunks = list(in_q)
+                in_q.clear()
+            if not chunks:
+                stop_worker.wait(0.001)  # idle: brief, interruptible pause
+                continue
+            try:
+                with lock:
+                    az = state["az"]
+                cap = np.concatenate(chunks, axis=0)
+                if args.monitor:
+                    tnow = time.monotonic()
+                    if tnow - mon["t"] > 1.0:
+                        mon["t"] = tnow
+                        rms = np.sqrt((cap ** 2).mean(axis=0) + 1e-20)
+                        labels = " ".join(f"{c}={v:.3f}" for c, v in zip(brir.channels, rms,
+                                                                          strict=True))
+                        print("in RMS  " + labels, flush=True)
+                buf = np.concatenate([in_tail["buf"], cap], axis=0)
+                i = 0
+                rendered = []
+                while buf.shape[0] - i >= args.block:
+                    rendered.append(renderer.process_block(buf[i : i + args.block], az) * args.gain)
+                    i += args.block
+                in_tail["buf"] = buf[i:]
+                if rendered:
+                    with fifo_lock:
+                        out_fifo.extend(rendered)
+                        while len(out_fifo) > max_backlog:  # bound latency: drop oldest
+                            out_fifo.popleft()
+            except BaseException as exc:  # noqa: BLE001
+                cb_error.append(exc)
 
     out_carry = {"buf": np.zeros((0, 2))}  # leftover rendered samples < one output request
 
@@ -220,6 +248,8 @@ def main(argv=None) -> int:
     in_stream = pya.open(format=pawp.paFloat32, channels=in_ch, rate=brir.samplerate,
                          input=True, input_device_index=lb["index"],
                          frames_per_buffer=args.block, stream_callback=pa_in_cb)
+    worker = threading.Thread(target=render_worker, name="render", daemon=True)
+    worker.start()
     in_stream.start_stream()
     out_ctx = sd.OutputStream(samplerate=brir.samplerate, channels=2, device=out_index,
                               blocksize=0, dtype="float32", callback=out_cb)
@@ -283,6 +313,8 @@ def main(argv=None) -> int:
                 with lock:
                     state["cal"] = new_cal
     finally:
+        stop_worker.set()
+        worker.join(timeout=1.0)
         out_ctx.stop()
         out_ctx.close()
         in_stream.stop_stream()

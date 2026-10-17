@@ -1,6 +1,6 @@
 # 24 — World-lock *any* system audio: the 7.1 passthrough (B4.1)
 
-**Date:** 2026-10-17  ·  **Milestone:** M4 (end-to-end on Windows)  ·  **Status:** implemented + offline-verified; owner's live no-dropout run pending
+**Date:** 2026-10-17  ·  **Milestone:** M4 (end-to-end on Windows)  ·  **Status:** live on host — drop-free after moving the render off the audio callback; audio-quality follow-ups (LFE bass, B5.3) identified by loopback diagnostics
 
 ## Question
 
@@ -89,3 +89,32 @@ headline acceptance ("running continuously without dropouts") is that live run.
 Camera-loss graceful degradation already landed here (hold last pose, audio keeps locking,
 periodic reopen), so **B4.2** is partly done; its remainder is audio device-change handling and
 a deliberate fade.
+
+## Live validation on the host (the truth came out, as usual)
+
+Ran end-to-end on the Windows host. Two problems, both invisible to CI, both found by driving a
+**known signal through the real path and measuring** (toolkit: `spikes/b4_1_loopback_diag.py`;
+method captured in the `audio-loopback-diagnostics` skill):
+
+1. **Huge dropouts.** The instrumented duplex showed effective throughput **collapsing to
+   ~31 kHz** (vs 48 kHz) with render-time spikes to ~18 ms — because the 8-ch BRIR convolution
+   ran **inside the WASAPI capture callback**, holding the GIL and blocking on GPU sync, which
+   starved the audio callbacks. A/B proof: a trivial render over the identical I/O bridge ran a
+   flawless 48 kHz with zero underruns. **Fix:** move the render to a **worker thread** — the
+   capture callback only enqueues raw frames, the worker renders and fills the FIFO, the output
+   callback only drains. With that, the full GPU render sustains 48 kHz real-time, **0 underruns,
+   0 inserted silence**, FIFO rock-steady (→ L52). The output device (MME 44.1 kHz vs WASAPI
+   48 kHz) was a red herring — the worker fix is drop-free on both; WASAPI is just lower latency.
+
+2. **No bass / hollow front.** The channel-order probe confirmed the capture layout **matches**
+   `CHANNELS_7P1` exactly (no remap needed), and every channel — including the rears/sides —
+   renders to output. But the `spectral` probe showed every baked BRIR rolls off the sub-bass
+   hard (**−20 to −25 dB at 30–80 Hz**), which is catastrophic for **LFE** (pure sub-bass → it
+   vanishes), and the uniformly uncompensated front is the known **bare-bake-vs-comp+EQ** gap
+   (**B5.3**). So "no bass" splits into a fixable render choice — route LFE **non-directionally**
+   (flat to both ears) instead of through a bass-dead HRIR — and the deferred headphone
+   comp+EQ chain; neither is a B4.1 plumbing bug (→ L53). Captured as follow-ups.
+
+So B4.1's own acceptance — continuous, drop-free 7.1 passthrough with correct channel routing —
+is **met and validated live**. The remaining "sounds wrong" is render-quality work (LFE routing
++ B5.3), tracked separately.
