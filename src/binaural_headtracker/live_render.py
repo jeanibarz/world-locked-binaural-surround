@@ -249,3 +249,139 @@ def render_world_locked(
     if flush and n_blocks:
         chunks.append(src.flush())
     return np.concatenate(chunks, axis=0) if chunks else np.zeros((0, 2))
+
+
+class WorldLocked7p1:
+    """World-locked 7.1 → stereo: steer every input channel through its nearest BRIR (B4.1).
+
+    The full-passthrough generalisation of :class:`WorldLockedSource`: the 8 input
+    channels are the 8 **world-fixed** 7.1 speakers, and each directional channel gets its
+    own steered voice pool (nearest BRIR + click-free crossfade) so that, as the head
+    turns, the whole 7.1 field stays locked in the room. LFE is non-directional bass, so it
+    is **not** steered — it is convolved through its own fixed BRIR and summed.
+
+    This is what makes *any* 7.1 system audio (captured from the virtual device) head-locked
+    to the world. The world-lock geometry stays in the tested layer: the caller passes the
+    per-channel head-relative azimuths (``directions_for_pose`` on ``layout_7p1`` built in
+    the BRIR's channel order), one per channel aligned to ``brir.channels``; this class owns
+    only the per-channel voice pools and the sum.
+    """
+
+    def __init__(self, brir: BakedBRIRSet, *, block_size: int = 256, fade_ms: float = 20.0) -> None:
+        if block_size <= 0:
+            raise ValueError("block_size must be positive")
+        self._brir = brir
+        self._block = int(block_size)
+        self._dir_idx = [brir.channels.index(c) for c in RING_CHANNELS if c in brir.channels]
+        if not self._dir_idx:
+            raise ValueError("BRIR set has none of the directional ring channels")
+        self._sources = {
+            i: WorldLockedSource(brir, block_size=block_size, fade_ms=fade_ms)
+            for i in self._dir_idx
+        }
+        self._lfe_idx = brir.channels.index("LFE") if "LFE" in brir.channels else None
+        if self._lfe_idx is not None:
+            li = self._lfe_idx
+            self._lfe = StereoConvolver(brir.left[li : li + 1], brir.right[li : li + 1], block_size)
+
+    @property
+    def block_size(self) -> int:
+        return self._block
+
+    @property
+    def samplerate(self) -> int:
+        return self._brir.samplerate
+
+    def process_block(self, pcm, azimuths) -> np.ndarray:
+        """Render one ``(block_size, C)`` 7.1 block → ``(block_size, 2)`` stereo.
+
+        ``pcm`` columns are in ``brir.channels`` order; ``azimuths`` is one head-relative
+        azimuth (deg) per channel, same order (the LFE entry is ignored). Call per block
+        with the azimuths for the current head pose.
+        """
+        pcm = np.asarray(pcm, dtype=np.float64)
+        c = self._brir.n_channels
+        if pcm.ndim != 2 or pcm.shape != (self._block, c):
+            raise ValueError(f"pcm must be ({self._block}, {c}); got {pcm.shape}")
+        az = np.asarray(azimuths, dtype=np.float64).reshape(-1)
+        if az.size != c:
+            raise ValueError(f"azimuths must have {c} entries (one per channel); got {az.size}")
+        out = np.zeros((self._block, 2))
+        for i, src in self._sources.items():
+            out += src.process_block(pcm[:, i], float(az[i]))
+        if self._lfe_idx is not None:
+            out += self._lfe.process_block(pcm[:, self._lfe_idx : self._lfe_idx + 1])
+        return out
+
+    def flush(self) -> np.ndarray:
+        """Flush every channel's remaining tail → stereo (longest component's length)."""
+        tails = [src.flush() for src in self._sources.values()]
+        if self._lfe_idx is not None:
+            tails.append(self._lfe.flush())
+        n = max((t.shape[0] for t in tails), default=0)
+        out = np.zeros((n, 2))
+        for t in tails:
+            out[: t.shape[0]] += t
+        return out
+
+
+def bus_targets(brir: BakedBRIRSet, azimuths) -> np.ndarray:
+    """Per-input-channel target **bus** (= the BRIR index its signal routes through).
+
+    For B4.2's bus formulation of the 7.1 world-lock: directional channels route to the
+    nearest ring BRIR for their current head-relative azimuth (``nearest_brir_index``);
+    LFE routes to its own fixed BRIR (non-directional). ``azimuths`` is one per channel,
+    in ``brir.channels`` order (the LFE entry is ignored). Returns an int array of length
+    ``brir.n_channels`` whose entries are BRIR channel indices.
+    """
+    az = np.asarray(azimuths, dtype=np.float64).reshape(-1)
+    ring = ring_azimuths(brir)
+    lfe = brir.channels.index("LFE") if "LFE" in brir.channels else None
+    out = np.empty(brir.n_channels, dtype=np.intp)
+    for i in range(brir.n_channels):
+        out[i] = i if i == lfe else nearest_brir_index(ring, float(az[i]))
+    return out
+
+
+class BusMixer:
+    """Route + click-free crossfade the ``C`` input channels into ``C`` BRIR **buses**.
+
+    The world-lock as a time-varying mix: ``bus_in[b,n] = Σ_c g_{c,b}[n] · pcm[n,c]``,
+    where each channel ``c``'s gain ramps toward a one-hot on its current target bus
+    (``bus_targets``) over ``fade_samples`` when the target changes. Because convolution is
+    linear, convolving each bus with its fixed BRIR and summing is **identical** to the
+    per-channel :class:`WorldLockedSource` voice pool — but it is only ``C`` fixed-filter
+    convolutions, which is what the GPU batches. Pure numpy; the first block starts at full
+    gain (so startup equals the static render). Unit-tested; the GPU conv is the only
+    host-only piece (see :mod:`binaural_headtracker.gpu_render`).
+    """
+
+    def __init__(self, n_channels: int, *, fade_samples: int) -> None:
+        self._c = int(n_channels)
+        self._fade = max(1, int(fade_samples))
+        self._gain = np.zeros((self._c, self._c))  # gain[c, b]: channel c -> bus b
+        self._started = False
+
+    @property
+    def n_bus(self) -> int:
+        return self._c
+
+    def mix(self, pcm, targets) -> np.ndarray:
+        """``pcm`` ``(block, C)`` + target bus per channel → ``bus_in`` ``(C, block)``."""
+        pcm = np.asarray(pcm, dtype=np.float64)
+        block = pcm.shape[0]
+        targets = np.asarray(targets, dtype=np.intp).reshape(-1)
+        desired = np.zeros((self._c, self._c))
+        desired[np.arange(self._c), targets] = 1.0
+        if not self._started:
+            self._gain = desired.copy()  # start at full gain, no fade-in from silence
+            self._started = True
+        start = self._gain  # (C, C)
+        step = np.where(desired >= start, 1.0, -1.0) / self._fade
+        ramp = start[:, :, None] + step[:, :, None] * np.arange(1, block + 1)  # (C,C,block)
+        lo = np.minimum(start, desired)[:, :, None]
+        hi = np.maximum(start, desired)[:, :, None]
+        ramp = np.clip(ramp, lo, hi)
+        self._gain = ramp[:, :, -1]
+        # bus_in[b,n] = Σ_c ramp[c,b,n] * pcm[n,c]
+        return np.einsum("cbn,nc->bn", ramp, pcm)

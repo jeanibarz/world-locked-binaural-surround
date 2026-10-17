@@ -52,6 +52,23 @@ vision = [
     "mediapipe>=0.10",
     "opencv-python>=4.8",
 ]
+# Passthrough capture dependency (B4.1). pyaudiowpatch (MIT) is a Windows-only fork
+# of PyAudio that exposes WASAPI **loopback** — the only way to tap the raw pre-mix
+# 7.1 stream apps send into the virtual device (VoiceMeeter downmixes its own output
+# bus to stereo; see journal 24). The platform marker makes it a no-op off Windows, so
+# `uv sync --extra loopback` stays green on CI/WSL; install on the host that runs
+# apps/voicemeeter_passthrough.py.
+loopback = [
+    "pyaudiowpatch>=0.2; platform_system == 'Windows'",
+]
+# GPU render dependency (B4.1/B4.2). The CPU can't convolve 8ch of a 500 ms BRIR in
+# real time (~0.97x RT); CuPy on an RTX-class GPU does (~6x RT, batched partitioned
+# conv, full tail). cupy-cuda12x needs a consistent CUDA-12 runtime in site-packages —
+# see AGENTS.md "GPU compute" for the exact nvidia-*-cu12 wheel set and the
+# `\\wsl.localhost` cwd gotcha. Host-only; never installed on CI.
+gpu = [
+    "cupy-cuda12x>=13",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
