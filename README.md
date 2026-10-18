@@ -34,11 +34,19 @@ system, the Smyth Realiser A16, is dedicated hardware costing thousands.
 
 ## Status
 
-Early scaffolding. The project is built **block by block** by an autonomous
-Kookr agent chain that records its progress in a living research journal; read
-[`docs/research-journal/`](docs/research-journal/README.md) for the current
-frontier and [`docs/backlog.md`](docs/backlog.md) for the ordered work blocks.
-Requirements and architecture live in [`docs/requirements.md`](docs/requirements.md).
+Working end-to-end on Windows. The static + live render engine, the camera head
+tracker, and the **world-locked 7.1 passthrough** (any system audio → head-tracked →
+headphones) are built and live-validated, with the owner's headphone comp + EQ applied on
+the output. The render hot loop runs in real time on the **CPU** via a native Rust kernel
+(no GPU required). Still open: lower end-to-end latency (native duplex), HRIR fine-tuning,
+presets, and the AI-judge calibration loop.
+
+The project is built **block by block** by an autonomous Kookr agent chain that records its
+progress in a living research journal; read
+[`docs/research-journal/`](docs/research-journal/README.md) for the current frontier (and the
+accurate milestone status table) and [`docs/backlog.md`](docs/backlog.md) for the ordered
+work blocks. Requirements and architecture live in
+[`docs/requirements.md`](docs/requirements.md).
 
 ## Intended distribution
 

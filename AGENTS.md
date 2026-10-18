@@ -148,9 +148,11 @@ the active dev worktree first then the `main` checkout), the double-click `.cmd`
 (they use `%~dp0`, so they keep working wherever the folder is), the local-`C:` model copy,
 and `dry_snare.wav`. Put new host launchers/assets here, not in Downloads.
 
-**GPU compute (CuPy on the RTX 3090).** The CPU can't render the 8-channel 500 ms-BRIR
-passthrough in real time (~0.97× RT); the GPU does (batched partitioned convolution ≈6×
-RT at block 256, full BRIR). Host Python has `cupy-cuda12x` **plus the matching CUDA 12
+**GPU compute (CuPy on the RTX 3090) — now OPTIONAL.** The native Rust kernel (B8.2, the
+`--rust` path) renders the 8-channel 500 ms-BRIR passthrough in real time on the **CPU**
+(~5× RT), so the GPU is no longer required — it's an alternative, not the headline. Only
+*pure-Python* convolution is too slow (~0.97× RT); the GPU does ≈6× RT at block 256, full
+BRIR. If you do use `--gpu`: host Python has `cupy-cuda12x` **plus the matching CUDA 12
 runtime wheels** — `nvidia-{cuda-runtime,cufft,cublas,cusparse,cusolver,curand,
 cuda-nvrtc,nvjitlink}-cu12` — because the system only has CUDA 11.x toolkits and CuPy 13's
 pathfinder needs a consistent CUDA-12 set in site-packages (installing only some leaves
@@ -179,6 +181,34 @@ symlink, and a native-ext4 `CARGO_TARGET_DIR` — `llvm-dlltool` EACCESes on `/m
 not cross-buildable from Linux** (Apple SDK + a Mac): the Mac colleague runs `maturin build`
 locally or uses the pure-Python fallback. Install a built wheel with `pip install <wheel>` into
 the Python that runs the app. (See journal 28.)
+
+### Build & deploy to the owner's Windows host — the current runbook
+
+The owner runs the apps on the **Windows host** (native `py -3.12`), driven from the WSL
+worktree via the host-local launchers in `C:\Users\ibarz\BinauralHeadtracker\`:
+`run.cmd` (a menu) → `run_binaural.cmd` (snare demo) / `run_passthrough.cmd` (world-lock all
+system audio) → `launch_live.py` / `launch_passthrough.py`, which inject the permanent WSL
+checkout's `src`/`apps` onto `sys.path` and call the app's `main()`. Host assets kept out of
+git live there too: `face_landmarker.task`, `dry_snare.wav`, the baked BRIR dir (under the
+EqualizerAPO config), and `wheels/` (the built kernel).
+
+Fast path (what the launchers already do): **CPU, no GPU, via the native Rust kernel.**
+
+1. **Build the kernel wheel once** (in WSL): `rust/build-wheels.sh windows` → a
+   `cp310-abi3-win_amd64.whl` in `dist/`. (abi3 ⇒ one wheel for any host Python 3.10+.)
+2. **Install it into the host Python**: copy the wheel to `C:\…\BinauralHeadtracker\wheels\`
+   and `py -3.12 -m pip install --force-reinstall "C:\…\wheels\<wheel>"`. Verify
+   `py -3.12 -c "import binaural_kernel"`.
+3. **Run**: double-click `run.cmd` (or a `run_*.cmd`). The passthrough uses
+   `--rust --lfe-mode brir --output-eq <rev26_final.txt>` at a small `--block` with a low
+   `--latency-ms` for snappy head-tracking. `--gpu` (CuPy) stays available as an alternative
+   but needs the CUDA-12 wheel set above; plain pure-Python CPU is the last-resort fallback
+   (works everywhere, ~0.97× RT, may drop out under motion).
+
+Updating the app's code needs no redeploy — the launchers import live from the WSL checkout;
+only a **kernel** change (anything under `rust/`) requires rebuilding + reinstalling the wheel
+(steps 1–2). Sharing with a colleague: build their platform's wheel (Linux native / Windows via
+cargo-xwin / macOS on a Mac), or they run the pure-Python fallback.
 
 ## Working discipline
 

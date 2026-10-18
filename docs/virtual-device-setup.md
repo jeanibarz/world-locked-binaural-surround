@@ -32,7 +32,12 @@ on this box.
 2. Point the app you want spatialised at the sink: Windows **Settings → System →
    Sound**, set its output to **VoiceMeeter Input (VAIO)**. Set the sink to 7.1 in
    **Sound → VoiceMeeter Input → Configure → 7.1 Surround**.
-3. The renderer reads **VoiceMeeter Output (VAIO)** (a WASAPI input endpoint).
+3. The **latency self-test** reads **VoiceMeeter Output (VAIO)** (a WASAPI input endpoint).
+   > Note: the **live passthrough** (`apps/voicemeeter_passthrough.py`) does **not** read
+   > this output bus — VoiceMeeter downmixes it to stereo, losing centre/LFE/surrounds. It
+   > instead **WASAPI-loopback-captures** the VoiceMeeter *Input (VAIO)* render endpoint to
+   > get the raw pre-mix 7.1 (journal 24 / LEARNINGS L48). This section is only the spike's
+   > round-trip-latency setup.
 4. **For the loopback / latency self-test only:** in the VoiceMeeter window, on the
    **VAIO virtual input strip**, enable the **B1** bus button. That routes the
    strip to `VoiceMeeter Output (VAIO)` so a sweep played to the sink is captured

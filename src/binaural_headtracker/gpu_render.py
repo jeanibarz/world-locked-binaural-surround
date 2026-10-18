@@ -1,8 +1,10 @@
 """GPU world-locked 7.1 render (CuPy) — real-time full-BRIR passthrough (B4.2).
 
-The CPU can't convolve 8 channels of a 500 ms BRIR in real time (~0.97× RT); an RTX-class
-GPU does it ~6× RT at block 256, keeping the **full** room tail. This module is the GPU
-path for the M4 passthrough.
+An **optional** GPU path for the M4 passthrough. Pure-Python convolution of 8 channels of a
+500 ms BRIR is ~0.97× RT (too slow), so this was once required; it no longer is — the native
+Rust kernel (:mod:`binaural_headtracker.rust_render`, B8.2) renders it on the CPU at ~5× RT,
+and the GPU here is just an alternative (~6× RT at block 256, full room tail). Prefer `--rust`;
+`--gpu` remains for hosts that want it.
 
 It uses the bus reformulation (:class:`binaural_headtracker.live_render.BusMixer`): the
 world-lock is a time-varying crossfade of the 8 inputs into 8 **fixed-BRIR buses**

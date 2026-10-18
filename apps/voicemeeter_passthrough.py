@@ -14,20 +14,22 @@ points at them); this engine is the only thing feeding them, so there's no doubl
 
 Three decoupled stages so the render never blocks a real-time audio callback: the capture
 callback only *enqueues* the raw 8ch frames; a **render worker thread** world-locks them to
-stereo (the heavy GPU convolution lives here, with the freshest head pose) and fills a FIFO;
+stereo (the heavy convolution lives here, with the freshest head pose) and fills a FIFO;
 the output callback drains the FIFO to the headphones. Rendering in the callback itself
-starves the audio threads (GIL + GPU sync) and drops audio — the worker keeps the callbacks
-microsecond-light and the cushion absorbs the render's jitter. Composed from tested parts
+starves the audio threads (the GIL, plus GPU sync on the `--gpu` path) and drops audio — the
+worker keeps the callbacks microsecond-light and the cushion absorbs the render's jitter.
+Composed from tested parts
 (`live_render.WorldLocked7p1`,
 `calibrate`, `world`, `tracking`, `devices`); only the camera, MediaPipe and the two
 `sounddevice` streams are host-side, so this runs on the Windows host, not CI/WSL.
 
 Run on the host (see AGENTS.md "Running the host GUI apps"), e.g.::
 
-    py -3.12 apps/voicemeeter_passthrough.py --model face_landmarker.task --brir-dir <baked> --gpu
+    py -3.12 apps/voicemeeter_passthrough.py --model face_landmarker.task --brir-dir <baked> --rust
     # a pre-launch menu picks camera + 7.1 input + headphone output; --no-dialog uses flags
     # --input-device "VoiceMeeter Output"  --audio-device "FiiO"  (name substrings or indices)
-    # --gpu renders on the GPU (CuPy); the full 8ch 500ms-BRIR path needs it to keep up.
+    # --rust: native CPU kernel, real-time without a GPU (B8.2) — the preferred path.
+    #         --gpu (CuPy) is an optional alternative; pure-Python CPU alone won't keep up.
 
 Keys: **C** recenter, **F** flip L/R (if the feed is mirrored), **Q** quit.
 """

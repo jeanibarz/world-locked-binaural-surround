@@ -61,9 +61,10 @@ vision = [
 loopback = [
     "pyaudiowpatch>=0.2; platform_system == 'Windows'",
 ]
-# GPU render dependency (B4.1/B4.2). The CPU can't convolve 8ch of a 500 ms BRIR in
-# real time (~0.97x RT); CuPy on an RTX-class GPU does (~6x RT, batched partitioned
-# conv, full tail). cupy-cuda12x needs a consistent CUDA-12 runtime in site-packages —
+# GPU render dependency (B4.1/B4.2) — OPTIONAL. Pure-Python convolution of 8ch of a 500 ms
+# BRIR is ~0.97x RT (too slow); CuPy on an RTX-class GPU does ~6x RT. No longer required: the
+# native Rust kernel (B8.2, built via rust/) renders it on CPU at ~5x RT — prefer `--rust`.
+# cupy-cuda12x needs a consistent CUDA-12 runtime in site-packages —
 # see AGENTS.md "GPU compute" for the exact nvidia-*-cu12 wheel set and the
 # `\\wsl.localhost` cwd gotcha. Host-only; never installed on CI.
 gpu = [
