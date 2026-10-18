@@ -63,6 +63,7 @@ from binaural_headtracker.live_render import (
     interpolated_ring,
 )
 from binaural_headtracker.output_eq import load_output_eq
+from binaural_headtracker.prediction import PosePredictor
 from binaural_headtracker.radar import nearest_front_channel
 from binaural_headtracker.surround import load_baked_brir
 from binaural_headtracker.tracking import HeadPose, PoseFilter
@@ -172,6 +173,11 @@ def main(argv=None) -> int:
                         "(cycle live with M); a synthesis method wants --rust + a bigger --block")
     p.add_argument("--grid-step", type=float, default=10.0,
                    help="degrees between synthesized grid directions (shared 7.1 + test source)")
+    p.add_argument("--predict", action="store_true",
+                   help="orientation prediction (B8.6): extrapolate the head pose forward by the "
+                        "measured pose-age so a head turn is heard on time (cancels camera lag)")
+    p.add_argument("--predict-ms", type=float, default=0.0,
+                   help="prediction horizon in ms; 0 = auto (use the measured pose-age-at-ear p50)")
     p.add_argument("--max-tail-ms", type=float, default=150.0,
                    help="cap the ring-out of a left-behind test-source grid voice (ms); bounds "
                         "concurrent voices so a moving source on a fine grid stays real-time")
@@ -465,6 +471,8 @@ def main(argv=None) -> int:
     detect_ms = 0.0
     recent: deque[HeadPose] = deque(maxlen=20)
     pose_filter = PoseFilter(args.min_cutoff, args.beta)
+    predictor = PosePredictor() if args.predict else None
+    pred_hud = {"ms": 0.0}  # the horizon currently used, for the readout chip
     flip_az = args.flip_az
     miss = 0  # consecutive failed camera reads (graceful degradation, B4.2)
     times: deque[float] = deque(maxlen=60)  # frame timestamps → tracker rate
@@ -566,7 +574,19 @@ def main(argv=None) -> int:
                     np.asarray(result.facial_transformation_matrixes[0]))
                 pose = pose_filter.update(HeadPose(yaw, pitch, roll, now))
                 recent.append(pose)
-                dirs = directions_for_pose(cal, pose, layout)
+                # Orientation prediction (B8.6): extrapolate the pose forward by the measured
+                # pose-age-at-ear so the render matches the head when the sound is *heard*, not when
+                # the camera saw it — cancels the ~40 ms camera staleness. The audio steers on the
+                # predicted pose; the HUD still shows the real one.
+                pose_for_az = pose
+                if predictor is not None:
+                    predictor.update(pose)
+                    es = ear_probe.stats()
+                    predict_ms = (args.predict_ms if args.predict_ms > 0
+                                  else (es.p50 if es.n > 30 else 60.0))
+                    pred_hud["ms"] = predict_ms
+                    pose_for_az = predictor.predict(pose, predict_ms)
+                dirs = directions_for_pose(cal, pose_for_az, layout)
             else:
                 dirs = layout.head_relative_directions()
             if flip_az:
@@ -623,6 +643,8 @@ def main(argv=None) -> int:
                 ("lat", f"~{diag.end_to_end_ms:.0f}ms", C.health_color(diag.health)),
                 ("facing", brir.channels[nearest_i] + ("  [flip]" if flip_az else ""), C.ACTIVE),
             ]
+            if predictor is not None:
+                readout.append(("predict", f"{pred_hud['ms']:.0f}ms", C.GOOD))
             if test["on"]:
                 # method now lives in the title-bar chip (shared by 7.1 + test), so the
                 # test readout only carries the source's position/mode
