@@ -207,7 +207,18 @@ def main(argv=None) -> int:
                                     grid_step=args.grid_step, lfe_mode=args.lfe_mode,
                                     use_rust=args.rust)
 
+    def render_label(renderer, method: str) -> str:
+        """A one-line description of what the 7.1 is actually running: engine · method [· grid]."""
+        if isinstance(renderer, InterpWorldLocked7p1):
+            return (f"{renderer.engine} · {method} · "
+                    f"{renderer.grid_step:.0f}° grid ({renderer.n_bus} bus)")
+        # nearest: engine is the renderer's own class (rust/gpu fall back to cpu silently)
+        eng = {"RustWorldLocked7p1": "rust", "GpuWorldLocked7p1": "gpu",
+               "WorldLocked7p1": "cpu"}.get(type(renderer).__name__, "cpu")
+        return f"{eng} · nearest (8-bus)"
+
     main_rend = {"r": build_main_renderer(args.method)}  # the 7.1 renderer, swappable live (M)
+    main_rend["label"] = render_label(main_rend["r"], args.method)
 
     # Global output-bus comp + EQ (B5.3): the bare BRIRs carry room/direction but not the
     # headphone comp or subjective EQ, which EqualizerAPO applies once to the stereo mix. Apply
@@ -302,7 +313,7 @@ def main(argv=None) -> int:
     # Live diagnostics the GUI panel reads (B6.3): render time per block (EWMA mean + a decaying
     # peak), and the timestamps of recent output underruns (dropouts). Updated off the GUI thread
     # — the worker writes render times, the output callback records underruns (one cheap append).
-    meter = {"ms": 0.0, "peak": 0.0, "under_ts": deque(maxlen=256)}
+    meter = {"ms": 0.0, "peak": 0.0, "test_ms": 0.0, "under_ts": deque(maxlen=256)}
 
     # The render must NOT run in the audio callback: the full 8-ch BRIR convolution (tens of
     # ms, GPU sync) would hold the GIL and starve the capture/output callbacks, collapsing
@@ -353,13 +364,16 @@ def main(argv=None) -> int:
                 i = 0
                 rendered = []
                 t0 = time.perf_counter()
+                test_dt = 0.0  # time spent on the test source alone (to split the load readout)
                 while buf.shape[0] - i >= args.block:
                     stereo = r_main.process_block(buf[i : i + args.block], az)
                     if t_on:  # mix the movable test source (solo replaces the 7.1)
+                        t_test0 = time.perf_counter()
                         idx = (test_pos["i"] + np.arange(args.block)) % test_loop.size
                         tstereo = t_rnd.process_block(test_loop[idx], t_az) * t_gain
                         test_pos["i"] = int((test_pos["i"] + args.block) % test_loop.size)
                         stereo = tstereo if t_solo else stereo + tstereo
+                        test_dt += time.perf_counter() - t_test0
                     if output_eq is not None:
                         stereo = output_eq.process_block(stereo)
                     rendered.append(stereo * args.gain)
@@ -369,6 +383,9 @@ def main(argv=None) -> int:
                     per_ms = (time.perf_counter() - t0) * 1000.0 / len(rendered)
                     meter["ms"] = 0.9 * meter["ms"] + 0.1 * per_ms if meter["ms"] else per_ms
                     meter["peak"] = max(per_ms, meter["peak"] * 0.97)
+                    test_per_ms = test_dt * 1000.0 / len(rendered)
+                    meter["test_ms"] = (0.9 * meter["test_ms"] + 0.1 * test_per_ms
+                                        if meter["test_ms"] else test_per_ms)
                 if rendered:
                     with fifo_lock:
                         out_fifo.extend(rendered)
@@ -514,9 +531,12 @@ def main(argv=None) -> int:
             # snapshot: out_cb may append concurrently (avoid "deque mutated during iteration")
             recent_under = sum(1 for t in tuple(meter["under_ts"]) if now - t < 2.0)
             out_lat_ms = float(getattr(out_ctx, "latency", 0.0) or 0.0) * 1000.0
+            rlabel = main_rend["label"] + ("  · test ON" if test["on"] else "")
             diag = classify(
                 block_size=args.block, samplerate=brir.samplerate,
                 render_ms=meter["ms"], render_ms_peak=meter["peak"],
+                render_ms_test=(meter["test_ms"] if test["on"] else 0.0),
+                render_label=rlabel,
                 fifo_fill_blocks=fifo_fill, cushion_blocks=cushion,
                 output_latency_ms=out_lat_ms,
                 input_latency_ms=1000.0 * args.block / brir.samplerate,
@@ -576,8 +596,10 @@ def main(argv=None) -> int:
                 if nxt not in test_renderers:
                     test_renderers[nxt] = build_test_renderer(nxt)
                 new_main = build_main_renderer(nxt)  # dense-grid 7.1 for a synthesis method
+                new_label = render_label(new_main, nxt)
                 with lock:
                     main_rend["r"] = new_main
+                    main_rend["label"] = new_label
                     test["renderer"] = test_renderers[nxt]
                     test["method"] = nxt
             if key == ord("c") and recent:

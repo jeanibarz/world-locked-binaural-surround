@@ -105,3 +105,30 @@ def test_tracking_note_detection_limited():
 def test_tracking_note_empty_without_rate():
     d = classify(**{**BASE, "pose_rate_hz": 0.0})
     assert d.tracking_note == "" and d.loop_ms == 0.0
+
+
+def test_config_fields_are_surfaced():
+    d = classify(**{**BASE, "render_label": "rust · timealign · 15° grid"})
+    assert d.block_size == 512 and d.samplerate == 48000
+    assert d.render_label == "rust · timealign · 15° grid"
+
+
+def test_test_source_load_is_split_out_and_clamped():
+    # test source takes 3 ms of a 5 ms total; its share of the ~10.67 ms budget is reported,
+    # and render_ms_test can never exceed the whole render_ms.
+    d = classify(**{**BASE, "render_ms": 5.0, "render_ms_peak": 6.0, "render_ms_test": 3.0})
+    assert d.render_ms_test == 3.0
+    assert d.render_load_test == pytest.approx(3.0 / d.block_ms)
+    over = classify(**{**BASE, "render_ms": 4.0, "render_ms_test": 99.0})
+    assert over.render_ms_test == 4.0  # clamped to the total
+
+
+def test_test_source_is_blamed_when_budget_is_tight():
+    # 7.1 fine alone, but the test source pushes a peak near/over budget → advise T / block / rust.
+    d = classify(**{**BASE, "render_ms": 7.0, "render_ms_peak": 10.4, "render_ms_test": 3.0})
+    assert any("test source adds" in r for r in d.reasons)
+
+
+def test_no_test_blame_when_test_share_is_zero():
+    d = classify(**{**BASE, "render_ms": 7.0, "render_ms_peak": 10.4, "render_ms_test": 0.0})
+    assert not any("test source adds" in r for r in d.reasons)

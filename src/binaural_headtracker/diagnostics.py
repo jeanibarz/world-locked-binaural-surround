@@ -46,11 +46,16 @@ class Diagnosis:
 
     health: Health
     reasons: tuple[str, ...]
+    block_size: int             # render block in samples (what the user is actually running)
+    samplerate: int             # render sample rate (Hz)
+    render_label: str           # human render config: engine · method · grid · test state
     block_ms: float             # one render block's duration (the real-time budget)
-    render_ms: float            # mean render time per block
+    render_ms: float            # mean render time per block (whole render: 7.1 + test source)
     render_ms_peak: float       # worst recent render time per block
+    render_ms_test: float       # of render_ms, the part spent on the test source (0 if off)
     render_load: float          # render_ms / block_ms (mean), 1.0 = exactly real time
     render_load_peak: float     # render_ms_peak / block_ms
+    render_load_test: float     # render_ms_test / block_ms (the test source's share)
     audio_out_latency_ms: float # a just-rendered sample's wait: FIFO fill + device out buffer
     tracking_ms: float          # estimated pose age (camera → usable pose)
     end_to_end_ms: float        # estimated head-move → ear (sum of stages below)
@@ -74,6 +79,8 @@ def classify(
     render_ms_peak: float,
     fifo_fill_blocks: float,
     cushion_blocks: int,
+    render_ms_test: float = 0.0,
+    render_label: str = "",
     output_latency_ms: float = 0.0,
     input_latency_ms: float = 0.0,
     pose_rate_hz: float = 0.0,
@@ -96,6 +103,8 @@ def classify(
     render_ms_peak = max(render_ms, render_ms_peak)
     load = render_ms / block_ms if block_ms > 0 else 0.0
     load_peak = render_ms_peak / block_ms if block_ms > 0 else 0.0
+    render_ms_test = min(max(0.0, render_ms_test), render_ms)
+    load_test = render_ms_test / block_ms if block_ms > 0 else 0.0
 
     # A just-rendered sample waits: whatever is queued in the FIFO, then the device buffer.
     audio_out_ms = max(0.0, fifo_fill_blocks) * block_ms + max(0.0, output_latency_ms)
@@ -122,6 +131,12 @@ def classify(
     if load > 0.6 and health.rank < Health.RISK.rank:
         health = max(health, Health.TIGHT, key=lambda h: h.rank)
         reasons.append(f"render averages {load * 100:.0f}% of the per-block budget")
+    # When the budget is tight and the test source is a meaningful share, say so — it is the
+    # one piece the user can drop with T, and A/B-ing while music plays is what tips it over.
+    if load_test > 0.1 and load_peak > 0.85:
+        reasons.append(
+            f"the test source adds ~{load_test * 100:.0f}% — turn it off (T) for the daily mix, "
+            "or raise --block / use --rust for A/B-while-playing headroom")
     if cushion_blocks > 0 and fifo_fill_blocks < 1.0 and health is Health.OK:
         # Buffer nearly empty but not yet dropping: worth noting as "tight".
         health = Health.TIGHT
@@ -154,11 +169,16 @@ def classify(
     return Diagnosis(
         health=health,
         reasons=tuple(reasons),
+        block_size=int(block_size),
+        samplerate=int(samplerate),
+        render_label=render_label,
         block_ms=block_ms,
         render_ms=render_ms,
         render_ms_peak=render_ms_peak,
+        render_ms_test=render_ms_test,
         render_load=load,
         render_load_peak=load_peak,
+        render_load_test=load_test,
         audio_out_latency_ms=audio_out_ms,
         tracking_ms=tracking_ms,
         end_to_end_ms=end_to_end_ms,

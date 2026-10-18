@@ -296,6 +296,17 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   toggle, **O** solo, **R** auto-rotate, **[ ]** level, **click** the radar to place, **M** cycle
   the interpolation method (dense grid, B3.3). Source = `--source` WAV or a built-in noise tick.
   Verified by PNG + offline mix; 308 tests. See journal 34.)_
+- [x] **B6.7** Diagnostics panel shows the **render config + per-source load split** (owner couldn't
+  tell their block size, saw 100%+ load/dropouts only with the test source on over music).
+  _(The **S** panel now prints the actual render config — engine (`rust`/`gpu`/`cpu`) · method ·
+  grid (+bus count) · block size in samples **and** ms @ kHz — read live off the renderer
+  (`InterpWorldLocked7p1.engine/method/grid_step/n_bus`), so it is never a guess. The worker times
+  the test source separately, so the render-load line splits **7.1 vs test** (`render_ms_test` →
+  `render_load_test`); when the budget is tight and the test source is a meaningful share,
+  `classify` says so and advises **T** / bigger `--block` / `--rust`. Root cause of the owner's
+  dropouts: B4.4 made timealign the *shared* method, so the full 7.1 ran timealign at the host
+  launcher's `--block 256` (~90% load); the test source over music tipped it past 100%. Host
+  launcher bumped to `--block 512`. 4 tests (317 total). See journal 38.)_
 
 ## M7 — AI-judge calibration
 

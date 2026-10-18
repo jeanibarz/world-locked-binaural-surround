@@ -489,3 +489,13 @@ full story.
     voice's full tail so a still source is unchanged. Capping ~0.5 s → 150 ms took it to 5 voices /
     1.95× RT, click-free. When profiling a voice/partial-mixing engine, benchmark the **moving** case;
     the static one hides the cost. (→ [37](37-shared-interpolation-method.md))
+64. **A health panel must show the *configuration* that produced the numbers, not only the numbers.**
+    The owner saw 100%+ render load but couldn't connect it to a fix because the panel never showed
+    the engine/method/block it was running — "rust? block 1024?" was a guess (it was block 256). Read
+    the config **off the live renderer object** (not remembered launcher args, which drift) and print
+    it: engine · method · grid · block (samples *and* ms). And when several sources share one budget,
+    **attribute cost per source** — one combined load hid that the test source (droppable with one
+    key) was what tipped it over; splitting it into `7.1 AA% + test BB%` made the fix obvious. Corollary:
+    shipping a default that *raises the baseline cost of the daily path* (B4.4's shared method on the
+    full 7.1) must update the launcher/runbook in the same change — an old launcher had pinned a small
+    block chosen when that path was cheap. (→ [38](38-stats-render-config.md))
