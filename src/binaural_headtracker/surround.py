@@ -33,19 +33,21 @@ from scipy.signal import fftconvolve
 CHANNELS_7P1: tuple[str, ...] = ("L", "R", "C", "LFE", "RL", "RR", "SL", "SR")
 
 # Nominal world directions — azimuth counter-clockwise from front (+ = left),
-# elevation 0 — per ITU-R BS.775 / SMPTE 7.1. LFE is non-directional (angle
-# nominal only). Not needed to render a fixed head, but it is the layout the
-# later ITD/magnitude interpolation (the head-tracked step) builds on, so it
-# lives with the renderer. Matches the azimuth convention of hrir.py.
+# elevation 0 — the Dolby 7.1 reference angles: front ±30°, centre 0°, side
+# surrounds ±110°, rear surrounds ±150° (LFE non-directional). These must match the
+# directions the baked BRIRs were measured at: they drive the world-lock steering
+# (which BRIR each channel routes to) and the radar, not just the picture. The owner's
+# set is at these angles; change them to match a different BRIR layout. Matches the
+# azimuth convention of hrir.py.
 SPEAKER_LAYOUT_7P1: dict[str, tuple[float, float]] = {
     "L": (30.0, 0.0),
     "R": (-30.0, 0.0),
     "C": (0.0, 0.0),
     "LFE": (0.0, 0.0),
-    "SL": (90.0, 0.0),
-    "SR": (-90.0, 0.0),
-    "RL": (135.0, 0.0),
-    "RR": (-135.0, 0.0),
+    "SL": (110.0, 0.0),
+    "SR": (-110.0, 0.0),
+    "RL": (150.0, 0.0),
+    "RR": (-150.0, 0.0),
 }
 
 

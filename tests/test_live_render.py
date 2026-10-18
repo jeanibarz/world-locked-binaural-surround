@@ -50,7 +50,7 @@ def test_ring_excludes_lfe_and_maps_azimuths() -> None:
     assert "LFE" not in chans
     assert az[brir.index("C")] == 0.0
     assert az[brir.index("L")] == 30.0
-    assert az[brir.index("SR")] == -90.0
+    assert az[brir.index("SR")] == -110.0
 
 
 @pytest.mark.parametrize(
@@ -62,10 +62,10 @@ def test_ring_excludes_lfe_and_maps_azimuths() -> None:
         (-30.0, "R"),
         (90.0, "SL"),
         (-90.0, "SR"),
-        (100.0, "SL"),   # 90 is 10 away, 135 is 35 away
-        (170.0, "RL"),   # 135 is 35 away, -135 is 55 away (wrapped)
+        (100.0, "SL"),   # SL 110 is 10 away, L 30 is 70 away
+        (170.0, "RL"),   # RL 150 is 20 away, -150 is 40 away (wrapped)
         (-170.0, "RR"),  # symmetric
-        (179.0, "RL"),   # 135 (44) vs -135 (46, wrapped) -> RL
+        (179.0, "RL"),   # 150 (29) vs -150 (31, wrapped) -> RL
     ],
 )
 def test_nearest_brir_selection(src_az: float, expect: str) -> None:
@@ -101,8 +101,8 @@ def test_transition_reaches_the_new_brir_steady_state() -> None:
     x = rng.normal(0, 0.3, 8000)
     block = 256
     n_blocks = int(np.ceil(x.size / block))
-    # First half pointed at L (30), second half swung to SL (90).
-    track = np.where(np.arange(n_blocks) < n_blocks // 2, 30.0, 90.0)
+    # First half pointed at L (30), second half swung to SL (110).
+    track = np.where(np.arange(n_blocks) < n_blocks // 2, 30.0, 110.0)
 
     out = render_world_locked(x, track, brir, block_size=block, fade_ms=20.0)
 
@@ -127,7 +127,7 @@ def test_crossfade_is_click_free_vs_hard_switch() -> None:
     x = 0.5 * np.sin(2 * np.pi * 440 * t)  # steady tone, so any jump is the switch
     n_blocks = int(np.ceil(x.size / block))
     # Hold at L, then at SL — the boundary flip happens at one block.
-    track = np.where(np.arange(n_blocks) < n_blocks // 2, 30.0, 90.0)
+    track = np.where(np.arange(n_blocks) < n_blocks // 2, 30.0, 110.0)
 
     faded = render_world_locked(x, track, brir, block_size=block, fade_ms=20.0)
     hard = render_world_locked(x, track, brir, block_size=block, fade_ms=0.0)  # ~1 sample

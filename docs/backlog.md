@@ -256,6 +256,14 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   passthrough is instrumented (per-block render time EWMA+peak; underrun timestamps) with the
   audio callbacks kept light; **S** toggles the panel. Verified via host PNG renders. 9 tests
   (301 total). See journal 30.)_
+- [x] **B6.4** Camera-pipeline diagnostics + radar fixes from live use.
+  _(Panel now shows camera `WxH @ fps`, detect ms, loop Hz and a plain `tracking_note`
+  (`diagnostics.classify` gained `detect_ms`/`camera_fps`/`loop_ms`); `--cam-width/-height/-fps`
+  flags (default no-op). Measured the owner's C270: 30 Hz is its native fps, detect ~3 ms
+  (resolution-independent), the 15 fps was low-light auto-exposure — not USB (journal 31). Radar
+  "active"→**"facing"** (7.1 plays all channels; no single active one), and `SPEAKER_LAYOUT_7P1`
+  corrected to the **Dolby 7.1 angles** (side ±110°, rear ±150°) which drive the world-lock
+  steering + radar and must match the baked BRIR directions (journal 32). 305 tests.)_
 
 ## M7 — AI-judge calibration
 

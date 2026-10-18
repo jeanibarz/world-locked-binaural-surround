@@ -55,6 +55,9 @@ def main(argv=None) -> int:
     p.add_argument("--yaw-sign", type=float, default=1.0)
     p.add_argument("--pitch-sign", type=float, default=-1.0)
     p.add_argument("--roll-sign", type=float, default=1.0)
+    p.add_argument("--cam-width", type=int, default=0, help="request camera width (0 = default)")
+    p.add_argument("--cam-height", type=int, default=0, help="request camera height (0 = default)")
+    p.add_argument("--cam-fps", type=int, default=0, help="request camera fps (0 = default)")
     args = p.parse_args(argv)
 
     cam_index = args.camera
@@ -68,6 +71,10 @@ def main(argv=None) -> int:
 
     cap = cv2.VideoCapture(cam_index)
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # keep the freshest frame, don't trail buffered ones
+    cam_w, cam_h, cam_fps = C.apply_camera_settings(
+        cap, width=args.cam_width, height=args.cam_height, fps=args.cam_fps)
+    print(f"camera {cam_index}: {cam_w}x{cam_h} @ {cam_fps:.0f} fps")
+    detect_ms = 0.0
     detector = vision.FaceLandmarker.create_from_options(vision.FaceLandmarkerOptions(
         base_options=mp.tasks.BaseOptions(model_asset_path=str(args.model)),
         output_facial_transformation_matrixes=True, num_faces=1))
@@ -93,7 +100,10 @@ def main(argv=None) -> int:
         # Estimate the pose from the TRUE (un-mirrored) frame so yaw keeps its real sign;
         # mirror only for display and flip the landmark x so the overlay still lines up.
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        td = time.perf_counter()
         result = detector.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
+        dms = (time.perf_counter() - td) * 1000.0
+        detect_ms = 0.9 * detect_ms + 0.1 * dms if detect_ms else dms
         frame = cv2.flip(frame, 1)  # mirror, so moving left looks left
         pose = None
         landmarks = None
@@ -116,12 +126,13 @@ def main(argv=None) -> int:
         readout = [
             ("rate", f"{rate:3.0f}Hz", C.GOOD if rate >= 20 else C.ACTIVE),
             ("neutral", "set" if neutral_set else "--", C.GOOD if neutral_set else C.MUTED),
-            ("active", active, C.ACTIVE),
+            ("facing", active, C.ACTIVE),
         ]
         buttons = [("Recenter", "C", True), ("Stats", "S", False), ("Quit", "Q", False)]
         diag = classify(block_size=256, samplerate=48000, render_ms=0.0, render_ms_peak=0.0,
-                        fifo_fill_blocks=0.0, cushion_blocks=0, pose_rate_hz=rate) if show_stats \
-            else None
+                        fifo_fill_blocks=0.0, cushion_blocks=0, pose_rate_hz=rate,
+                        detect_ms=detect_ms, camera_fps=cam_fps, cam_w=cam_w, cam_h=cam_h) \
+            if show_stats else None
 
         canvas = C.compose(
             frame, title=f"calibration — webcam {cam_index}", live=live, live_color=live_col,

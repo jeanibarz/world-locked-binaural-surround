@@ -63,10 +63,10 @@ def test_exact_at_measured_azimuth_returns_that_brir(ch):
 
 
 def test_itd_interpolates_between_two_speakers():
-    # 60° sits midway between L (30°) and SL (90°). Its ITD should land between the
+    # 70° sits midway between L (30°) and SL (110°). Its ITD should land between the
     # two neighbours' ITDs, ~their mean (equal weights at the midpoint).
     brir = _synthetic_set()
-    left, right = interpolate_baked_brir(brir, 60.0, method="timealign")  # synthesis
+    left, right = interpolate_baked_brir(brir, 70.0, method="timealign")  # synthesis
     itd = estimate_delay(right) - estimate_delay(left)  # >0 ⇒ left ear earlier
     lo, hi = brir.index("L"), brir.index("SL")
     itd_lo = estimate_delay(brir.right[lo]) - estimate_delay(brir.left[lo])
@@ -81,14 +81,14 @@ def test_itd_is_monotonic_sweeping_front_to_left():
     for az in range(0, 91, 15):
         left, right = interpolate_baked_brir(brir, float(az), method="timealign")
         itds.append(estimate_delay(right) - estimate_delay(left))
-    assert np.all(np.diff(itds) > -1e-6)  # non-decreasing left-ear lead toward 90°
+    assert np.all(np.diff(itds) > -1e-6)  # non-decreasing left-ear lead toward the side speaker
 
 
 def test_tail_is_blended_in_place_equal_power():
-    # The tail of a 60° interp (midway L↔SL) must be the two speakers' tails summed
+    # The tail of a 70° interp (midway L↔SL) must be the two speakers' tails summed
     # in place (no time-alignment) with EQUAL-POWER weights sqrt(0.5), not linear 0.5.
     brir = _synthetic_set()
-    left, _ = interpolate_baked_brir(brir, 60.0, method="timealign")  # synthesis
+    left, _ = interpolate_baked_brir(brir, 70.0, method="timealign")  # synthesis
     lo, sl = brir.index("L"), brir.index("SL")
     g = np.sqrt(0.5)
     expected = g * brir.left[lo, SPLIT + 50 :] + g * brir.left[sl, SPLIT + 50 :]
@@ -101,7 +101,7 @@ def test_tail_power_is_preserved_across_the_pan():
     brir = _synthetic_set()
     lo = brir.index("L")
     ref = np.sqrt(np.mean(brir.left[lo, SPLIT:] ** 2))  # an endpoint tail RMS
-    for az in (30.0, 45.0, 60.0, 75.0, 90.0):  # L(30) → SL(90)
+    for az in (30.0, 50.0, 70.0, 90.0, 110.0):  # L(30) → SL(110)
         left, _ = interpolate_baked_brir(brir, az)
         rms = np.sqrt(np.mean(left[SPLIT:] ** 2))
         assert abs(20 * np.log10(rms / ref)) < 1.0  # within 1 dB everywhere
@@ -127,7 +127,7 @@ def test_onset_ignores_a_loud_late_reflection():
 
 
 def test_back_gap_interpolation_is_a_single_arrival():
-    # Across the wide back gap RL(135°)→RR(225°), the midpoint (180°) must still be a
+    # Across the wide back gap RL(150°)→RR(210°), the midpoint (180°) must still be a
     # single clean arrival (one dominant direct peak), not two — the whole point vs
     # amplitude-panning two whole BRIRs.
     brir = _synthetic_set()
@@ -171,7 +171,7 @@ def test_min_phase_reconstruction_preserves_magnitude_and_is_causal():
 
 
 def _comb_pair_set(delay_lo=6, delay_hi=11):
-    # Two adjacent ring speakers (L @30°, SL @90°) whose direct paths are comb
+    # Two adjacent ring speakers (L @30°, SL @110°) whose direct paths are comb
     # filters (delta + reflection) with nulls at DIFFERENT frequencies.
     base = 60
     left = np.zeros((2, N))
@@ -191,7 +191,7 @@ def _direct_mag(ir, split=240, nfft=512):
 
 
 def test_minphase_stays_within_parent_envelope_timealign_combs_below_it():
-    # At 60° (midway L↔SL), the two directs are combs with nulls at different freqs.
+    # At 70° (midway L↔SL), the two directs are combs with nulls at different freqs.
     # minphase blends LOG-MAGNITUDE → weighted geometric mean, which stays pointwise
     # within [min,max] of the parents (keeps real notches, invents none). timealign
     # is a COMPLEX sum that cancels where phases oppose → dips BELOW both parents,
@@ -199,8 +199,8 @@ def test_minphase_stays_within_parent_envelope_timealign_combs_below_it():
     brir = _comb_pair_set()
     mlo, mhi = _direct_mag(brir.left[0]), _direct_mag(brir.left[1])
     p_min, p_max = np.minimum(mlo, mhi), np.maximum(mlo, mhi)
-    lt, _ = interpolate_baked_brir(brir, 60.0, method="timealign")
-    lm, _ = interpolate_baked_brir(brir, 60.0, method="minphase")
+    lt, _ = interpolate_baked_brir(brir, 70.0, method="timealign")
+    lm, _ = interpolate_baked_brir(brir, 70.0, method="minphase")
     band = slice(5, 512 // 4)  # skip DC / very low bins
     eps = 1e-9
     mt, mm = _direct_mag(lt)[band], _direct_mag(lm)[band]
@@ -239,7 +239,7 @@ def test_invalid_method_raises():
 
 
 def _notched_pair_set(f_lo_hz=6000.0, f_hi_hz=9000.0):
-    # Two adjacent ring speakers (L@30°, SL@90°) whose directs each have ONE clean
+    # Two adjacent ring speakers (L@30°, SL@110°) whose directs each have ONE clean
     # pinna-like notch, at different frequencies: a Gaussian magnitude dip rebuilt
     # as a minimum-phase impulse placed at `base`.
     base = 60
