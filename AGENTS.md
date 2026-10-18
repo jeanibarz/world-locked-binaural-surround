@@ -141,6 +141,23 @@ keep a local-`C:` copy for MediaPipe), the baked BRIR dir (`docs/baked-brir-setu
 and dry source WAVs (e.g. `caisse_claire_*`). A WSLg Tk window can **preview** a dialog
 from WSL, but the camera + audio always run on the host. (See journal 02; B6.2.)
 
+### Measurements & latency experiments — headless, run them here too
+
+**"Needs host hardware" in the backlog/journals (e.g. B8.5, the latency split, B8.8) means
+*run it on the host via interop* — NOT "blocked / deferred".** The measurement harnesses are
+**headless** (no window, no dialog), so they're easier than the GUI apps above — don't write
+"needs host hardware, deferred" without first running it from here:
+
+- **Device buffer + split, unattended:** `apps/latency_sweep.py` / `latency_bench.py
+  --output device --audio-device FiiO` plays a synthetic tone to the real endpoint and reports
+  the true device buffer. (The owner's `run_latency_sweep.cmd` writes `latency_sweep_results.json`.)
+- **The live `queue`/`stale` audio-pipeline terms do NOT need a face.** The camera only sets a
+  pose *value + timestamp*; it does not touch FIFO timing. To measure them unattended, replicate
+  the passthrough's loopback-capture → burst-drain worker → output FIFO with a **synthetic
+  `pose_t`** (set at ~30 Hz) — real VoiceMeeter loopback + real FiiO out, no camera, no window.
+- The only things you genuinely can't do from here are a **human moving their head** and judging
+  audio **by ear** (the motion→sound ground-truth, B8.5 §c). Everything else is runnable now.
+
 **The owner's host install location is `C:\Users\ibarz\BinauralHeadtracker\`** (per-user;
 Program Files needs admin we don't have). It holds the launchers (`launch_live.py`,
 `launch_passthrough.py` — each prepends the worktree's `apps`+`src` to `sys.path`, trying
