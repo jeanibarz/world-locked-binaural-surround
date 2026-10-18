@@ -329,7 +329,9 @@ def main(argv=None) -> int:
     # Live diagnostics the GUI panel reads (B6.3): render time per block (EWMA mean + a decaying
     # peak), and the timestamps of recent output underruns (dropouts). Updated off the GUI thread
     # — the worker writes render times, the output callback records underruns (one cheap append).
-    meter = {"ms": 0.0, "peak": 0.0, "test_ms": 0.0, "under_ts": deque(maxlen=256)}
+    meter = {"ms": 0.0, "peak": 0.0, "test_ms": 0.0,
+             "under_ts": deque(maxlen=256),   # output FIFO underruns (starved)
+             "over_ts": deque(maxlen=256)}    # FIFO overflow drops (clock drift / capture bursts)
     # Measured pose-age-at-ear (B8.5): the worker timestamps each rendered block against the pose
     # it carries and the audio still queued ahead of it, so the GUI shows a real distribution
     # (p50/p95/p99) instead of the old estimate. ``out_lat`` is the output device buffer (ms),
@@ -415,6 +417,10 @@ def main(argv=None) -> int:
                         out_fifo.extend(rendered)
                         while len(out_fifo) > max_backlog:  # bound latency: drop oldest
                             out_fifo.popleft()
+                            # An overflow drop is an audible glitch too (discarded audio), from the
+                            # capture/output clocks drifting faster than the cushion absorbs — count
+                            # it, else "0 dropouts" lies while the ear hears glitches (B6.8).
+                            meter["over_ts"].append(time.monotonic())
                         ahead = max(0, len(out_fifo) - len(rendered))  # blocks before ours play
                     # Measured pose age at the ear: how old this pose is now, plus the audio still
                     # queued *ahead* of the first block we just pushed (it carries this pose), plus
@@ -582,6 +588,7 @@ def main(argv=None) -> int:
                 fifo_fill = len(out_fifo)
             # snapshot: out_cb may append concurrently (avoid "deque mutated during iteration")
             recent_under = sum(1 for t in tuple(meter["under_ts"]) if now - t < 2.0)
+            recent_over = sum(1 for t in tuple(meter["over_ts"]) if now - t < 2.0)
             out_lat_ms = float(getattr(out_ctx, "latency", 0.0) or 0.0) * 1000.0
             out_lat["ms"] = out_lat_ms  # feed the worker's pose-age probe (it can't read out_ctx)
             rlabel = main_rend["label"] + ("  · test ON" if test["on"] else "")
@@ -595,6 +602,7 @@ def main(argv=None) -> int:
                 output_latency_ms=out_lat_ms,
                 input_latency_ms=1000.0 * args.block / brir.samplerate,
                 pose_rate_hz=rate, recent_underruns=recent_under,
+                recent_overflows=recent_over,
                 measured_pose_age_ms=(ear.p50 if ear.n else None),
                 measured_pose_age_p95_ms=ear.p95, measured_pose_age_p99_ms=ear.p99,
                 measured_pose_age_n=ear.n,
