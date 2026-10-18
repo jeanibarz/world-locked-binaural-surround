@@ -75,7 +75,7 @@ gpu = [
 where = ["src"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["src", "apps"]
 testpaths = ["tests"]
 
 [tool.ruff]

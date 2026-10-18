@@ -366,6 +366,16 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   needs. 9 tests (326 total). **Remaining (needs host hardware):** the external **motion→sound**
   cross-check with a motorised/visual rotation reference (§ 7.3c) to validate the software number
   and capture the camera exposure the software stamp can't see.)_
+- [~] **B8.5b** **Automated latency sweep + component split.** `apps/latency_bench.py` runs the real
+  render pipeline with a **synthetic pose** (yaw sweep, no camera) + **synthetic sine** (no
+  VoiceMeeter), warm-up-discarded, and reports latency **split by stage** — stale (pose age) / queue
+  (FIFO) / device (output buffer) — as distributions, plus dropouts and a tone-integrity check.
+  `apps/latency_sweep.py` drives a grid as fresh subprocesses and ranks them; `--output sim` runs
+  anywhere, `--output device [--exclusive]` measures the real FiiO buffer on the host
+  (`run_latency_sweep.cmd`). 3 tests (324 total). **Finding (journal 42):** queue ≈ cushion×block and
+  stale ≈ one camera interval (both small); the ~75 ms gap between the sim's 68 ms and the real 143 ms
+  is the **WASAPI shared-mode device buffer (~90–100 ms)** — why block size barely moved the total.
+  **Remaining:** run the host device sweep to confirm shared-vs-exclusive, then act on B0.5.)_
   via three measurements (requirements § 7.3): (a) **camera→app** — a known temporal
   signal (LED / on-screen timecode) in view vs the frame's software-availability
   timestamp, accounting for exposure window + rolling-shutter skew; (b) **per-stage
