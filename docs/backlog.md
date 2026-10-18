@@ -179,11 +179,16 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   last head pose (audio keeps world-locking), keep the window + keys alive, and reopen the
   camera periodically rather than spin blind. Remaining: audio **device-change** handling
   (headphone/virtual-device hot-swap) and a deliberate fade. See journal 24.)_
-- [ ] **B4.3** Non-directional LFE: route the .1 channel flat to both ears (optionally
-  low-passed), not convolved through the directional BRIR. The baked BRIRs roll off sub-bass
-  ~−20 dB (journal 24 loopback diagnostics), so the pure-sub-bass LFE disappears when steered.
-  Update `WorldLocked7p1`/static render + the `test_7p1_lfe_is_not_steered` expectation.
-  _(discovered live, journal 24)_
+- [x] **B4.3** Non-directional LFE: route the .1 channel flat to both ears, not convolved
+  through the directional BRIR (the baked BRIRs roll off sub-bass ~−20 dB — journal 24 loopback
+  diagnostics — so the pure-sub-bass LFE disappears when steered).
+  _(`lfe_mode` on `WorldLocked7p1` + `GpuWorldLocked7p1`: `"flat"` sums LFE to both ears at a
+  per-ear gain = that ear's LFE-IR L2 norm (loudness-matched to convolution, no spectral
+  rolloff, no tail); `"brir"` keeps the old convolve-through-BRIR path (default in the renderer,
+  == the static reference, so the neutral==static / lfe-not-steered tests still hold). The
+  passthrough app defaults to `--lfe-mode flat` (it wants the bass) with `brir` to A/B. Measured
+  +14 dB at 40 Hz (flat vs brir) on CPU and GPU; GPU flat == CPU flat to 1.7e-16. 1 new test
+  (278 total). The offline static render is deliberately left as the EqualizerAPO reference.)_
 
 ## M5 — Live filters & presets
 
