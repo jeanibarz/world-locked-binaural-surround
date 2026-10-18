@@ -579,3 +579,9 @@ full story.
     only underruns made the health panel report "0 dropouts" exactly while the ear heard every
     discard. A dropped sample is a dropped sample however it left — timestamp and surface both.
     (→ [45](45-exclusive-breaks-two-clock-and-overflow-drops.md))
+76. **Measure latency at the point it is incurred, not by estimate.** The live app approximated the
+    FIFO wait as blocks-ahead × block_ms at push time; tagging each FIFO block with its pose/render
+    timestamps and reading the clock when the *output device* takes it measures stale/queue/device
+    exactly — and the split says which knob to turn. Make the live app and the offline bench measure
+    the same way so their numbers agree and a discrepancy is signal, not instrumentation.
+    (→ [46](46-live-latency-component-split.md))

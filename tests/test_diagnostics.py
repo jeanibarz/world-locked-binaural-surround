@@ -78,6 +78,15 @@ def test_nearly_empty_buffer_is_tight():
     assert any("buffer" in r for r in d.reasons)
 
 
+def test_measured_pose_age_split_is_carried():
+    d = classify(**{**BASE, "measured_pose_age_ms": 70.0, "measured_pose_age_n": 300,
+                    "measured_stale_ms": 40.0, "measured_queue_ms": 8.0,
+                    "measured_device_ms": 22.0})
+    assert d.pose_age_stale_ms == 40.0
+    assert d.pose_age_queue_ms == 8.0
+    assert d.pose_age_device_ms == 22.0
+
+
 def test_measured_pose_age_overrides_the_estimate():
     # With a live measurement, end_to_end = camera-front (one frame) + measured p50, and it is
     # flagged measured; the distribution tail is carried through.
