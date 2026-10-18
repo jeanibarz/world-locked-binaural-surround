@@ -548,3 +548,23 @@ full story.
     WDM-KS, DirectSound, MME) and log the chosen API + buffer, so this can't hide again. (The
     measurement harness is what made a config bug look like a config bug instead of a DSP mystery.)
     (→ [43](43-output-on-mme-prefer-wasapi.md))
+71. **The whole head-move→ear latency was the output device buffer — and most of it was the host
+    API.** MME→WASAPI (90→22 ms) + exclusive mode (→13 ms) took it to p50 35–46 ms, under the ~50 ms
+    threshold, with **no DSP change**; block size and cushion were never the lever. The win came from
+    measuring by stage (journal 42) and fixing device selection (journal 43) + mode (this). Exclusive
+    is opt-in with a shared fallback, because a device can refuse the format/rate or be in use.
+    (→ [44](44-exclusive-output-and-the-50ms-milestone.md))
+72. **Capture latency ≠ reaction latency in a world-locked renderer.** The VoiceMeeter/VB-Cable
+    ~128 ms capture buffer delays the *audio content* (A-V sync) but not head-tracking: the pose is
+    stamped at camera time and applied to whatever block is current, so a head turn lands on the next
+    rendered block regardless of how old that audio is. Don't spend a virtual-cable rearchitecture on
+    a term that doesn't move the felt number — and when one *is* wanted (A-V sync), it's a buffer
+    *setting*, or the EqualizerAPO-VST endgame (single engine clock), not a new cable brand.
+    (→ [44](44-exclusive-output-and-the-50ms-milestone.md))
+73. **A sleep-paced producer cannot simulate a hardware audio clock on Windows (~15 ms timer).** The
+    bench invented 400–1000 dropouts at 30–70 % load because its Python producer slept on a block
+    clock it couldn't hit. Fix: pace the producer off the *consumer* (top the FIFO up to the cushion,
+    refilling in a burst after a coarse wake, like the real worker draining a backlog) and raise the
+    OS timer resolution for the run. The real app is immune — it's driven by hardware callbacks, not
+    sleeps. A latency harness must not manufacture the very dropouts it's meant to detect.
+    (→ [44](44-exclusive-output-and-the-50ms-milestone.md))
