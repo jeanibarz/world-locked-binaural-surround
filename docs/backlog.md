@@ -356,8 +356,16 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   `python3.lib`). Windows `win_amd64` wheel installed + verified on the owner's host (~25× RT).
   macOS = build-on-Mac or the pure-Python fallback (not cross-buildable from Linux).
   `rust/build-wheels.sh`; launcher uses `--rust`. See journal 28.)_
-- [ ] **B8.5** **Pose-age / motion→sound latency measurement harness.** Measure the
+- [~] **B8.5** **Pose-age / motion→sound latency measurement harness.** Measure the
   true *pose age at the ear* as a **distribution (p50/p95/p99 + extremes, not a mean)**,
+  _(**Software path done** (journal 40): pure `latency.LatencyProbe`/`LatencyStats` (p50/p95/p99 +
+  min/max/mean over a rolling window); the passthrough carries `HeadPose.t` through to the render
+  worker, which records pose-age-at-ear = `(now−pose_t) + FIFO-ahead·block + device buffer` each
+  block. The **S** panel's head→ear becomes **measured** (p50 + p95/p99 tail, `camera-front`≈1 frame
+  still estimated), and the session distribution prints on exit. The pose timestamp is the seam B8.6
+  needs. 9 tests (326 total). **Remaining (needs host hardware):** the external **motion→sound**
+  cross-check with a motorised/visual rotation reference (§ 7.3c) to validate the software number
+  and capture the camera exposure the software stamp can't see.)_
   via three measurements (requirements § 7.3): (a) **camera→app** — a known temporal
   signal (LED / on-screen timecode) in view vs the frame's software-availability
   timestamp, accounting for exposure window + rolling-shutter skew; (b) **per-stage

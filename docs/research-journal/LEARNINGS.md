@@ -499,3 +499,14 @@ full story.
     shipping a default that *raises the baseline cost of the daily path* (B4.4's shared method on the
     full 7.1) must update the launcher/runbook in the same change — an old launcher had pinned a small
     block chosen when that path was cheap. (→ [38](38-stats-render-config.md))
+65. **Measure the latency you care about as a distribution before trying to cut it.** The felt
+    quantity is *pose age at the ear* — how old the head pose is when the sound carrying it is heard.
+    We had only an estimate (`1.5 × frame interval` + buffer sum), which hid both which stage
+    dominates and the p99 spikes that break world-lock worse than a bad mean does. The cheap, no-
+    hardware measurement: stamp each pose (`HeadPose.t`), and at the instant its block is queued for
+    playout subtract `now − pose_t` and add the audio still queued ahead + the device buffer; keep
+    **p50/p95/p99 + extremes** over a rolling window, not a mean. Bonus: the pose-timestamp seam you
+    add to *measure* is the exact seam the *fix* (B8.6 forward prediction) plugs into — so measuring
+    first is free groundwork, not a detour. The one part software can't see (camera exposure before
+    the timestamp, ~1 frame) stays an explicit labelled estimate rather than a silent omission.
+    (→ [40](40-pose-age-measurement.md))

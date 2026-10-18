@@ -58,7 +58,12 @@ class Diagnosis:
     render_load_test: float     # render_ms_test / block_ms (the test source's share)
     audio_out_latency_ms: float # a just-rendered sample's wait: FIFO fill + device out buffer
     tracking_ms: float          # estimated pose age (camera → usable pose)
-    end_to_end_ms: float        # estimated head-move → ear (sum of stages below)
+    end_to_end_ms: float        # head-move → ear; measured when available, else the estimate
+    end_to_end_measured: bool   # True ⇒ end_to_end_ms is from the live pose-age probe (B8.5)
+    pose_age_p50_ms: float      # measured pose-age-at-ear distribution (0 if no samples yet)
+    pose_age_p95_ms: float
+    pose_age_p99_ms: float
+    pose_age_n: int             # number of measured samples behind the distribution
     recent_underruns: int
     fifo_fill_blocks: float
     cushion_blocks: int
@@ -85,6 +90,10 @@ def classify(
     input_latency_ms: float = 0.0,
     pose_rate_hz: float = 0.0,
     recent_underruns: int = 0,
+    measured_pose_age_ms: float | None = None,
+    measured_pose_age_p95_ms: float = 0.0,
+    measured_pose_age_p99_ms: float = 0.0,
+    measured_pose_age_n: int = 0,
     detect_ms: float = 0.0,
     camera_fps: float = 0.0,
     cam_w: int = 0,
@@ -112,9 +121,21 @@ def classify(
     # away → ~1.5 intervals. Unmeasurable camera exposure is folded into this estimate.
     pose_interval_ms = 1000.0 / pose_rate_hz if pose_rate_hz > 0 else 0.0
     tracking_ms = 1.5 * pose_interval_ms
-    end_to_end_ms = (
-        tracking_ms + max(0.0, input_latency_ms) + block_ms + audio_out_ms
-    )
+    # Measured pose-age-at-ear (B8.5) covers everything from the pose timestamp to the ear
+    # (detect + staleness + render + FIFO + device buffer). The only part it misses is the camera
+    # exposure/transport *before* the timestamp — about one frame interval — which we add as a
+    # small labelled estimate. When no measurement yet, fall back to the all-estimate sum.
+    pose_age_p50 = pose_age_p95 = pose_age_p99 = 0.0
+    pose_age_n = max(0, int(measured_pose_age_n))
+    if measured_pose_age_ms is not None and pose_age_n > 0:
+        pose_age_p50 = max(0.0, float(measured_pose_age_ms))
+        pose_age_p95 = max(0.0, float(measured_pose_age_p95_ms))
+        pose_age_p99 = max(0.0, float(measured_pose_age_p99_ms))
+        end_to_end_ms = pose_interval_ms + pose_age_p50  # camera front (est.) + measured rest
+        end_to_end_measured = True
+    else:
+        end_to_end_ms = tracking_ms + max(0.0, input_latency_ms) + block_ms + audio_out_ms
+        end_to_end_measured = False
 
     reasons: list[str] = []
     health = Health.OK
@@ -182,6 +203,11 @@ def classify(
         audio_out_latency_ms=audio_out_ms,
         tracking_ms=tracking_ms,
         end_to_end_ms=end_to_end_ms,
+        end_to_end_measured=end_to_end_measured,
+        pose_age_p50_ms=pose_age_p50,
+        pose_age_p95_ms=pose_age_p95,
+        pose_age_p99_ms=pose_age_p99,
+        pose_age_n=pose_age_n,
         recent_underruns=recent_underruns,
         fifo_fill_blocks=fifo_fill_blocks,
         cushion_blocks=cushion_blocks,

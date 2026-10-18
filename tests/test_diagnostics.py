@@ -69,6 +69,26 @@ def test_nearly_empty_buffer_is_tight():
     assert any("buffer" in r for r in d.reasons)
 
 
+def test_measured_pose_age_overrides_the_estimate():
+    # With a live measurement, end_to_end = camera-front (one frame) + measured p50, and it is
+    # flagged measured; the distribution tail is carried through.
+    d = classify(**{**BASE, "measured_pose_age_ms": 70.0, "measured_pose_age_p95_ms": 95.0,
+                    "measured_pose_age_p99_ms": 110.0, "measured_pose_age_n": 300})
+    assert d.end_to_end_measured
+    assert d.pose_age_p50_ms == 70.0 and d.pose_age_p95_ms == 95.0 and d.pose_age_p99_ms == 110.0
+    assert d.pose_age_n == 300
+    frame_ms = 1000.0 / BASE["pose_rate_hz"]
+    assert d.end_to_end_ms == pytest.approx(frame_ms + 70.0)
+
+
+def test_falls_back_to_estimate_without_samples():
+    d = classify(**{**BASE, "measured_pose_age_ms": None, "measured_pose_age_n": 0})
+    assert not d.end_to_end_measured and d.pose_age_n == 0
+    # the all-estimate stage sum (as before the probe existed)
+    assert d.end_to_end_ms == pytest.approx(
+        d.tracking_ms + BASE["input_latency_ms"] + d.block_ms + d.audio_out_latency_ms)
+
+
 def test_cold_start_zeros_are_safe():
     d = classify(
         block_size=512, samplerate=48000, render_ms=0.0, render_ms_peak=0.0,
