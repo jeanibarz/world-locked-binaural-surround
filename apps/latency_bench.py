@@ -173,6 +173,14 @@ def run_bench(brir, args) -> dict:
 
     if args.output == "device":
         import sounddevice as sd
+
+        from binaural_headtracker.devices import output_device_choices, resolve_output_device
+        # Resolve the device name ourselves (sounddevice raises on a name that matches several
+        # host APIs); our resolver prefers WASAPI, which is also what we want to benchmark.
+        raw = sd.query_devices()
+        hostapis = [a["name"] for a in sd.query_hostapis()]
+        dev_index = resolve_output_device(args.audio_device,
+                                          output_device_choices(raw, hostapis))
         extra = None
         if args.exclusive:
             # WASAPI exclusive mode takes the device away from the mixer for a much smaller
@@ -197,11 +205,12 @@ def run_bench(brir, args) -> dict:
             if n < frames:
                 outdata[n:] = 0
             carry["buf"] = buf[n:]
-        out_ctx = sd.OutputStream(samplerate=sr, channels=2, device=args.audio_device,
+        out_ctx = sd.OutputStream(samplerate=sr, channels=2, device=dev_index,
                                   blocksize=0, dtype="float32", latency="low", callback=out_cb,
                                   extra_settings=extra)
         out_ctx.start()
         args.device_ms = float(out_ctx.latency or 0.0) * 1000.0
+        args.resolved_device = sd.query_devices(dev_index)["name"] if dev_index is not None else ""
 
     time.sleep(args.warmup + args.seconds)
     stop.set()

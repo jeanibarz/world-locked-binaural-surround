@@ -292,7 +292,14 @@ def main(argv=None) -> int:
     if in_ch != brir.n_channels:
         raise SystemExit(f"loopback '{lb['name']}' is {in_ch}ch, need {brir.n_channels} — set "
                          f"that endpoint to 7.1 in Windows Sound.")
-    out_name = sd.query_devices(out_index)["name"] if out_index is not None else "default"
+    if out_index is not None:
+        od = sd.query_devices(out_index)
+        apis = [a["name"] for a in sd.query_hostapis()]
+        out_api = apis[od["hostapi"]] if 0 <= od.get("hostapi", -1) < len(apis) else "?"
+        buf_ms = od["default_low_output_latency"] * 1000
+        out_name = f"{od['name']} [{out_api}]  (buffer ~{buf_ms:.0f} ms)"
+    else:
+        out_name = "default"
     print(f"capture (loopback): {lb['name']}  {in_ch}ch  ->  output: {out_name}  "
           f"@ {brir.samplerate} Hz")
     print(f"block {args.block}  latency cushion ~{args.latency_ms:.0f} ms")

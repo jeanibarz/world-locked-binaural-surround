@@ -540,3 +540,11 @@ full story.
     device buffer) is exactly what a host `device`-mode run adds back — the two together fully
     attribute the latency. Always have the harness **report distributions + dropouts and verify the
     tone passes**, so it can't "win" by silently dropping audio. (→ [42](42-latency-benchmark-harness.md))
+70. **On Windows the host API a device opens under is a first-class latency parameter — prefer
+    WASAPI and show which you got.** The FiiO is exposed under MME / DirectSound / WASAPI / WDM-KS;
+    "first substring match wins" resolved `"FiiO"` to **MME**, whose shared buffer is ~90–100 ms —
+    the exact fixed device term the component split (journal 42) said dominated. Same DAC, ~80–100 ms
+    difference, pure configuration not code. Audio device-name resolution must prefer WASAPI (then
+    WDM-KS, DirectSound, MME) and log the chosen API + buffer, so this can't hide again. (The
+    measurement harness is what made a config bug look like a config bug instead of a DSP mystery.)
+    (→ [43](43-output-on-mme-prefer-wasapi.md))
