@@ -210,6 +210,13 @@ only a **kernel** change (anything under `rust/`) requires rebuilding + reinstal
 (steps 1–2). Sharing with a colleague: build their platform's wheel (Linux native / Windows via
 cargo-xwin / macOS on a Mac), or they run the pure-Python fallback.
 
+**Latency sweep (automated characterisation).** `run_latency_sweep.cmd` → `launch_sweep.py` →
+`apps/latency_sweep.py` runs `apps/latency_bench.py` once per setting with a synthetic pose + sine
+(no camera/VoiceMeeter) on the real FiiO output, and prints a ranked table that **splits latency into
+stale / queue / device** and flags dropouts + tone integrity. Use it to confirm the WASAPI
+shared-vs-exclusive device-buffer finding (journal 42) and to pick block/cushion, instead of hand
+edits + restarts. `--output sim` runs headless anywhere (no device buffer).
+
 **In-app reload (so a code change needs no manual restart).** The passthrough returns exit code
 `RESTART_EXIT_CODE` (97) when the owner presses **Enter** (the *Reload* button); `run_passthrough.cmd`
 wraps the `py` call in a `:loop` that relaunches while it sees 97, so a fresh process picks up the

@@ -528,3 +528,15 @@ full story.
     "interpolation artifact" from "HRIR balance" in a single offline measurement (nearest flat,
     timealign rippled), and it works on the owner's real BRIR straight off disk. Reach for the exact
     sum before reaching for a mic or a listening test. (→ [41](41-timealign-loudness-match.md))
+68. **When a knob "does nothing", stop guessing and measure the latency by *stage*.** Halving the
+    block barely moved the total (p50 138→143) because the total was ~⅔ a fixed **device buffer** the
+    summed number hid. Splitting pose-age-at-ear into **stale** (pose age) / **queue** (FIFO) /
+    **device** (output buffer) made the knob→stage map obvious: block→queue, camera→stale, WASAPI
+    mode→device — and revealed the ~90–100 ms WASAPI shared-mode buffer as the thing to chase. A
+    single summed latency is a trap for tuning.
+69. **A synthetic pose + synthetic tone turns an interactive, device-bound tuning loop into an
+    unattended sweep.** No human, no camera, no music, deterministic; a real-time-clocked consumer
+    simulates the device so it runs headless anywhere, and the one thing the sim can't model (the real
+    device buffer) is exactly what a host `device`-mode run adds back — the two together fully
+    attribute the latency. Always have the harness **report distributions + dropouts and verify the
+    tone passes**, so it can't "win" by silently dropping audio. (→ [42](42-latency-benchmark-harness.md))
