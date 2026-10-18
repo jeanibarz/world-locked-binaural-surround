@@ -368,7 +368,8 @@ def main(argv=None) -> int:
             rate = (len(times) - 1) / span if len(times) > 1 and span > 0 else 0.0
             with fifo_lock:
                 fifo_fill = len(out_fifo)
-            recent_under = sum(1 for t in meter["under_ts"] if now - t < 2.0)
+            # snapshot: out_cb may append concurrently (avoid "deque mutated during iteration")
+            recent_under = sum(1 for t in tuple(meter["under_ts"]) if now - t < 2.0)
             out_lat_ms = float(getattr(out_ctx, "latency", 0.0) or 0.0) * 1000.0
             diag = classify(
                 block_size=args.block, samplerate=brir.samplerate,
