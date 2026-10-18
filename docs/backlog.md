@@ -425,6 +425,23 @@ _(the chain appends here as it learns)_
   engine clock, no loopback, no second app), with the camera tracker feeding pose over shared
   memory and the Rust kernel wrapped as the plugin. Lowest-latency architecture; only needed for
   A-V sync, so deferred behind B8.6. _(owner question, journal 44)_
+- [ ] **B8.8** **Reduce the `queue` term — the live FIFO wait came in ~15–20× the bench.** The live
+  split (B8.5e, journal 47) measured **queue 16–20 ms** at playout, against the bench's **~1 ms**
+  (`queue ≈ cushion×block`, B8.5b / journal 42, 44) — the one stage the sim under-called. Journal 46
+  flagged exactly this case (*"if queue is unexpectedly large, tighten the FIFO drift first —
+  cheap"*) but B8.6 went straight to prediction for `stale` and never came back to it. Unlike
+  `stale` (prediction *masks* it, doesn't cut it) and `device` (needs the B8.7 single-clock
+  rearchitecture), `queue` is a **real, software-reducible** latency cut — and since B8.6's horizon =
+  the measured pose-age-at-ear p50, every ms off `queue` also shortens the prediction horizon → less
+  overshoot at a stop (double win). **Host experiment (needs the VoiceMeeter+FiiO host, no code):**
+  with `--predict` on, sweep `--latency-ms` 60→45→30→20, a few minutes of normal head motion each,
+  watching the **S** panel's `queue` and **both** drop counters (underrun + overflow, both live since
+  B6.8); the lowest cushion with zero drops over several minutes = new default. **First check
+  (~10 min):** the render worker drains the whole capture backlog and `extend`s the FIFO with every
+  rendered block in one burst (`apps/voicemeeter_passthrough.py:424-429`), so confirm whether the
+  16–20 ms is the primed cushion (`--latency-ms 60` ≈ 6 blocks at 512/48k) or burst backlog — if
+  burst, lowering the cushion won't be enough and a steadier drain / render-ahead cap is the real
+  fix. _(from journals 46/47; the queue lever journal 46 named and B8.6 skipped.)_
 - [x] **B0.6** Complete the **measured** virtual round-trip latency: once a
   loopback route exists — VoiceMeeter VAIO strip → bus **B1**, or a dedicated
   **VB-CABLE** installed — run `spikes/b0_3_virtual_device.py` and record the real
