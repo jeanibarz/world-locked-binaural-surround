@@ -55,10 +55,16 @@ computed box, button and centred label stays self-consistent).
 - **Verification** reused the B6.3 recipe: a host script renders representative console frames
   (tracking + stats overlay, and clean) to PNG with a synthetic frame (no camera/audio — `compose`
   is pure drawing), run before (Hershey) and after (TTF), and inspected.
-- **7 tests** (`tests/test_type.py`, skip if Pillow absent): faces resolve to the expected files,
+- **8 tests** (`tests/test_type.py`, skip if Pillow absent): faces resolve to the expected files,
   width is positive/monotonic, mono is fixed-advance (and sans is not), glyphs are drawn in the
   requested colour while the background margin is spared, empty/clipped/unknown-family inputs
-  don't crash.
+  don't crash, and a forced rasterise error degrades to `False` (not an exception).
+- **Independent review.** A fresh-context adversarial reviewer checked the baseline/anchor math,
+  clipping, the numpy alpha-composite (BGR order, rounding, in-place write), `lru_cache` aliasing
+  safety, the fallback paths, and the variable-font axis — and found **no correctness defects**
+  (each verified empirically). Its one actionable note: `draw_text` wasn't wrapped against a
+  rasterise exception, which would propagate into the render loop; now guarded (degrades to
+  Hershey), with a test.
 
 ## Result
 
@@ -70,7 +76,7 @@ computed box, button and centred label stays self-consistent).
   i.e. only **~2.6 ms** over Hershey. Comfortably inside the 33 ms budget at the C270's 30 fps, so
   the GUI loop (which shares the thread with pose detection) keeps its rate; the audio render
   worker is a separate thread and untouched.
-- 351 tests pass (7 new), ruff clean. Pillow (HPND, permissive — donationware-safe) added to the
+- 352 tests pass (8 new), ruff clean. Pillow (HPND, permissive — donationware-safe) added to the
   `vision` extra **and** `dev` so the suite exercises `_type` on CI/WSL.
 
 ## Interpretation

@@ -145,21 +145,24 @@ def draw_text(img, s: str, x, y, color_bgr, size_px: int, *,
     """
     if not _HAVE_PIL or not s:
         return False
-    m = _mask(s, family, weight, int(size_px))
-    if m is None:
+    try:
+        m = _mask(s, family, weight, int(size_px))
+        if m is None:
+            return False
+        alpha, ox, oy = m
+        x, y = int(round(x)), int(round(y))
+        h, w = img.shape[:2]
+        gx, gy = x + ox, y + oy  # mask top-left in image coords
+        mh, mw = alpha.shape
+        sx, sy = max(0, -gx), max(0, -gy)              # crop into the mask when off the top/left
+        dx0, dy0 = max(0, gx), max(0, gy)
+        dx1, dy1 = min(w, gx + mw), min(h, gy + mh)
+        if dx1 <= dx0 or dy1 <= dy0:
+            return True  # fully clipped — handled, nothing to paint
+        a = alpha[sy:sy + (dy1 - dy0), sx:sx + (dx1 - dx0), None]
+        roi = img[dy0:dy1, dx0:dx1].astype(np.float32)
+        col = np.array((float(color_bgr[0]), float(color_bgr[1]), float(color_bgr[2])), np.float32)
+        img[dy0:dy1, dx0:dx1] = (roi * (1.0 - a) + col * a + 0.5).astype(np.uint8)
+        return True
+    except Exception:  # noqa: BLE001 — any raster/compose failure degrades to the Hershey fallback
         return False
-    alpha, ox, oy = m
-    x, y = int(round(x)), int(round(y))
-    h, w = img.shape[:2]
-    gx, gy = x + ox, y + oy  # mask top-left in image coords
-    mh, mw = alpha.shape
-    sx, sy = max(0, -gx), max(0, -gy)              # crop into the mask when off the top/left
-    dx0, dy0 = max(0, gx), max(0, gy)
-    dx1, dy1 = min(w, gx + mw), min(h, gy + mh)
-    if dx1 <= dx0 or dy1 <= dy0:
-        return True  # fully clipped — handled, nothing to paint
-    a = alpha[sy:sy + (dy1 - dy0), sx:sx + (dx1 - dx0), None]
-    roi = img[dy0:dy1, dx0:dx1].astype(np.float32)
-    col = np.array((float(color_bgr[0]), float(color_bgr[1]), float(color_bgr[2])), np.float32)
-    img[dy0:dy1, dx0:dx1] = (roi * (1.0 - a) + col * a + 0.5).astype(np.uint8)
-    return True

@@ -325,8 +325,8 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   `_console.text()/text_w()` delegate to it and fall back to Hershey if Pillow is absent; both GUIs
   sharpen with **no layout change** (draw + measure share the metrics). Chrome (buttons, DIAGNOSTICS
   heading, verdict pill, radar cardinals) routed to Rajdhani. Perf: `compose` +2.6 ms/frame (11.4 vs
-  8.8). Pillow added to the `vision`+`dev` extras. Verified by before/after host PNGs. 7 tests
-  (351 total). See journal 48.)_
+  8.8). Pillow added to the `vision`+`dev` extras. Verified by before/after host PNGs + an
+  independent review (no defects). 8 tests (352 total). See journal 48.)_
 - [ ] **B6.10** Route `live_tracker_audio.py`'s remaining raw `cv2.putText` overlays through the
   shared `_console.text` for one consistent look (follow-up from B6.9).
 - [ ] **B6.11** HiDPI / resizable console window (`WINDOW_NORMAL` + integer canvas scale) so the

@@ -91,3 +91,15 @@ def test_unknown_family_falls_back_not_crash():
     # an unknown family resolves via the sans system/default path rather than raising
     assert _type.draw_text(img, "x", 10, 40, (255, 255, 255), 20, family="nope") is True
     assert _type.text_width("x", 20, family="nope") >= 0
+
+
+def test_raster_error_degrades_to_false(monkeypatch):
+    # A rasterisation failure must return False (so _console falls back to Hershey), never
+    # propagate into the real-time render loop.
+    def boom(*_a, **_k):
+        raise RuntimeError("raster boom")
+
+    monkeypatch.setattr(_type, "_mask", boom)
+    img = _blank()
+    assert _type.draw_text(img, "x", 10, 40, (255, 255, 255), 20) is False
+    assert not (img != np.array(BG, np.uint8)).any()  # nothing drawn
