@@ -55,7 +55,7 @@ from binaural_headtracker.devices import (
 )
 from binaural_headtracker.diagnostics import classify
 from binaural_headtracker.head_pose import head_pose_from_matrix
-from binaural_headtracker.live_render import WorldLocked7p1
+from binaural_headtracker.live_render import WorldLocked7p1, WorldLockedSource, interpolated_ring
 from binaural_headtracker.output_eq import load_output_eq
 from binaural_headtracker.radar import nearest_front_channel
 from binaural_headtracker.surround import load_baked_brir
@@ -65,6 +65,43 @@ from binaural_headtracker.world import layout_7p1
 FG = (245, 237, 232)
 MUTED = (171, 151, 139)
 ACCENT = (214, 214, 56)
+EXPERIMENT_METHODS = ("nearest", "timealign", "minphase", "notchwarp")
+
+
+def _load_mono_loop(path: Path, target_sr: int) -> np.ndarray:
+    """Read a WAV as mono float64 in [-1, 1], resampled to ``target_sr``."""
+    import warnings
+
+    from scipy.io import wavfile
+    from scipy.signal import resample_poly
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        sr, data = wavfile.read(path)
+    data = np.asarray(data)
+    if data.ndim > 1:
+        data = data.mean(axis=1)
+    data = (data.astype(np.float64) / float(np.iinfo(data.dtype).max)
+            if np.issubdtype(data.dtype, np.integer) else data.astype(np.float64))
+    if sr != target_sr:
+        from math import gcd
+        g = gcd(int(sr), int(target_sr))
+        data = resample_poly(data, target_sr // g, sr // g)
+    return data
+
+
+def _make_test_loop(source: Path | None, sr: int) -> np.ndarray:
+    """The test signal for the experiment layer: the owner's source WAV if given, else a
+    built-in 1 s loop with a short noise tick — a repeating transient that is easy to localise."""
+    if source is not None:
+        return _load_mono_loop(source, sr)
+    n = sr
+    buf = np.zeros(n)
+    k = int(0.03 * sr)
+    rng = np.random.default_rng(0)
+    buf[:k] = rng.standard_normal(k) * np.hanning(2 * k)[:k]
+    buf *= 0.5 / max(float(np.abs(buf).max()), 1e-9)  # normalize the tick to a safe level
+    return buf
 
 
 def main(argv=None) -> int:
@@ -113,6 +150,16 @@ def main(argv=None) -> int:
     p.add_argument("--cam-width", type=int, default=0, help="request camera width (0 = default)")
     p.add_argument("--cam-height", type=int, default=0, help="request camera height (0 = default)")
     p.add_argument("--cam-fps", type=int, default=0, help="request camera fps (0 = default)")
+    # Experiment layer (live, over the running passthrough): a movable test source for A/B.
+    p.add_argument("--source", type=Path, default=None,
+                   help="test-source WAV for the experiment layer (T); a noise tick if omitted")
+    p.add_argument("--test-gain", type=float, default=0.5, help="test-source level")
+    p.add_argument("--method", default="nearest", choices=EXPERIMENT_METHODS,
+                   help="test-source interpolation method to start with (cycle live with M)")
+    p.add_argument("--grid-step", type=float, default=10.0,
+                   help="degrees between synthesized grid directions for the test source")
+    p.add_argument("--rotate-speed", type=float, default=45.0,
+                   help="auto-rotation speed of the test source in deg/s (toggle with R)")
     args = p.parse_args(argv)
 
     brir = load_baked_brir(args.brir_dir)
@@ -151,6 +198,25 @@ def main(argv=None) -> int:
             print("  note: the EQ restores the sub-bass the LFE BRIR strips — pair it with "
                   "--lfe-mode brir to match EqualizerAPO (flat LFE would double the bass).")
     layout = layout_7p1(channels=brir.channels)  # aligned to BRIR channel order
+    world_az = layout.head_relative_directions()[:, 0]  # fixed world azimuths (neutral pose)
+    c_idx = brir.channels.index("C") if "C" in brir.channels else 0
+
+    # Experiment layer: a single movable test source rendered through a selectable interpolation
+    # method (dense grid, B3.3), mixed into the running passthrough so A/B needs no restart.
+    test_loop = _make_test_loop(args.source, brir.samplerate)
+    test_renderers: dict[str, WorldLockedSource] = {}
+
+    def build_test_renderer(method: str) -> WorldLockedSource:
+        if method == "nearest":
+            return WorldLockedSource(brir, block_size=args.block, fade_ms=args.fade_ms)
+        dense, azmap = interpolated_ring(brir, method, step_deg=args.grid_step)
+        return WorldLockedSource(dense, block_size=args.block, fade_ms=args.fade_ms, azimuths=azmap)
+
+    test_renderers[args.method] = build_test_renderer(args.method)
+    test = {"on": False, "world_az": 0.0, "az": 0.0, "method": args.method,
+            "gain": float(args.test_gain), "solo": False, "rotate": False,
+            "renderer": test_renderers[args.method]}
+    test_pos = {"i": 0}  # worker-local read cursor into test_loop
 
     out_devs, default_out = query_output_devices()
     cam_index = args.camera
@@ -243,6 +309,8 @@ def main(argv=None) -> int:
             try:
                 with lock:
                     az = state["az"]
+                    t_on, t_rnd, t_az = test["on"], test["renderer"], test["az"]
+                    t_gain, t_solo = test["gain"], test["solo"]
                 cap = np.concatenate(chunks, axis=0)
                 if args.monitor:
                     tnow = time.monotonic()
@@ -258,6 +326,11 @@ def main(argv=None) -> int:
                 t0 = time.perf_counter()
                 while buf.shape[0] - i >= args.block:
                     stereo = renderer.process_block(buf[i : i + args.block], az)
+                    if t_on:  # mix the movable test source (solo replaces the 7.1)
+                        idx = (test_pos["i"] + np.arange(args.block)) % test_loop.size
+                        tstereo = t_rnd.process_block(test_loop[idx], t_az) * t_gain
+                        test_pos["i"] = int((test_pos["i"] + args.block) % test_loop.size)
+                        stereo = tstereo if t_solo else stereo + tstereo
                     if output_eq is not None:
                         stereo = output_eq.process_block(stereo)
                     rendered.append(stereo * args.gain)
@@ -309,6 +382,17 @@ def main(argv=None) -> int:
     show_stats = False
     phase = 0.0
     win = "Binaural head-tracker — world-lock passthrough"
+    cv2.namedWindow(win)
+
+    def on_mouse(event, mx, my, _flags, _param):  # noqa: ANN001  — click the radar to place test
+        if event == cv2.EVENT_LBUTTONDOWN:
+            az = C.radar_az_at(mx, my)
+            if az is not None:
+                with lock:
+                    test["world_az"] = float(az)
+                    test["on"] = True
+
+    cv2.setMouseCallback(win, on_mouse)
 
     # Capture = PyAudio WASAPI loopback (raw 7.1); output = sounddevice to the headphones
     # (blocksize=0 lets it pick the host-native buffer; the callbacks handle any frame count).
@@ -372,6 +456,15 @@ def main(argv=None) -> int:
                 with lock:
                     state["az"] = dirs[:, 0].copy()
             nearest_i = nearest_front_channel(dirs)
+            head_deg = -float(dirs[c_idx][0])  # where the head faces in the world
+            # Experiment test source: advance any auto-rotation and update its head-relative az
+            # (a world-fixed source at world_az is heard at world_az + the head's own offset).
+            dt = (times[-1] - times[-2]) if len(times) >= 2 else 0.0
+            with lock:
+                if test["rotate"]:
+                    test["world_az"] = (test["world_az"] + args.rotate_speed * dt + 180.0) \
+                        % 360.0 - 180.0
+                test["az"] = float(test["world_az"]) + float(dirs[c_idx][0])
 
             span = times[-1] - times[0]
             rate = (len(times) - 1) / span if len(times) > 1 and span > 0 else 0.0
@@ -396,13 +489,19 @@ def main(argv=None) -> int:
                 ("lat", f"~{diag.end_to_end_ms:.0f}ms", C.health_color(diag.health)),
                 ("facing", brir.channels[nearest_i] + ("  [flip]" if flip_az else ""), C.ACTIVE),
             ]
-            buttons = [("Recenter", "C", True), ("Stats", "S", False),
-                       ("Flip", "F", False), ("Quit", "Q", False)]
+            if test["on"]:
+                readout.append(("test", f"{test['method']} {test['world_az']:+.0f}\xb0"
+                                + ("  SOLO" if test["solo"] else "")
+                                + ("  rot" if test["rotate"] else ""), C.GOOD))
+            buttons = [("Test", "T", test["on"]), ("Method", "M", False),
+                       ("Stats", "S", False), ("Quit", "Q", False)]
             canvas = C.compose(
                 frame, title=f"world-lock passthrough — webcam {cam_index}", live=live,
-                live_color=live_col, pose=pose, landmarks=landmarks, lock=None, dirs=dirs,
-                channels=brir.channels, nearest_i=nearest_i, readout=readout, buttons=buttons,
-                diagnosis=diag, show_stats=show_stats, audio_stats=True, rate_hz=rate, phase=phase)
+                live_color=live_col, pose=pose, landmarks=landmarks, lock=None,
+                world_az=world_az, channels=brir.channels, facing_i=nearest_i, head_deg=head_deg,
+                source_az=(test["world_az"] if test["on"] else None),
+                readout=readout, buttons=buttons, diagnosis=diag, show_stats=show_stats,
+                audio_stats=True, rate_hz=rate, phase=phase)
             cv2.imshow(win, canvas)
             key = cv2.waitKey(1) & 0xFF
             if key in (ord("q"), 27):
@@ -411,6 +510,31 @@ def main(argv=None) -> int:
                 show_stats = not show_stats
             if key == ord("f"):
                 flip_az = not flip_az
+            if key == ord("t"):  # experiment layer: toggle the movable test source
+                with lock:
+                    test["on"] = not test["on"]
+            if key == ord("o"):  # solo: hear only the test source (mute the 7.1)
+                with lock:
+                    test["solo"] = not test["solo"]
+            if key == ord("r"):  # auto-rotate the test source around you
+                with lock:
+                    test["rotate"] = not test["rotate"]
+            if key in (ord("["), ord("]")):  # test level down / up
+                with lock:
+                    f = 0.8 if key == ord("[") else 1.25
+                    test["gain"] = float(np.clip(test["gain"] * f, 0.02, 4.0))
+            if key == ord("m"):  # cycle the test source's interpolation method (synth on demand)
+                nxt = EXPERIMENT_METHODS[(EXPERIMENT_METHODS.index(test["method"]) + 1)
+                                         % len(EXPERIMENT_METHODS)]
+                if nxt not in test_renderers:
+                    cv2.putText(canvas, f"synthesizing {nxt} grid...", (C.CAM_W + 20, 70),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, ACCENT, 1, cv2.LINE_AA)
+                    cv2.imshow(win, canvas)
+                    cv2.waitKey(1)
+                    test_renderers[nxt] = build_test_renderer(nxt)
+                with lock:
+                    test["renderer"] = test_renderers[nxt]
+                    test["method"] = nxt
             if key == ord("c") and recent:
                 new_cal = calibrate_neutral(list(recent), yaw_sign=args.yaw_sign,
                                             pitch_sign=args.pitch_sign, roll_sign=args.roll_sign)
