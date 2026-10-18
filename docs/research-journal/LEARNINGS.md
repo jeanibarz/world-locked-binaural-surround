@@ -568,3 +568,14 @@ full story.
     OS timer resolution for the run. The real app is immune — it's driven by hardware callbacks, not
     sleeps. A latency harness must not manufacture the very dropouts it's meant to detect.
     (→ [44](44-exclusive-output-and-the-50ms-milestone.md))
+74. **A low-latency device mode can trade away *clock sync*, not just buffer size.** WASAPI exclusive
+    removes the Windows engine's resampling between two unsynchronised clocks; in a capture-and-play
+    (loopback) design that pushes all the drift onto a small application FIFO, which then glitches —
+    exclusive mode suits a single-clock render-to-hardware path, not a two-clock bridge, and shared
+    mode's "wasted" ~10 ms is buying the resampling that keeps it glitch-free. Don't recommend a
+    latency mode without accounting for the clock topology. (→ [45](45-exclusive-breaks-two-clock-and-overflow-drops.md))
+75. **Count every way audio is lost, not just the obvious one.** The FIFO *starving* (underrun) and
+    the FIFO *overflowing* (drop-oldest under clock drift) are both audible glitches; instrumenting
+    only underruns made the health panel report "0 dropouts" exactly while the ear heard every
+    discard. A dropped sample is a dropped sample however it left — timestamp and surface both.
+    (→ [45](45-exclusive-breaks-two-clock-and-overflow-drops.md))

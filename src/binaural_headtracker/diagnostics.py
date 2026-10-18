@@ -65,6 +65,7 @@ class Diagnosis:
     pose_age_p99_ms: float
     pose_age_n: int             # number of measured samples behind the distribution
     recent_underruns: int
+    recent_overflows: int    # FIFO overflow drops (clock drift / capture bursts) — also audible
     fifo_fill_blocks: float
     cushion_blocks: int
     # camera / tracker pipeline
@@ -90,6 +91,7 @@ def classify(
     input_latency_ms: float = 0.0,
     pose_rate_hz: float = 0.0,
     recent_underruns: int = 0,
+    recent_overflows: int = 0,
     measured_pose_age_ms: float | None = None,
     measured_pose_age_p95_ms: float = 0.0,
     measured_pose_age_p99_ms: float = 0.0,
@@ -142,6 +144,12 @@ def classify(
     if recent_underruns > 0:
         health = Health.FAILING
         reasons.append(f"{recent_underruns} dropout(s) just now — the render missed the deadline")
+    if recent_overflows > 0:
+        health = Health.FAILING
+        reasons.append(
+            f"{recent_overflows} buffer-overflow drop(s) — capture/output clocks are drifting "
+            "faster than the cushion absorbs (e.g. WASAPI exclusive; raise --latency-ms or use "
+            "shared mode)")
     if load_peak > 1.0:
         health = Health.FAILING
         reasons.append(f"a render spike hit {load_peak * 100:.0f}% of the block budget (over 100%)")
@@ -209,6 +217,7 @@ def classify(
         pose_age_p99_ms=pose_age_p99,
         pose_age_n=pose_age_n,
         recent_underruns=recent_underruns,
+        recent_overflows=max(0, int(recent_overflows)),
         fifo_fill_blocks=fifo_fill_blocks,
         cushion_blocks=cushion_blocks,
         loop_ms=loop_ms,

@@ -46,6 +46,15 @@ def test_underruns_force_failing():
     assert any("dropout" in r for r in d.reasons)
 
 
+def test_overflow_drops_are_counted_and_failing():
+    # Clock-drift overflow drops are audible too — they must fail health and be reported, even
+    # when the output-underrun counter is 0 (the "0 dropouts but I hear glitches" bug).
+    d = classify(**{**BASE, "recent_underruns": 0, "recent_overflows": 5})
+    assert d.recent_overflows == 5
+    assert d.health is Health.FAILING
+    assert any("overflow" in r for r in d.reasons)
+
+
 def test_render_over_budget_is_failing():
     d = classify(**{**BASE, "render_ms": 8.0, "render_ms_peak": 12.0})  # peak > 10.67 ms budget
     assert d.health is Health.FAILING

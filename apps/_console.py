@@ -387,9 +387,13 @@ def stats_panel(canvas, x, y, w, h, d: Diagnosis, *, audio=True, extra_rate_hz=0
         text(canvas, f"{d.fifo_fill_blocks:.0f}/{d.cushion_blocks} blk", cxl + 312, yy,
              FG, 0.38, mono=True)
         yy += 22
-        dc = RED if d.recent_underruns else GOOD
+        over = getattr(d, "recent_overflows", 0)
+        dc = RED if (d.recent_underruns or over) else GOOD
         text(canvas, "dropouts", cxl, yy, MUTED, 0.42, mono=True)
-        text(canvas, f"{d.recent_underruns} recent", cxl + 120, yy, dc, 0.42, mono=True)
+        txt = f"{d.recent_underruns} recent"
+        if over:
+            txt += f"  +{over} overflow"  # clock-drift drops (e.g. WASAPI exclusive)
+        text(canvas, txt, cxl + 120, yy, dc, 0.42, mono=True)
         yy += 26
     else:
         text(canvas, "audio not running (calibration only)", cxl, yy, FAINT, 0.4, mono=True)
