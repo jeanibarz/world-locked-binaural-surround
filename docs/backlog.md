@@ -271,6 +271,13 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   "active"→**"facing"** (7.1 plays all channels; no single active one), and `SPEAKER_LAYOUT_7P1`
   corrected to the **Dolby 7.1 angles** (side ±110°, rear ±150°) which drive the world-lock
   steering + radar and must match the baked BRIR directions (journal 32). 305 tests.)_
+- [x] **B6.5** In-passthrough experiment layer + world-frame radar.
+  _(Radar is world-frame: speakers fixed at their world azimuths, the head arrow + gaze cone
+  rotate; `_console.radar_az_at` inverts the geometry for click-to-place. The passthrough gains a
+  movable test source mixed into the live duplex (the 7.1 path is untouched when off): **T**
+  toggle, **O** solo, **R** auto-rotate, **[ ]** level, **click** the radar to place, **M** cycle
+  the interpolation method (dense grid, B3.3). Source = `--source` WAV or a built-in noise tick.
+  Verified by PNG + offline mix; 308 tests. See journal 34.)_
 
 ## M7 — AI-judge calibration
 

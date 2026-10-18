@@ -15,6 +15,8 @@ type differs from the HTML mock, but the layout, palette and components match.
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 from binaural_headtracker.diagnostics import Diagnosis, Health
@@ -182,45 +184,69 @@ def camera_panel(frame, *, pose=None, landmarks=None, lock=None, mirror=True, sc
 
 # ---------------------------------------------------------------- radar
 
-def radar(canvas, cx, cy, R, dirs, channels, nearest_i, *, legend=True):
+def _rot(px, py, deg):
+    """Rotate a point about the origin by ``deg`` (screen convention, y-down)."""
+    r = math.radians(deg)
+    c, s = math.cos(r), math.sin(r)
+    return px * c - py * s, px * s + py * c
+
+
+def radar(canvas, cx, cy, R, world_az, channels, facing_i, *, head_deg=0.0,
+          source_az=None, legend=True):
+    """World-frame radar: the speakers sit **fixed** at their world azimuths and the **head**
+    (centre arrow + gaze cone) rotates, so the world really looks world-locked. ``world_az`` is
+    the fixed per-channel world azimuth; ``head_deg`` is where the head faces in the world;
+    ``facing_i`` is the speaker nearest the gaze; ``source_az`` (optional) marks a test source."""
     cv2 = _cv2()
     for f in (1.0, 0.66, 0.33):
         cv2.circle(canvas, (cx, cy), int(R * f), LINE, 1, cv2.LINE_AA)
-    # forward field-of-view cone (translucent accent wedge, +/-28 deg)
+    # gaze field-of-view cone, centred on where the head faces (±28°)
     ov = canvas.copy()
     poly = [(cx, cy)]
-    for az in range(28, -29, -4):
-        x, y = azimuth_to_radar_xy(float(az), R, cx, cy)
+    for d in range(-28, 29, 4):
+        x, y = azimuth_to_radar_xy(head_deg + d, R, cx, cy)
         poly.append((int(x), int(y)))
     cv2.fillPoly(ov, [np.array(poly, np.int32)], ACCENT)
     _blend(canvas, ov, 0.10)
+    # cardinal labels are WORLD directions (fixed)
     for lbl, az in (("FRONT", 0), ("LEFT", 90), ("BACK", 180), ("RIGHT", -90)):
         x, y = azimuth_to_radar_xy(float(az), R + 18, cx, cy)
         text(canvas, lbl, x - text_w(lbl, 0.36) / 2, y + 4, MUTED, 0.36)
-    # dashed pointer to the active speaker
-    ax, ay = azimuth_to_radar_xy(float(dirs[nearest_i][0]), R, cx, cy)
-    _dashed(canvas, (cx, cy), (int(ax), int(ay)), ACTIVE)
+    # fixed world speakers
     for i, ch in enumerate(channels):
-        x, y = azimuth_to_radar_xy(float(dirs[i][0]), R, cx, cy)
-        on = i == nearest_i
+        x, y = azimuth_to_radar_xy(float(world_az[i]), R, cx, cy)
+        on = i == facing_i
         col = ACTIVE if on else ACCENT
         if on:
             cv2.circle(canvas, (int(x), int(y)), 14, ACTIVE, 1, cv2.LINE_AA)
         cv2.circle(canvas, (int(x), int(y)), 8 if on else 5, col, -1, cv2.LINE_AA)
         cv2.circle(canvas, (int(x), int(y)), 8 if on else 5, PANEL, 1, cv2.LINE_AA)
-        tx, ty = azimuth_to_radar_xy(float(dirs[i][0]), R - 20, cx, cy)
+        tx, ty = azimuth_to_radar_xy(float(world_az[i]), R - 20, cx, cy)
         text(canvas, ch, tx - text_w(ch, 0.34, mono=True) / 2, ty + 4,
              ACTIVE if on else MUTED, 0.34, mono=True)
-    # listener arrow (facing up = front)
-    arrow = np.array([[cx, cy - 13], [cx + 8, cy + 8], [cx, cy + 3], [cx - 8, cy + 8]])
+    # test source marker (a world-fixed sound you place for A/B)
+    if source_az is not None:
+        sx, sy = azimuth_to_radar_xy(float(source_az), R, cx, cy)
+        _dashed(canvas, (cx, cy), (int(sx), int(sy)), GOOD)
+        cv2.circle(canvas, (int(sx), int(sy)), 9, GOOD, -1, cv2.LINE_AA)
+        cv2.circle(canvas, (int(sx), int(sy)), 13, GOOD, 1, cv2.LINE_AA)
+        text(canvas, "src", int(sx) - text_w("src", 0.3, mono=True) / 2, int(sy) + 3,
+             BG, 0.3, mono=True)
+    # head: centre arrow rotated to the gaze direction (φ = −head_deg maps "up" → head_deg)
+    base = [(0, -13), (8, 8), (0, 3), (-8, 8)]
+    arrow = np.array([[int(cx + a), int(cy + b)]
+                      for a, b in (_rot(px, py, -head_deg) for px, py in base)])
     cv2.fillPoly(canvas, [arrow], FG)
     if legend:
         ly = cy + R + 34
-        cv2.circle(canvas, (cx - 90, ly - 4), 5, ACTIVE, -1, cv2.LINE_AA)
-        text(canvas, "facing", cx - 78, ly, MUTED, 0.36)
-        arr = np.array([[cx + 42, ly - 9], [cx + 48, ly], [cx + 36, ly]])
+        cv2.circle(canvas, (cx - 120, ly - 4), 5, ACTIVE, -1, cv2.LINE_AA)
+        text(canvas, "facing", cx - 108, ly, MUTED, 0.34)
+        arr = np.array([[cx - 20, ly - 9], [cx - 14, ly], [cx - 26, ly]])
         cv2.fillPoly(canvas, [arr], FG)
-        text(canvas, "you", cx + 54, ly, MUTED, 0.36)
+        text(canvas, "head", cx - 8, ly, MUTED, 0.34)
+        if source_az is not None:
+            cv2.circle(canvas, (cx + 58, ly - 4), 5, GOOD, -1, cv2.LINE_AA)
+            text(canvas, "test", cx + 68, ly, MUTED, 0.34)
 
 
 def _dashed(canvas, p0, p1, color, dash=6):
@@ -382,8 +408,29 @@ CAM_W, CAM_H = 600, 460
 RAD_W = 380
 
 
+RADAR_R = 140
+
+
+def radar_center():
+    return (CAM_W + RAD_W // 2, TITLE_H + CAM_H // 2 - 10)
+
+
+def radar_az_at(mx, my):
+    """World azimuth (deg) for a canvas click inside the radar ring, else ``None``.
+
+    Inverse of ``azimuth_to_radar_xy`` (``x = cx − R·sinβ``, ``y = cy − R·cosβ``), for
+    click-to-place in the world-frame radar.
+    """
+    cx, cy = radar_center()
+    r = math.hypot(mx - cx, my - cy)
+    if r < 6 or r > RADAR_R * 1.2:
+        return None
+    return math.degrees(math.atan2(cx - mx, cy - my))
+
+
 def compose(frame, *, title, live, live_color=GOOD, pose=None, landmarks=None, lock=None,
-            dirs=None, channels=None, nearest_i=0, readout=(), buttons=(), diagnosis=None,
+            world_az=None, channels=None, facing_i=0, head_deg=0.0, source_az=None,
+            readout=(), buttons=(), diagnosis=None,
             show_stats=False, audio_stats=True, rate_hz=0.0, phase=0.0):
     """Assemble the full Layout-A console canvas (titlebar · camera | radar · controls).
 
@@ -400,9 +447,10 @@ def compose(frame, *, title, live, live_color=GOOD, pose=None, landmarks=None, l
     # radar panel (right)
     cv2.rectangle(canvas, (CAM_W, TITLE_H), (W, TITLE_H + CAM_H), PANEL, -1)
     cv2.line(canvas, (CAM_W, TITLE_H), (CAM_W, TITLE_H + CAM_H), LINE, 1, cv2.LINE_AA)
-    if dirs is not None and channels is not None:
-        radar(canvas, CAM_W + RAD_W // 2, TITLE_H + CAM_H // 2 - 10, 140,
-              dirs, channels, nearest_i)
+    if world_az is not None and channels is not None:
+        rcx, rcy = radar_center()
+        radar(canvas, rcx, rcy, RADAR_R, world_az, channels, facing_i,
+              head_deg=head_deg, source_az=source_az)
     controls_bar(canvas, 0, TITLE_H + CAM_H, W, CTRL_H, list(readout), list(buttons))
     if show_stats and diagnosis is not None:
         # Overlay the diagnostics on the camera (left) so the radar stays visible while diagnosing.

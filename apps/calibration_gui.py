@@ -81,6 +81,8 @@ def main(argv=None) -> int:
 
     layout = layout_7p1()
     channels = layout.channels
+    world_az = layout.head_relative_directions()[:, 0]  # fixed world azimuths (neutral pose)
+    c_idx = channels.index("C") if "C" in channels else 0
     pose_filter = PoseFilter(args.min_cutoff, args.beta)
     recent: deque[HeadPose] = deque(maxlen=20)
     cal = HeadCalibration(0.0, 0.0, 0.0, args.yaw_sign, args.pitch_sign, args.roll_sign)
@@ -119,6 +121,7 @@ def main(argv=None) -> int:
         rate = (len(times) - 1) / span if len(times) > 1 and span > 0 else 0.0
         dirs = directions_for_pose(cal, pose, layout) if pose else layout.head_relative_directions()
         nearest_i = nearest_front_channel(dirs)
+        head_deg = -float(dirs[c_idx][0])  # where the head faces in the world
         active = channels[nearest_i] if pose else "--"
 
         live = "TRACKING" if pose is not None else "NO FACE"
@@ -136,9 +139,9 @@ def main(argv=None) -> int:
 
         canvas = C.compose(
             frame, title=f"calibration — webcam {cam_index}", live=live, live_color=live_col,
-            pose=pose, landmarks=landmarks, lock=None, dirs=dirs, channels=channels,
-            nearest_i=nearest_i, readout=readout, buttons=buttons, diagnosis=diag,
-            show_stats=show_stats, audio_stats=False, rate_hz=rate, phase=phase)
+            pose=pose, landmarks=landmarks, lock=None, world_az=world_az, channels=channels,
+            facing_i=nearest_i, head_deg=head_deg, readout=readout, buttons=buttons,
+            diagnosis=diag, show_stats=show_stats, audio_stats=False, rate_hz=rate, phase=phase)
         cv2.imshow(win, canvas)
         key = cv2.waitKey(1) & 0xFF
         if key in (ord("q"), 27):
