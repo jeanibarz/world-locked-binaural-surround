@@ -55,6 +55,7 @@ from binaural_headtracker.devices import (
 )
 from binaural_headtracker.diagnostics import classify
 from binaural_headtracker.head_pose import head_pose_from_matrix
+from binaural_headtracker.latency import LatencyProbe
 from binaural_headtracker.live_render import (
     InterpWorldLocked7p1,
     WorldLocked7p1,
@@ -301,6 +302,7 @@ def main(argv=None) -> int:
     state = {
         "az": layout.head_relative_directions()[:, 0].copy(),
         "cal": HeadCalibration(0.0, 0.0, 0.0, args.yaw_sign, args.pitch_sign, args.roll_sign),
+        "pose_t": None,  # capture time (monotonic s) of the pose behind "az"; None until first face
     }
     lock = threading.Lock()
     # The loopback capture clock ≠ the output clock, and both deliver audio in bursts, so
@@ -318,6 +320,13 @@ def main(argv=None) -> int:
     # peak), and the timestamps of recent output underruns (dropouts). Updated off the GUI thread
     # — the worker writes render times, the output callback records underruns (one cheap append).
     meter = {"ms": 0.0, "peak": 0.0, "test_ms": 0.0, "under_ts": deque(maxlen=256)}
+    # Measured pose-age-at-ear (B8.5): the worker timestamps each rendered block against the pose
+    # it carries and the audio still queued ahead of it, so the GUI shows a real distribution
+    # (p50/p95/p99) instead of the old estimate. ``out_lat`` is the output device buffer (ms),
+    # refreshed by the GUI loop from the live stream (the worker can't read it before it exists).
+    ear_probe = LatencyProbe()
+    out_lat = {"ms": 0.0}
+    block_ms = 1000.0 * args.block / brir.samplerate
 
     # The render must NOT run in the audio callback: the full 8-ch BRIR convolution (tens of
     # ms, GPU sync) would hold the GIL and starve the capture/output callbacks, collapsing
@@ -352,6 +361,7 @@ def main(argv=None) -> int:
             try:
                 with lock:
                     az = state["az"]
+                    pose_t = state["pose_t"]
                     r_main = main_rend["r"]
                     t_on, t_rnd, t_az = test["on"], test["renderer"], test["az"]
                     t_gain, t_solo = test["gain"], test["solo"]
@@ -395,6 +405,14 @@ def main(argv=None) -> int:
                         out_fifo.extend(rendered)
                         while len(out_fifo) > max_backlog:  # bound latency: drop oldest
                             out_fifo.popleft()
+                        ahead = max(0, len(out_fifo) - len(rendered))  # blocks before ours play
+                    # Measured pose age at the ear: how old this pose is now, plus the audio still
+                    # queued *ahead* of the first block we just pushed (it carries this pose), plus
+                    # the device's own buffer. (The camera exposure before pose_t is not
+                    # software-measurable — folded into a labelled ~1-frame estimate elsewhere.)
+                    if pose_t is not None:
+                        age_ms = (time.monotonic() - pose_t) * 1000.0
+                        ear_probe.add(age_ms + ahead * block_ms + out_lat["ms"])
             except BaseException as exc:  # noqa: BLE001
                 cb_error.append(exc)
 
@@ -518,6 +536,7 @@ def main(argv=None) -> int:
             if pose is not None:
                 with lock:
                     state["az"] = dirs[:, 0].copy()
+                    state["pose_t"] = pose.t  # carry the capture time for the pose-age probe
             nearest_i = nearest_front_channel(dirs)
             head_deg = -float(dirs[c_idx][0])  # where the head faces in the world
             # Experiment test source: advance any auto-rotation and update its head-relative az
@@ -536,7 +555,9 @@ def main(argv=None) -> int:
             # snapshot: out_cb may append concurrently (avoid "deque mutated during iteration")
             recent_under = sum(1 for t in tuple(meter["under_ts"]) if now - t < 2.0)
             out_lat_ms = float(getattr(out_ctx, "latency", 0.0) or 0.0) * 1000.0
+            out_lat["ms"] = out_lat_ms  # feed the worker's pose-age probe (it can't read out_ctx)
             rlabel = main_rend["label"] + ("  · test ON" if test["on"] else "")
+            ear = ear_probe.stats()  # measured pose-age-at-ear distribution (B8.5)
             diag = classify(
                 block_size=args.block, samplerate=brir.samplerate,
                 render_ms=meter["ms"], render_ms_peak=meter["peak"],
@@ -546,6 +567,9 @@ def main(argv=None) -> int:
                 output_latency_ms=out_lat_ms,
                 input_latency_ms=1000.0 * args.block / brir.samplerate,
                 pose_rate_hz=rate, recent_underruns=recent_under,
+                measured_pose_age_ms=(ear.p50 if ear.n else None),
+                measured_pose_age_p95_ms=ear.p95, measured_pose_age_p99_ms=ear.p99,
+                measured_pose_age_n=ear.n,
                 detect_ms=detect_ms, camera_fps=cam_fps, cam_w=cam_w, cam_h=cam_h)
 
             live = "TRACKING" if pose is not None else "NO FACE"
@@ -629,6 +653,11 @@ def main(argv=None) -> int:
         pya.terminate()
         cap.release()
         cv2.destroyAllWindows()
+        es = ear_probe.stats()  # measured pose-age-at-ear distribution for the session (B8.5)
+        if es.n:
+            print(f"pose-age-at-ear (measured, n={es.n}): p50 {es.p50:.0f}  p95 {es.p95:.0f}  "
+                  f"p99 {es.p99:.0f}  min {es.min:.0f}  max {es.max:.0f} ms  "
+                  f"(+ ~1 camera frame of exposure not counted)", flush=True)
     return RESTART_EXIT_CODE if restart else 0
 
 

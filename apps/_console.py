@@ -347,13 +347,22 @@ def stats_panel(canvas, x, y, w, h, d: Diagnosis, *, audio=True, extra_rate_hz=0
     yy += 6
 
     if audio:
-        # Head -> ear estimate (the headline number), big.
+        # Head -> ear (the headline number), big. Measured from the live pose-age probe (B8.5)
+        # when samples exist, else the stage-sum estimate.
+        measured = getattr(d, "end_to_end_measured", False)
         text(canvas, "head-move -> ear", cxl, yy, MUTED, 0.42, mono=True)
         text(canvas, f"~{d.end_to_end_ms:5.0f} ms", cxl + 150, yy + 2, FG, 0.62)
-        text(canvas, "(estimate)", cxl + 270, yy, FAINT, 0.36, mono=True)
+        text(canvas, "(measured p50)" if measured else "(estimate)",
+             cxl + 270, yy, GOOD if measured else FAINT, 0.36, mono=True)
         yy += 22
-        text(canvas, f"  tracking ~{d.tracking_ms:.0f} - render+buffer ~"
-             f"{d.audio_out_latency_ms + d.render_ms:.0f} ms", cxl, yy, FAINT, 0.36, mono=True)
+        if measured and getattr(d, "pose_age_n", 0):
+            # the measured distribution: tail matters more than the median for world-lock
+            text(canvas, f"  pose->ear  p95 {d.pose_age_p95_ms:.0f}  p99 "
+                 f"{d.pose_age_p99_ms:.0f} ms  (+~{d.tracking_ms / 1.5:.0f} cam, n={d.pose_age_n})",
+                 cxl, yy, FAINT, 0.36, mono=True)
+        else:
+            text(canvas, f"  tracking ~{d.tracking_ms:.0f} - render+buffer ~"
+                 f"{d.audio_out_latency_ms + d.render_ms:.0f} ms", cxl, yy, FAINT, 0.36, mono=True)
         yy += 26
         # render load bar
         text(canvas, "render load", cxl, yy, MUTED, 0.42, mono=True)
