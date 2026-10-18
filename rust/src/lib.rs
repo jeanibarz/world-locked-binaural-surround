@@ -173,12 +173,17 @@ impl BusConvolver {
             }
         }
 
-        let (block, nfft, f, p, pos) = (self.block, self.nfft, self.f, self.p, self.pos);
-        let inv_n = 1.0 / nfft as f64;
+        let (block, _nfft, f, p, pos) = (self.block, self.nfft, self.f, self.p, self.pos);
+        let inv_n = 1.0 / self.nfft as f64;
         let r2c = &self.r2c;
         let c2r = &self.c2r;
+        let buses = &mut self.buses;
 
-        self.buses.par_iter_mut().for_each(|b| {
+        // Release the GIL for the pure-Rust convolution: the closure touches no Python
+        // objects (the input was already copied into each bus above), so other Python
+        // threads — e.g. the camera/pose loop — run concurrently with the render.
+        py.allow_threads(|| {
+        buses.par_iter_mut().for_each(|b| {
             // Forward FFT of this block's [prev, x] window → store as the newest FDL entry.
             r2c.process_with_scratch(&mut b.window, &mut b.xspec, &mut b.scratch_f)
                 .unwrap();
@@ -210,6 +215,7 @@ impl BusConvolver {
                     dst[n] = b.time[block + n] * inv_n;
                 }
             }
+        });
         });
 
         self.pos = (pos + 1) % p;
