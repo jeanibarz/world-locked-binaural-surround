@@ -42,6 +42,7 @@ import time
 from collections import deque
 from pathlib import Path
 
+import _console as C
 import numpy as np
 
 from binaural_headtracker.calibrate import HeadCalibration, calibrate_neutral, directions_for_pose
@@ -52,9 +53,11 @@ from binaural_headtracker.devices import (
     resolve_output_device,
     settings_dialog,
 )
+from binaural_headtracker.diagnostics import classify
 from binaural_headtracker.head_pose import head_pose_from_matrix
 from binaural_headtracker.live_render import WorldLocked7p1
 from binaural_headtracker.output_eq import load_output_eq
+from binaural_headtracker.radar import nearest_front_channel
 from binaural_headtracker.surround import load_baked_brir
 from binaural_headtracker.tracking import HeadPose, PoseFilter
 from binaural_headtracker.world import layout_7p1
@@ -199,6 +202,11 @@ def main(argv=None) -> int:
     cb_error: list[BaseException] = []
     max_backlog = cushion * 2  # cap latency growth from drift at ~2x the target cushion
 
+    # Live diagnostics the GUI panel reads (B6.3): render time per block (EWMA mean + a decaying
+    # peak), and the timestamps of recent output underruns (dropouts). Updated off the GUI thread
+    # — the worker writes render times, the output callback records underruns (one cheap append).
+    meter = {"ms": 0.0, "peak": 0.0, "under_ts": deque(maxlen=256)}
+
     # The render must NOT run in the audio callback: the full 8-ch BRIR convolution (tens of
     # ms, GPU sync) would hold the GIL and starve the capture/output callbacks, collapsing
     # throughput and dropping audio (measured: ~31 kHz effective, constant drops). Instead the
@@ -244,6 +252,7 @@ def main(argv=None) -> int:
                 buf = np.concatenate([in_tail["buf"], cap], axis=0)
                 i = 0
                 rendered = []
+                t0 = time.perf_counter()
                 while buf.shape[0] - i >= args.block:
                     stereo = renderer.process_block(buf[i : i + args.block], az)
                     if output_eq is not None:
@@ -251,6 +260,10 @@ def main(argv=None) -> int:
                     rendered.append(stereo * args.gain)
                     i += args.block
                 in_tail["buf"] = buf[i:]
+                if rendered:  # per-block render time: EWMA mean + a slowly-decaying peak
+                    per_ms = (time.perf_counter() - t0) * 1000.0 / len(rendered)
+                    meter["ms"] = 0.9 * meter["ms"] + 0.1 * per_ms if meter["ms"] else per_ms
+                    meter["peak"] = max(per_ms, meter["peak"] * 0.97)
                 if rendered:
                     with fifo_lock:
                         out_fifo.extend(rendered)
@@ -271,6 +284,7 @@ def main(argv=None) -> int:
             outdata[:n] = buf[:n].astype(np.float32)
             if n < frames:
                 outdata[n:] = 0  # underrun → silence
+                meter["under_ts"].append(time.monotonic())  # record the dropout (cheap)
             out_carry["buf"] = buf[n:]
         except BaseException as exc:  # noqa: BLE001
             cb_error.append(exc)
@@ -280,10 +294,14 @@ def main(argv=None) -> int:
         base_options=mp.tasks.BaseOptions(model_asset_path=str(args.model)),
         output_facial_transformation_matrixes=True, num_faces=1))
     cap = cv2.VideoCapture(cam_index)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # freshest frame, don't trail buffered ones
     recent: deque[HeadPose] = deque(maxlen=20)
     pose_filter = PoseFilter(args.min_cutoff, args.beta)
     flip_az = args.flip_az
     miss = 0  # consecutive failed camera reads (graceful degradation, B4.2)
+    times: deque[float] = deque(maxlen=60)  # frame timestamps → tracker rate
+    show_stats = False
+    phase = 0.0
     win = "Binaural head-tracker — world-lock passthrough"
 
     # Capture = PyAudio WASAPI loopback (raw 7.1); output = sounddevice to the headphones
@@ -321,33 +339,66 @@ def main(argv=None) -> int:
                 continue
             miss = 0
             now = time.monotonic()
+            times.append(now)
+            phase = (phase + 0.03) % 1.0
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)  # un-mirrored → real yaw sign
             result = detector.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
             frame = cv2.flip(frame, 1)  # mirror for display only
+            pose = None
+            landmarks = result.face_landmarks[0] if result.face_landmarks else None
+            with lock:
+                cal = state["cal"]
             if result.facial_transformation_matrixes:
                 yaw, pitch, roll = head_pose_from_matrix(
                     np.asarray(result.facial_transformation_matrixes[0]))
                 pose = pose_filter.update(HeadPose(yaw, pitch, roll, now))
                 recent.append(pose)
-                with lock:
-                    cal = state["cal"]
-                az = directions_for_pose(cal, pose, layout)[:, 0]
-                if flip_az:
-                    az = -az
-                with lock:
-                    state["az"] = az
-                cv2.putText(frame, f"yaw {pose.yaw:+5.1f}{'  [flip]' if flip_az else ''}",
-                            (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.6, ACCENT, 1, cv2.LINE_AA)
+                dirs = directions_for_pose(cal, pose, layout)
             else:
-                cv2.putText(frame, "no face", (12, 28),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, MUTED, 1, cv2.LINE_AA)
-            cv2.putText(frame, "[C] recenter   [F] flip L/R   [Q] quit",
-                        (12, frame.shape[0] - 14),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, FG, 1, cv2.LINE_AA)
-            cv2.imshow(win, frame)
+                dirs = layout.head_relative_directions()
+            if flip_az:
+                dirs = dirs.copy()
+                dirs[:, 0] = -dirs[:, 0]
+            if pose is not None:
+                with lock:
+                    state["az"] = dirs[:, 0].copy()
+            nearest_i = nearest_front_channel(dirs)
+
+            span = times[-1] - times[0]
+            rate = (len(times) - 1) / span if len(times) > 1 and span > 0 else 0.0
+            with fifo_lock:
+                fifo_fill = len(out_fifo)
+            # snapshot: out_cb may append concurrently (avoid "deque mutated during iteration")
+            recent_under = sum(1 for t in tuple(meter["under_ts"]) if now - t < 2.0)
+            out_lat_ms = float(getattr(out_ctx, "latency", 0.0) or 0.0) * 1000.0
+            diag = classify(
+                block_size=args.block, samplerate=brir.samplerate,
+                render_ms=meter["ms"], render_ms_peak=meter["peak"],
+                fifo_fill_blocks=fifo_fill, cushion_blocks=cushion,
+                output_latency_ms=out_lat_ms,
+                input_latency_ms=1000.0 * args.block / brir.samplerate,
+                pose_rate_hz=rate, recent_underruns=recent_under)
+
+            live = "TRACKING" if pose is not None else "NO FACE"
+            live_col = C.GOOD if pose is not None else C.MUTED
+            readout = [
+                ("rate", f"{rate:3.0f}Hz", C.GOOD if rate >= 20 else C.ACTIVE),
+                ("lat", f"~{diag.end_to_end_ms:.0f}ms", C.health_color(diag.health)),
+                ("active", brir.channels[nearest_i] + ("  [flip]" if flip_az else ""), C.ACTIVE),
+            ]
+            buttons = [("Recenter", "C", True), ("Stats", "S", False),
+                       ("Flip", "F", False), ("Quit", "Q", False)]
+            canvas = C.compose(
+                frame, title=f"world-lock passthrough — webcam {cam_index}", live=live,
+                live_color=live_col, pose=pose, landmarks=landmarks, lock=None, dirs=dirs,
+                channels=brir.channels, nearest_i=nearest_i, readout=readout, buttons=buttons,
+                diagnosis=diag, show_stats=show_stats, audio_stats=True, rate_hz=rate, phase=phase)
+            cv2.imshow(win, canvas)
             key = cv2.waitKey(1) & 0xFF
             if key in (ord("q"), 27):
                 break
+            if key == ord("s"):
+                show_stats = not show_stats
             if key == ord("f"):
                 flip_az = not flip_az
             if key == ord("c") and recent:
