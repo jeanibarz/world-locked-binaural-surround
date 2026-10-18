@@ -415,15 +415,17 @@ def radar_center():
     return (CAM_W + RAD_W // 2, TITLE_H + CAM_H // 2 - 10)
 
 
-def radar_az_at(mx, my):
-    """World azimuth (deg) for a canvas click inside the radar ring, else ``None``.
+def radar_az_at(mx, my, *, allow_outside=False):
+    """World azimuth (deg) for a canvas point on the radar, else ``None``.
 
     Inverse of ``azimuth_to_radar_xy`` (``x = cx − R·sinβ``, ``y = cy − R·cosβ``), for
-    click-to-place in the world-frame radar.
+    click-to-place / drag in the world-frame radar. A click must land on the ring
+    (``allow_outside=False``); a **drag** passes ``allow_outside=True`` so staying a little
+    past the ring still tracks the cursor's angle (only the dead-centre is ignored).
     """
     cx, cy = radar_center()
     r = math.hypot(mx - cx, my - cy)
-    if r < 6 or r > RADAR_R * 1.2:
+    if r < 6 or (not allow_outside and r > RADAR_R * 1.3):
         return None
     return math.degrees(math.atan2(cx - mx, cy - my))
 
