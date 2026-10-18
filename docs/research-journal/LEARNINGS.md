@@ -598,3 +598,17 @@ full story.
     the per-block predicted step (max angular rate × horizon) is the cheap overshoot guard, and
     per-angle α-β beats reaching for quaternions when motion is yaw-dominated and the horizon short.
     (→ [47](47-orientation-prediction.md))
+79. **Validate a BRIR's onset before windowing — a baked filter can carry a large uniform leading
+    delay.** The owner's `baked_7p1_test` puts the direct at ~10 ms, not sample 0; a fixed 20 ms
+    window from sample 0 captures only ~28–53 % of the direct energy (half the window is dead air),
+    vs ~49–73 % once the measured uniform ~10 ms delay is subtracted. The onsets are uniform
+    (0.9 ms spread) so a **uniform constant subtract** beats a per-filter onset window — and the
+    envelope-peak onset (`estimate_delay`) latches a late reflection on some directions (~16.5 ms),
+    so an onset-aware window would clip the direct exactly where it's least robust. (→ [49](49-direct-shared-reverb-validation.md))
+80. **One shared mono late reverb is exact for correlated content and only ~1 dB low at full
+    decorrelation — because the direct dominates the energy.** `Σ_c tail_c = N · mean_tail`, so
+    convolving the summed scene with the per-ear mean tail reproduces the full per-direction tail
+    *exactly* for equal inputs; the error only grows as channels decorrelate (a mono reverb can't
+    make `Σ|H_c|²` from independent inputs), bounded to ≤~1 dB broadband / ≤1.4 dB per octave on the
+    real BRIR. The direct term is identical by construction, so localisation/ITD/ILD never move — the
+    one approximation is a diffuse-reverb *level* that drifts with content correlation. (→ [49](49-direct-shared-reverb-validation.md))
