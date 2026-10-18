@@ -414,3 +414,14 @@ full story.
     future-dispatch dwarfs ~180 µs of work. So the right GPU-drop path is a **targeted native
     (Rust/PyO3) render kernel** for the hot loop only — never a full rewrite that would also drag
     in the camera stack (MediaPipe/OpenCV) that was never the bottleneck. (→ [26](26-reaction-latency-and-cpu-headroom.md))
+56. **A narrow native kernel for just the hot loop recovers the whole GPU — on CPU.** Porting
+    only the batched partitioned convolution to Rust (PyO3, rustfft + rayon, allocation-free,
+    multithreaded over the 8 buses) — keeping the routing/crossfade/LFE and all tracking in
+    tested Python — hit **~5× real time at block 256** (pure-Python was 0.4×) and **bit-exact
+    parity (~1e-16)** with the Python renderer. Two enablers made the port cheap and safe: the
+    bus reformulation already isolated the heavy piece as one fixed-filter batch (so the native
+    code is a pure DSP leaf with no app logic), and it inherited the existing `BusMixer == voice
+    pool` proof, so the kernel only had to match `PartitionedConvolver` bin-for-bin (divide the
+    inverse real FFT by `nfft`, zero the DC/Nyquist imaginary bins to match numpy). Keep it an
+    **optional accelerator** (separate maturin crate, `importorskip` on CI) so the Python wheel
+    and CI stay toolchain-free. (→ [27](27-rust-render-kernel.md))

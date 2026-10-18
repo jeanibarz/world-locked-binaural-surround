@@ -91,7 +91,11 @@ def main(argv=None) -> int:
     p.add_argument("--roll-sign", type=float, default=1.0)
     p.add_argument("--flip-az", action="store_true", help="mirror azimuth L/R (also F live)")
     p.add_argument("--gpu", action="store_true",
-                   help="render on the GPU (CuPy) — needed for the full-BRIR 8ch path in real time")
+                   help="render on the GPU (CuPy) — the full-BRIR 8ch path in real time")
+    p.add_argument("--rust", action="store_true",
+                   help="render with the native Rust kernel (no GPU needed; ~5x real time on "
+                        "CPU at block 256). Build it first: maturin develop --release -m "
+                        "rust/Cargo.toml. Takes precedence over --gpu.")
     p.add_argument("--monitor", action="store_true",
                    help="print per-channel captured input RMS ~1/s (diagnose channel layout)")
     p.add_argument("--lfe-mode", choices=("flat", "brir"), default="flat",
@@ -106,7 +110,16 @@ def main(argv=None) -> int:
     brir = load_baked_brir(args.brir_dir)
     renderer = WorldLocked7p1(brir, block_size=args.block, fade_ms=args.fade_ms,
                               lfe_mode=args.lfe_mode)
-    if args.gpu:
+    if args.rust:
+        try:
+            from binaural_headtracker.rust_render import RustWorldLocked7p1
+            renderer = RustWorldLocked7p1(brir, block_size=args.block, fade_ms=args.fade_ms,
+                                          lfe_mode=args.lfe_mode)
+            print("render: native Rust kernel (CPU, no GPU)")
+        except Exception as exc:  # noqa: BLE001  — fall back to pure-Python CPU
+            print(f"Rust kernel unavailable ({exc!r}); build it with "
+                  "'maturin develop --release -m rust/Cargo.toml'. Falling back to CPU.")
+    elif args.gpu:
         try:
             from binaural_headtracker.gpu_render import GpuWorldLocked7p1
             renderer = GpuWorldLocked7p1(brir, block_size=args.block, fade_ms=args.fade_ms,
@@ -116,7 +129,7 @@ def main(argv=None) -> int:
             print(f"GPU render unavailable ({exc!r}); falling back to CPU "
                   "(may not keep up on the full 8ch BRIR)")
     else:
-        print("render: CPU (pass --gpu for the real-time full-BRIR path)")
+        print("render: pure-Python CPU (pass --rust for the native real-time path, or --gpu)")
 
     # Global output-bus comp + EQ (B5.3): the bare BRIRs carry room/direction but not the
     # headphone comp or subjective EQ, which EqualizerAPO applies once to the stereo mix. Apply

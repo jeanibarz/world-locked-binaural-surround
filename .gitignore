@@ -20,3 +20,4 @@ models/
 .idea/
 .vscode/
 .ruff_cache/
+rust/target/
