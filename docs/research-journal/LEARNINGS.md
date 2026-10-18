@@ -598,3 +598,13 @@ full story.
     the per-block predicted step (max angular rate × horizon) is the cheap overshoot guard, and
     per-angle α-β beats reaching for quaternions when motion is yaw-dominated and the horizon short.
     (→ [47](47-orientation-prediction.md))
+79. **Profile the bottleneck before swapping the algorithm — "MAC-bound" was an assumption, not a
+    measurement.** Non-uniform partitioned convolution cut the kernel's MAC passes 4–8× and stayed
+    bit-exact (2.3e-14 vs scipy / the uniform engine), yet gave ~1.0× at the real 8×24000 BRIR: a
+    1-tap filter already costs ~85–90 % of the full per-block time, so the FFTs + per-call
+    FFI/allocation overhead dominate and the MAC saving cancels against NUPC's *added* FFT work. On a
+    vectorising CPU 47 complex MACs over ~513 bins are cheap next to three real FFTs per bus. NUPC
+    only wins once compute outweighs the fixed floor (2.36× at N=96000, 5× at 32 buses × 96000). The
+    lever at the current size is the overhead (in-place output, batched FFI), not the convolution
+    structure — and the burstier per-block load NUPC adds would even cost predictability. Measure the
+    floor first. (→ [48](48-nonuniform-partitioned-convolution.md))
