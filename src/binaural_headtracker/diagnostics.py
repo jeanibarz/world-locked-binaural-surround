@@ -1,0 +1,138 @@
+"""Real-time audio health + end-to-end latency estimate (B6.3).
+
+Pure, headless functions that turn the numbers the live apps already hold — block size,
+sample rate, measured render time per block, output-FIFO fill, device latencies, tracker
+rate, recent dropouts — into something a person can read: how much of the per-block
+real-time budget the render is burning, an **estimate of the head-move-to-ear delay**
+(with its caveats stated), and a plain verdict (healthy / tight / at risk / failing) with
+the reasons behind it. This is the brain of the GUI diagnostics panel; the drawing is
+host-side, but the maths here is unit-tested.
+
+The model, stage by stage, for the end-to-end "I turn my head → I hear it move" delay:
+
+* the camera only reports a *new* pose every ``1/rate`` s, and a frame is already ~one
+  interval old when it arrives → ``~1.5 × pose_interval`` of tracking age (the capture
+  exposure itself is not measurable from software, so this is an estimate);
+* the render worker turns the newest pose into audio within ~one ``block``;
+* that audio then waits in the output FIFO (``fifo_fill × block``) and the device's own
+  output buffer before it reaches the ear.
+
+So the reported estimate is a sum of measured stages plus a labelled tracking estimate, not
+a claim of exact physical latency.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import Enum
+
+
+class Health(str, Enum):
+    """Plain real-time verdict, worst-first when compared by :pyattr:`rank`."""
+
+    OK = "healthy"
+    TIGHT = "tight"
+    RISK = "at risk"
+    FAILING = "failing"
+
+    @property
+    def rank(self) -> int:
+        return {"healthy": 0, "tight": 1, "at risk": 2, "failing": 3}[self.value]
+
+
+@dataclass(frozen=True)
+class Diagnosis:
+    """A read-out of real-time health and estimated latency (all times in ms)."""
+
+    health: Health
+    reasons: tuple[str, ...]
+    block_ms: float             # one render block's duration (the real-time budget)
+    render_ms: float            # mean render time per block
+    render_ms_peak: float       # worst recent render time per block
+    render_load: float          # render_ms / block_ms (mean), 1.0 = exactly real time
+    render_load_peak: float     # render_ms_peak / block_ms
+    audio_out_latency_ms: float # a just-rendered sample's wait: FIFO fill + device out buffer
+    tracking_ms: float          # estimated pose age (camera → usable pose)
+    end_to_end_ms: float        # estimated head-move → ear (sum of stages below)
+    recent_underruns: int
+    fifo_fill_blocks: float
+    cushion_blocks: int
+
+
+def classify(
+    *,
+    block_size: int,
+    samplerate: int,
+    render_ms: float,
+    render_ms_peak: float,
+    fifo_fill_blocks: float,
+    cushion_blocks: int,
+    output_latency_ms: float = 0.0,
+    input_latency_ms: float = 0.0,
+    pose_rate_hz: float = 0.0,
+    recent_underruns: int = 0,
+) -> Diagnosis:
+    """Diagnose real-time health + estimate end-to-end latency from live numbers.
+
+    ``render_ms`` / ``render_ms_peak`` are the mean / worst render time for one ``block_size``
+    block (measured on the worker). ``fifo_fill_blocks`` is the current output FIFO fill;
+    ``cushion_blocks`` the target. Latencies are the device buffers (ms). ``pose_rate_hz`` is
+    the tracker update rate; ``recent_underruns`` the output dropouts counted in the last short
+    window. All inputs are clamped defensively so a cold start (zeros) yields a sane result.
+    """
+    block_ms = 1000.0 * block_size / samplerate if samplerate > 0 else 0.0
+    render_ms = max(0.0, render_ms)
+    render_ms_peak = max(render_ms, render_ms_peak)
+    load = render_ms / block_ms if block_ms > 0 else 0.0
+    load_peak = render_ms_peak / block_ms if block_ms > 0 else 0.0
+
+    # A just-rendered sample waits: whatever is queued in the FIFO, then the device buffer.
+    audio_out_ms = max(0.0, fifo_fill_blocks) * block_ms + max(0.0, output_latency_ms)
+    # Tracking age: a frame is ~one interval old when it arrives and the next is one interval
+    # away → ~1.5 intervals. Unmeasurable camera exposure is folded into this estimate.
+    pose_interval_ms = 1000.0 / pose_rate_hz if pose_rate_hz > 0 else 0.0
+    tracking_ms = 1.5 * pose_interval_ms
+    end_to_end_ms = (
+        tracking_ms + max(0.0, input_latency_ms) + block_ms + audio_out_ms
+    )
+
+    reasons: list[str] = []
+    health = Health.OK
+    if recent_underruns > 0:
+        health = Health.FAILING
+        reasons.append(f"{recent_underruns} dropout(s) just now — the render missed the deadline")
+    if load_peak > 1.0:
+        health = Health.FAILING
+        reasons.append(f"a render spike hit {load_peak * 100:.0f}% of the block budget (over 100%)")
+    elif load_peak > 0.85:
+        health = max(health, Health.RISK, key=lambda h: h.rank)
+        reasons.append(
+            f"render spikes reach {load_peak * 100:.0f}% of the budget — little headroom")
+    if load > 0.6 and health.rank < Health.RISK.rank:
+        health = max(health, Health.TIGHT, key=lambda h: h.rank)
+        reasons.append(f"render averages {load * 100:.0f}% of the per-block budget")
+    if cushion_blocks > 0 and fifo_fill_blocks < 1.0 and health is Health.OK:
+        # Buffer nearly empty but not yet dropping: worth noting as "tight".
+        health = Health.TIGHT
+        reasons.append("output buffer is nearly empty (close to a dropout)")
+    if not reasons:
+        reasons.append(
+            f"render uses {load * 100:.0f}% of the budget (peak {load_peak * 100:.0f}%); "
+            "buffer steady, no dropouts"
+        )
+
+    return Diagnosis(
+        health=health,
+        reasons=tuple(reasons),
+        block_ms=block_ms,
+        render_ms=render_ms,
+        render_ms_peak=render_ms_peak,
+        render_load=load,
+        render_load_peak=load_peak,
+        audio_out_latency_ms=audio_out_ms,
+        tracking_ms=tracking_ms,
+        end_to_end_ms=end_to_end_ms,
+        recent_underruns=recent_underruns,
+        fifo_fill_blocks=fifo_fill_blocks,
+        cushion_blocks=cushion_blocks,
+    )

@@ -1,0 +1,375 @@
+"""Shared OpenCV renderer for the VR-style console (B6.3) — host-side drawing only.
+
+One place for the look both host GUIs wear: the calibration console and the world-lock
+passthrough. It draws, on a BGR canvas, the mockup's components — a titlebar with a live
+status pill, the camera panel (subtle scanlines, face box + lock tag, a yaw/pitch/roll HUD),
+the top-down azimuth radar (rings, cardinal labels, forward-FOV cone, the nearest speaker
+highlighted with a halo and a dashed pointer, a listener arrow, a legend), a bottom controls
+bar (readout chips + key-hint buttons), and a toggleable **diagnostics overlay** fed by
+:mod:`binaural_headtracker.diagnostics`.
+
+Pure drawing on numpy arrays with `cv2`; no camera/audio/state here, so it stays a thin,
+reusable view. The palette is the mockup's, in OpenCV BGR. cv2 only has Hershey fonts, so the
+type differs from the HTML mock, but the layout, palette and components match.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+
+from binaural_headtracker.diagnostics import Diagnosis, Health
+from binaural_headtracker.radar import azimuth_to_radar_xy
+
+# Mockup palette, OpenCV BGR.
+BG = (23, 16, 13)        # #0d1017
+PANEL = (36, 26, 21)     # #151a24
+PANEL2 = (48, 34, 27)    # #1b2230
+LINE = (68, 51, 42)      # #2a3344
+FG = (245, 237, 232)     # #e8edf5
+MUTED = (171, 151, 139)  # #8b97ab
+FAINT = (138, 112, 100)  # #64708a
+ACCENT = (214, 214, 56)  # #38d6d6 tracking cyan
+ACTIVE = (75, 178, 246)  # #f6b24b active/recenter amber
+GOOD = (140, 217, 84)    # #54d98c
+WARN = (75, 178, 246)    # amber, reuse ACTIVE for "tight"
+RISK = (60, 140, 246)    # orange
+RED = (91, 84, 242)      # #f2545b failing
+
+_F = None  # cv2 font, set lazily
+
+
+def _cv2():
+    import cv2
+    return cv2
+
+
+def _font():
+    return _cv2().FONT_HERSHEY_SIMPLEX
+
+
+def health_color(h: Health):
+    return {Health.OK: GOOD, Health.TIGHT: ACTIVE, Health.RISK: RISK, Health.FAILING: RED}[h]
+
+
+def text(img, s, x, y, color, scale=0.42, thick=1, *, mono=False):
+    cv2 = _cv2()
+    font = cv2.FONT_HERSHEY_PLAIN if mono else cv2.FONT_HERSHEY_SIMPLEX
+    sc = scale * 1.25 if mono else scale
+    cv2.putText(img, s, (int(x), int(y)), font, sc, color, thick, cv2.LINE_AA)
+
+
+def text_w(s, scale=0.42, thick=1, *, mono=False):
+    cv2 = _cv2()
+    font = cv2.FONT_HERSHEY_PLAIN if mono else cv2.FONT_HERSHEY_SIMPLEX
+    sc = scale * 1.25 if mono else scale
+    (w, _), _ = cv2.getTextSize(s, font, sc, thick)
+    return w
+
+
+def rrect(img, x, y, w, h, color, *, fill=True, r=8, thick=1):
+    """Rounded rectangle (filled or stroked)."""
+    cv2 = _cv2()
+    x, y, w, h, r = int(x), int(y), int(w), int(h), int(r)
+    r = max(0, min(r, w // 2, h // 2))
+    if fill:
+        cv2.rectangle(img, (x + r, y), (x + w - r, y + h), color, -1)
+        cv2.rectangle(img, (x, y + r), (x + w, y + h - r), color, -1)
+        corners = ((x + r, y + r), (x + w - r, y + r),
+                   (x + r, y + h - r), (x + w - r, y + h - r))
+        for cx, cy in corners:
+            cv2.circle(img, (cx, cy), r, color, -1, cv2.LINE_AA)
+    else:
+        cv2.line(img, (x + r, y), (x + w - r, y), color, thick, cv2.LINE_AA)
+        cv2.line(img, (x + r, y + h), (x + w - r, y + h), color, thick, cv2.LINE_AA)
+        cv2.line(img, (x, y + r), (x, y + h - r), color, thick, cv2.LINE_AA)
+        cv2.line(img, (x + w, y + r), (x + w, y + h - r), color, thick, cv2.LINE_AA)
+        for cx, cy, a0 in ((x + r, y + r, 180), (x + w - r, y + r, 270),
+                           (x + w - r, y + h - r, 0), (x + r, y + h - r, 90)):
+            cv2.ellipse(img, (cx, cy), (r, r), a0, 0, 90, color, thick, cv2.LINE_AA)
+
+
+def _blend(img, overlay, alpha):
+    _cv2().addWeighted(overlay, alpha, img, 1 - alpha, 0, img)
+
+
+# ---------------------------------------------------------------- titlebar
+
+def titlebar(canvas, x, y, w, h, title, live_text, live_color, *, phase=0.0):
+    cv2 = _cv2()
+    cv2.rectangle(canvas, (x, y), (x + w, y + h), PANEL2, -1)
+    cv2.line(canvas, (x, y + h), (x + w, y + h), LINE, 1, cv2.LINE_AA)
+    cy = y + h // 2
+    for i in range(3):
+        cv2.circle(canvas, (x + 14 + i * 16, cy), 5, LINE, -1, cv2.LINE_AA)
+    text(canvas, title, x + 60, cy + 4, FG, 0.44, mono=True)
+    if live_text:
+        pill = f"{live_text}"
+        tw = text_w(pill, 0.42, mono=True)
+        px = x + w - tw - 26
+        # pulsing dot (phase 0..1)
+        rad = 4 + int(2 * (0.5 + 0.5 * np.sin(phase * 2 * np.pi)))
+        cv2.circle(canvas, (px - 10, cy), rad, live_color, -1, cv2.LINE_AA)
+        cv2.circle(canvas, (px - 10, cy), 7, live_color, 1, cv2.LINE_AA)
+        text(canvas, pill, px, cy + 4, live_color, 0.42, mono=True)
+
+
+# ---------------------------------------------------------------- camera panel
+
+def _hud(frame, yaw, pitch, roll):
+    cv2 = _cv2()
+    h = frame.shape[0]
+    for i, (lbl, val) in enumerate([("yaw", yaw), ("pitch", pitch), ("roll", roll)]):
+        y = h - 60 + i * 20
+        text(frame, lbl, 14, y, MUTED, 0.5, mono=True)
+        x0 = 66
+        rrect(frame, x0, y - 9, 100, 7, (40, 40, 40), r=3)
+        cv2.line(frame, (x0 + 50, y - 11), (x0 + 50, y - 1), (150, 150, 150), 1, cv2.LINE_AA)
+        px = int(x0 + 50 + np.clip(val, -45, 45) / 45 * 48)
+        cv2.line(frame, (px, y - 12), (px, y), ACTIVE, 2, cv2.LINE_AA)
+        text(frame, f"{val:+5.1f}", x0 + 112, y, ACCENT, 0.5, mono=True)
+
+
+def camera_panel(frame, *, pose=None, landmarks=None, lock=None, mirror=True, scanlines=True):
+    """Annotate a (already display-oriented) camera frame in place: scanlines, face box +
+    lock tag, mesh dots, and the yaw/pitch/roll HUD. ``landmarks`` are MediaPipe normalized
+    landmarks from the *un-mirrored* frame (x flipped here when ``mirror``)."""
+    cv2 = _cv2()
+    h, w = frame.shape[:2]
+    if scanlines:
+        ov = frame.copy()
+        for yy in range(0, h, 4):
+            cv2.line(ov, (0, yy), (w, yy), (255, 255, 255), 1)
+        _blend(frame, ov, 0.03)
+    xs = ys = None
+    if landmarks is not None:
+        pts = [((1.0 - lm.x) if mirror else lm.x, lm.y) for lm in landmarks]
+        for nx, ny in pts:
+            cv2.circle(frame, (int(nx * w), int(ny * h)), 1, ACCENT, -1, cv2.LINE_AA)
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+    if xs:
+        x0, x1 = int(min(xs) * w) - 10, int(max(xs) * w) + 10
+        y0, y1 = int(min(ys) * h) - 14, int(max(ys) * h) + 10
+        rrect(frame, x0, y0, x1 - x0, y1 - y0, ACCENT, fill=False, r=6, thick=1)
+        tag = f"face - lock {lock:.2f}" if lock is not None else "face"
+        tw = text_w(tag, 0.38, mono=True)
+        rrect(frame, x0, y0 - 16, tw + 10, 15, (0, 0, 0), r=3)
+        text(frame, tag, x0 + 5, y0 - 4, ACCENT, 0.38, mono=True)
+    if pose is not None:
+        _hud(frame, pose.yaw, pose.pitch, pose.roll)
+
+
+# ---------------------------------------------------------------- radar
+
+def radar(canvas, cx, cy, R, dirs, channels, nearest_i, *, legend=True):
+    cv2 = _cv2()
+    for f in (1.0, 0.66, 0.33):
+        cv2.circle(canvas, (cx, cy), int(R * f), LINE, 1, cv2.LINE_AA)
+    # forward field-of-view cone (translucent accent wedge, +/-28 deg)
+    ov = canvas.copy()
+    poly = [(cx, cy)]
+    for az in range(28, -29, -4):
+        x, y = azimuth_to_radar_xy(float(az), R, cx, cy)
+        poly.append((int(x), int(y)))
+    cv2.fillPoly(ov, [np.array(poly, np.int32)], ACCENT)
+    _blend(canvas, ov, 0.10)
+    for lbl, az in (("FRONT", 0), ("LEFT", 90), ("BACK", 180), ("RIGHT", -90)):
+        x, y = azimuth_to_radar_xy(float(az), R + 18, cx, cy)
+        text(canvas, lbl, x - text_w(lbl, 0.36) / 2, y + 4, MUTED, 0.36)
+    # dashed pointer to the active speaker
+    ax, ay = azimuth_to_radar_xy(float(dirs[nearest_i][0]), R, cx, cy)
+    _dashed(canvas, (cx, cy), (int(ax), int(ay)), ACTIVE)
+    for i, ch in enumerate(channels):
+        x, y = azimuth_to_radar_xy(float(dirs[i][0]), R, cx, cy)
+        on = i == nearest_i
+        col = ACTIVE if on else ACCENT
+        if on:
+            cv2.circle(canvas, (int(x), int(y)), 14, ACTIVE, 1, cv2.LINE_AA)
+        cv2.circle(canvas, (int(x), int(y)), 8 if on else 5, col, -1, cv2.LINE_AA)
+        cv2.circle(canvas, (int(x), int(y)), 8 if on else 5, PANEL, 1, cv2.LINE_AA)
+        tx, ty = azimuth_to_radar_xy(float(dirs[i][0]), R - 20, cx, cy)
+        text(canvas, ch, tx - text_w(ch, 0.34, mono=True) / 2, ty + 4,
+             ACTIVE if on else MUTED, 0.34, mono=True)
+    # listener arrow (facing up = front)
+    arrow = np.array([[cx, cy - 13], [cx + 8, cy + 8], [cx, cy + 3], [cx - 8, cy + 8]])
+    cv2.fillPoly(canvas, [arrow], FG)
+    if legend:
+        ly = cy + R + 34
+        cv2.circle(canvas, (cx - 90, ly - 4), 5, ACTIVE, -1, cv2.LINE_AA)
+        text(canvas, "active speaker", cx - 78, ly, MUTED, 0.36)
+        arr = np.array([[cx + 42, ly - 9], [cx + 48, ly], [cx + 36, ly]])
+        cv2.fillPoly(canvas, [arr], FG)
+        text(canvas, "you", cx + 54, ly, MUTED, 0.36)
+
+
+def _dashed(canvas, p0, p1, color, dash=6):
+    cv2 = _cv2()
+    p0 = np.array(p0, float)
+    p1 = np.array(p1, float)
+    d = p1 - p0
+    n = int(np.hypot(*d) / dash)
+    if n < 1:
+        return
+    step = d / n
+    for i in range(0, n, 2):
+        a = p0 + step * i
+        b = p0 + step * min(i + 1, n)
+        cv2.line(canvas, (int(a[0]), int(a[1])), (int(b[0]), int(b[1])), color, 1, cv2.LINE_AA)
+
+
+# ---------------------------------------------------------------- controls bar
+
+def controls_bar(canvas, x, y, w, h, readout, buttons):
+    """`readout` = list of (label, value, value_color). `buttons` = list of (text, key, accent)."""
+    cv2 = _cv2()
+    cv2.rectangle(canvas, (x, y), (x + w, y + h), PANEL2, -1)
+    cv2.line(canvas, (x, y), (x + w, y), LINE, 1, cv2.LINE_AA)
+    cyb = y + h // 2
+    tx = x + 16
+    for lbl, val, vcol in readout:
+        text(canvas, lbl, tx, cyb + 4, MUTED, 0.4, mono=True)
+        tx += text_w(lbl, 0.4, mono=True) + 6
+        text(canvas, val, tx, cyb + 4, vcol, 0.42, mono=True)
+        tx += text_w(val, 0.42, mono=True) + 20
+    # buttons right-aligned
+    bx = x + w - 14
+    for btxt, key, accent in reversed(buttons):
+        label = f"{btxt} [{key}]"
+        bw = text_w(label, 0.42) + 22
+        col = ACTIVE if accent else FG
+        bgc = (int(ACTIVE[0] * 0.18 + PANEL[0]), int(ACTIVE[1] * 0.18 + PANEL[1]),
+               int(ACTIVE[2] * 0.18 + PANEL[2])) if accent else PANEL
+        rrect(canvas, bx - bw, cyb - 15, bw, 30, bgc, r=7)
+        rrect(canvas, bx - bw, cyb - 15, bw, 30, ACTIVE if accent else LINE, fill=False, r=7)
+        text(canvas, label, bx - bw + 11, cyb + 4, col, 0.42)
+        bx -= bw + 10
+
+
+# ---------------------------------------------------------------- diagnostics overlay
+
+def _bar(canvas, x, y, w, h, frac, color, *, peak=None):
+    cv2 = _cv2()
+    rrect(canvas, x, y, w, h, (40, 40, 40), r=h // 2)
+    fw = int(np.clip(frac, 0, 1) * w)
+    if fw > 0:
+        rrect(canvas, x, y, max(fw, h), h, color, r=h // 2)
+    if peak is not None:
+        pxp = x + int(np.clip(peak, 0, 1) * w)
+        cv2.line(canvas, (pxp, y - 2), (pxp, y + h + 2), FG, 1, cv2.LINE_AA)
+
+
+def stats_panel(canvas, x, y, w, h, d: Diagnosis, *, audio=True, extra_rate_hz=0.0):
+    """Draw the toggleable diagnostics overlay at (x,y,w,h) over the console."""
+    cv2 = _cv2()
+    ov = canvas.copy()
+    rrect(ov, x, y, w, h, PANEL, r=12)
+    _blend(canvas, ov, 0.92)
+    rrect(canvas, x, y, w, h, LINE, fill=False, r=12)
+    pad = 16
+    cxl = x + pad
+    yy = y + 30
+    text(canvas, "DIAGNOSTICS", cxl, yy, ACCENT, 0.5)
+    # verdict pill
+    hc = health_color(d.health)
+    label = d.health.value.upper()
+    pw = text_w(label, 0.5) + 20
+    rrect(canvas, x + w - pad - pw, yy - 16, pw, 22, hc, r=11)
+    text(canvas, label, x + w - pad - pw + 10, yy, BG, 0.5)
+    yy += 16
+    cv2.line(canvas, (cxl, yy), (x + w - pad, yy), LINE, 1, cv2.LINE_AA)
+    yy += 24
+
+    if audio:
+        # Head -> ear estimate (the headline number), big.
+        text(canvas, "head-move -> ear", cxl, yy, MUTED, 0.42, mono=True)
+        text(canvas, f"~{d.end_to_end_ms:5.0f} ms", cxl + 150, yy + 2, FG, 0.62)
+        text(canvas, "(estimate)", cxl + 270, yy, FAINT, 0.36, mono=True)
+        yy += 22
+        text(canvas, f"  tracking ~{d.tracking_ms:.0f} - render+buffer ~"
+             f"{d.audio_out_latency_ms + d.render_ms:.0f} ms", cxl, yy, FAINT, 0.36, mono=True)
+        yy += 26
+        # render load bar
+        text(canvas, "render load", cxl, yy, MUTED, 0.42, mono=True)
+        _bar(canvas, cxl + 120, yy - 9, 180, 9, d.render_load, health_color(d.health),
+             peak=d.render_load_peak)
+        text(canvas, f"{d.render_load * 100:.0f}% (pk {d.render_load_peak * 100:.0f}%)",
+             cxl + 312, yy, FG, 0.38, mono=True)
+        yy += 22
+        text(canvas, f"  budget {d.block_ms:.1f} ms/block", cxl, yy, FAINT, 0.36, mono=True)
+        yy += 24
+        # buffer fill bar
+        frac = d.fifo_fill_blocks / (2 * d.cushion_blocks) if d.cushion_blocks else 0.0
+        text(canvas, "out buffer", cxl, yy, MUTED, 0.42, mono=True)
+        _bar(canvas, cxl + 120, yy - 9, 180, 9, frac, GOOD if d.fifo_fill_blocks >= 1 else RED)
+        text(canvas, f"{d.fifo_fill_blocks:.0f}/{d.cushion_blocks} blk", cxl + 312, yy,
+             FG, 0.38, mono=True)
+        yy += 22
+        dc = RED if d.recent_underruns else GOOD
+        text(canvas, "dropouts", cxl, yy, MUTED, 0.42, mono=True)
+        text(canvas, f"{d.recent_underruns} recent", cxl + 120, yy, dc, 0.42, mono=True)
+        yy += 26
+    else:
+        text(canvas, "audio not running (calibration only)", cxl, yy, FAINT, 0.4, mono=True)
+        yy += 24
+    if extra_rate_hz:
+        text(canvas, "tracker", cxl, yy, MUTED, 0.42, mono=True)
+        text(canvas, f"{extra_rate_hz:.0f} Hz", cxl + 120, yy, ACCENT, 0.42, mono=True)
+        yy += 24
+    cv2.line(canvas, (cxl, yy - 6), (x + w - pad, yy - 6), LINE, 1, cv2.LINE_AA)
+    yy += 6
+    for r in d.reasons[:3]:
+        for line in _wrap(r, int((w - 2 * pad) / 7)):
+            text(canvas, line, cxl, yy, MUTED, 0.36, mono=True)
+            yy += 15
+
+
+def _wrap(s, width):
+    words = s.split()
+    out, cur = [], ""
+    for wd in words:
+        if len(cur) + len(wd) + 1 > width:
+            out.append(cur)
+            cur = wd
+        else:
+            cur = f"{cur} {wd}".strip()
+    if cur:
+        out.append(cur)
+    return out or [s]
+
+
+# ---------------------------------------------------------------- layout A compose
+
+TITLE_H = 34
+CTRL_H = 48
+CAM_W, CAM_H = 600, 460
+RAD_W = 380
+
+
+def compose(frame, *, title, live, live_color=GOOD, pose=None, landmarks=None, lock=None,
+            dirs=None, channels=None, nearest_i=0, readout=(), buttons=(), diagnosis=None,
+            show_stats=False, audio_stats=True, rate_hz=0.0, phase=0.0):
+    """Assemble the full Layout-A console canvas (titlebar · camera | radar · controls).
+
+    ``frame`` is the display-oriented camera image (annotated in place with the HUD/face box).
+    Returns a new BGR canvas sized ``(TITLE_H+CAM_H+CTRL_H, CAM_W+RAD_W, 3)``.
+    """
+    cv2 = _cv2()
+    W, H = CAM_W + RAD_W, TITLE_H + CAM_H + CTRL_H
+    canvas = np.full((H, W, 3), BG, np.uint8)
+    titlebar(canvas, 0, 0, W, TITLE_H, title, live, live_color, phase=phase)
+    # camera (left)
+    camera_panel(frame, pose=pose, landmarks=landmarks, lock=lock)
+    canvas[TITLE_H:TITLE_H + CAM_H, 0:CAM_W] = cv2.resize(frame, (CAM_W, CAM_H))
+    # radar panel (right)
+    cv2.rectangle(canvas, (CAM_W, TITLE_H), (W, TITLE_H + CAM_H), PANEL, -1)
+    cv2.line(canvas, (CAM_W, TITLE_H), (CAM_W, TITLE_H + CAM_H), LINE, 1, cv2.LINE_AA)
+    if dirs is not None and channels is not None:
+        radar(canvas, CAM_W + RAD_W // 2, TITLE_H + CAM_H // 2 - 10, 140,
+              dirs, channels, nearest_i)
+    controls_bar(canvas, 0, TITLE_H + CAM_H, W, CTRL_H, list(readout), list(buttons))
+    if show_stats and diagnosis is not None:
+        # Overlay the diagnostics on the camera (left) so the radar stays visible while diagnosing.
+        sw, sh = 420, 300
+        stats_panel(canvas, 14, TITLE_H + 14, sw, sh, diagnosis,
+                    audio=audio_stats, extra_rate_hz=rate_hz)
+    return canvas

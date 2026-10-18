@@ -245,6 +245,17 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   the mirror had inverted it, making the source track the head instead of the world. AGENTS.md
   now documents how to launch the host GUIs (interop, `sys.path` injection, local-`C:` model
   copy). See journal 23.)_
+- [x] **B6.3** VR-console refresh to the calibration mockup (layout A) + a toggleable real-time
+  **diagnostics panel**.
+  _(Shared `apps/_console.py` OpenCV renderer (titlebar + pulsing live pill, camera HUD + face
+  box, azimuth radar with FOV cone/halo/dashed pointer/legend, controls bar, stats overlay) used
+  by both `calibration_gui.py` and `voicemeeter_passthrough.py`. New tested
+  `binaural_headtracker.diagnostics.classify` turns live numbers (render ms, FIFO fill, device
+  latencies, tracker rate, recent underruns) into render-load, an end-to-end **head-move→ear
+  latency estimate**, and a plain verdict (healthy/tight/at risk/failing) with reasons. The
+  passthrough is instrumented (per-block render time EWMA+peak; underrun timestamps) with the
+  audio callbacks kept light; **S** toggles the panel. Verified via host PNG renders. 9 tests
+  (301 total). See journal 30.)_
 
 ## M7 — AI-judge calibration
 
