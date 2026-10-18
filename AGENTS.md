@@ -160,6 +160,15 @@ falls back to `if os.path.exists('/usr/local/cuda')`, which resolves into the WS
 when the process cwd is a `\\wsl.localhost\…` path and makes it load the wrong CUDA; (2)
 the owner's `.cmd` runs on Windows so neither applies there. (See journal 24; B4.1/B4.2.)
 
+**Native render kernel (Rust/PyO3) — the GPU-free fast path (B8.2).** `rust/` is a separate
+maturin crate `binaural_kernel` (the batched partitioned bus convolution in Rust), an
+**optional accelerator** — not part of the Python wheel, never required on CI (tests
+`pytest.importorskip("binaural_kernel")`). It reaches ~5× RT on CPU at block 256 (bit-exact vs
+the Python renderer), so the GPU is now optional. Build it into the venv with a Rust toolchain:
+`VIRTUAL_ENV=.venv maturin develop --release -m rust/Cargo.toml` (or from `rust/`). The apps
+select it with `--rust` (takes precedence over `--gpu`; falls back to pure-Python CPU if
+unbuilt). `rust/target/` is gitignored; `rust/Cargo.lock` is committed. (See journal 27.)
+
 ## Working discipline
 
 - **Prototype in Python first** for fast iteration, but the language is **not

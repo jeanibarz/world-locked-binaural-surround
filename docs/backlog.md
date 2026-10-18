@@ -262,8 +262,22 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
 
 ## M8 — Latency hardening
 
-- [ ] **B8.1** Profile the Python hot path; decide the native stack (JUCE /
+- [x] **B8.1** Profile the Python hot path; decide the native stack (JUCE /
   PortAudio / Rust) via a small benchmark; port the convolution path.
+  _(Profiled (journal 26): the convolution math is already 1.6–4.3× RT on CPU; the GPU was
+  masking Python per-block overhead, not a compute wall. Also tightened the head-move→ear
+  reaction latency — it's the output FIFO cushion, not the tracker: default `--latency-ms`
+  120→60, `max_backlog` 4×→2× cushion, output `latency="low"`. Native stack chosen: **Rust +
+  PyO3** (B8.2).)_
+- [x] **B8.2** Native render kernel (Rust/PyO3) to drop the GPU dependency.
+  _(`rust/` maturin crate `binaural_kernel`: the batched partitioned bus convolution
+  (`GpuBusConvolver`'s CPU twin) in Rust — rustfft + rayon, allocation-free, multithreaded over
+  the 8 buses — as an **optional accelerator** (importorskip on CI, not in the Python wheel).
+  `rust_render.RustWorldLocked7p1` drops in (BusMixer + native convolver + LFE); app flag
+  `--rust`. **Bit-exact (~1e-16)** vs the Python renderer; **~5× real time on CPU at block 256**
+  (Python 0.4×), so the GPU is now optional and low-latency small blocks are viable. 7 tests
+  (292 total). See journal 27. Follow-ups: pull BusMixer/LFE into the kernel; native low-latency
+  duplex (replace the Python audio bridge). → issue #31._
 
 ## M9 — Fine-tuning & release
 
