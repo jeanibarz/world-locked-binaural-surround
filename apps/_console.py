@@ -332,7 +332,19 @@ def stats_panel(canvas, x, y, w, h, d: Diagnosis, *, audio=True, extra_rate_hz=0
     text(canvas, label, x + w - pad - pw + 10, yy, BG, 0.5)
     yy += 16
     cv2.line(canvas, (cxl, yy), (x + w - pad, yy), LINE, 1, cv2.LINE_AA)
-    yy += 24
+    yy += 20
+    # Render config — what you are actually running (engine · method · grid · test state),
+    # and the block size in samples + ms, so it is never a guess.
+    if getattr(d, "render_label", ""):
+        for line in _wrap(d.render_label, int((w - 2 * pad) / 7)):
+            text(canvas, line, cxl, yy, FG, 0.4, mono=True)
+            yy += 16
+    if getattr(d, "block_size", 0):
+        khz = d.samplerate / 1000.0 if d.samplerate else 0.0
+        text(canvas, f"block {d.block_size} smp  ({d.block_ms:.1f} ms)  @ {khz:.1f} kHz",
+             cxl, yy, MUTED, 0.38, mono=True)
+        yy += 18
+    yy += 6
 
     if audio:
         # Head -> ear estimate (the headline number), big.
@@ -350,7 +362,14 @@ def stats_panel(canvas, x, y, w, h, d: Diagnosis, *, audio=True, extra_rate_hz=0
         text(canvas, f"{d.render_load * 100:.0f}% (pk {d.render_load_peak * 100:.0f}%)",
              cxl + 312, yy, FG, 0.38, mono=True)
         yy += 22
-        text(canvas, f"  budget {d.block_ms:.1f} ms/block", cxl, yy, FAINT, 0.36, mono=True)
+        # Split 7.1 vs test source when the test is adding load, so "test tips it over" is visible.
+        load_test = getattr(d, "render_load_test", 0.0)
+        if load_test > 0.005:
+            load_main = max(0.0, d.render_load - load_test)
+            text(canvas, f"  7.1 {load_main * 100:.0f}%  +  test {load_test * 100:.0f}%"
+                 f"   budget {d.block_ms:.1f} ms/block", cxl, yy, FAINT, 0.36, mono=True)
+        else:
+            text(canvas, f"  budget {d.block_ms:.1f} ms/block", cxl, yy, FAINT, 0.36, mono=True)
         yy += 24
         # buffer fill bar
         frac = d.fifo_fill_blocks / (2 * d.cushion_blocks) if d.cushion_blocks else 0.0
@@ -464,7 +483,7 @@ def compose(frame, *, title, live, live_color=GOOD, pose=None, landmarks=None, l
     controls_bar(canvas, 0, TITLE_H + CAM_H, W, CTRL_H, list(readout), list(buttons))
     if show_stats and diagnosis is not None:
         # Overlay the diagnostics on the camera (left) so the radar stays visible while diagnosing.
-        sw, sh = 420, 300
+        sw, sh = 420, 356  # taller: render-config + block line + 7.1/test load split (B6.7)
         stats_panel(canvas, 14, TITLE_H + 14, sw, sh, diagnosis,
                     audio=audio_stats, extra_rate_hz=rate_hz)
     return canvas

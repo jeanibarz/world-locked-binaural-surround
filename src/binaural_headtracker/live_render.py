@@ -525,6 +525,8 @@ class InterpWorldLocked7p1:
         self._brir = brir
         self._block = int(block_size)
         self._lfe_mode = lfe_mode
+        self._method = str(method)
+        self._grid_step = float(grid_step)
         self._dense, az = interpolated_ring(brir, method, step_deg=grid_step)
         self._grid_az = np.array([az[i] for i in range(self._dense.n_channels)], dtype=np.float64)
         self._dir_idx = [brir.channels.index(c) for c in RING_CHANNELS if c in brir.channels]
@@ -561,6 +563,24 @@ class InterpWorldLocked7p1:
     @property
     def samplerate(self) -> int:
         return self._brir.samplerate
+
+    @property
+    def engine(self) -> str:
+        """Which convolution backend this renderer actually built — ``'rust'`` or ``'cpu'``."""
+        return "rust" if self._rust else "cpu"
+
+    @property
+    def method(self) -> str:
+        return self._method
+
+    @property
+    def grid_step(self) -> float:
+        return self._grid_step
+
+    @property
+    def n_bus(self) -> int:
+        """Number of dense grid buses (one synthesized BRIR per grid direction)."""
+        return self._dense.n_channels
 
     def _nearest_grid(self, az_deg: float) -> int:
         d = np.abs(((self._grid_az - az_deg + 180.0) % 360.0) - 180.0)
