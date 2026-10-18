@@ -47,6 +47,7 @@ from binaural_headtracker.devices import (
 )
 from binaural_headtracker.head_pose import head_pose_from_matrix
 from binaural_headtracker.live_render import WorldLockedSource, source_layout
+from binaural_headtracker.output_eq import load_output_eq
 from binaural_headtracker.surround import load_baked_brir
 from binaural_headtracker.tracking import HeadPose, PoseFilter
 
@@ -108,6 +109,9 @@ def main(argv=None) -> int:
     p.add_argument("--pitch-sign", type=float, default=-1.0)
     p.add_argument("--roll-sign", type=float, default=1.0)
     p.add_argument("--record", type=Path, default=None, help="write <path>.wav + <path>.npz")
+    p.add_argument("--output-eq", type=Path, default=None,
+                   help="EqualizerAPO config whose global per-ear comp+EQ chain is applied to "
+                        "the stereo output, matching your tuned EqualizerAPO sound (B5.3)")
     args = p.parse_args(argv)
 
     brir = load_baked_brir(args.brir_dir)
@@ -116,6 +120,10 @@ def main(argv=None) -> int:
         raise SystemExit("source loop is empty")
     renderer = WorldLockedSource(brir, block_size=args.block, fade_ms=args.fade_ms)
     layout = source_layout(world_az_deg=args.world_az)
+    # Global output-bus comp + EQ (B5.3): apply the owner's headphone comp + subjective EQ to
+    # the stereo output so the demo sounds like the tuned EqualizerAPO config, not the bare bake.
+    output_eq = (load_output_eq(args.output_eq, samplerate=brir.samplerate, block_size=args.block)
+                 if args.output_eq is not None else None)
 
     # Pick the camera + audio output. A pre-launch dialog (dropdowns) by default; the
     # --camera/--audio-device flags are the scripted path and the dialog's defaults.
@@ -156,7 +164,10 @@ def main(argv=None) -> int:
                 pos = int((pos + args.block) % loop.size)
                 with lock:
                     az = state["az"]
-                stereo = renderer.process_block(mono, az) * args.gain
+                stereo = renderer.process_block(mono, az)
+                if output_eq is not None:
+                    stereo = output_eq.process_block(stereo)
+                stereo = stereo * args.gain
                 pending = np.concatenate([pending, stereo], axis=0)
                 if args.record is not None:
                     recorded.append(stereo.copy())

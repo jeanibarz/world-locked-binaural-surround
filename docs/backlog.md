@@ -201,13 +201,21 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   offline/heavy package (the depend-vs-port fork, resolved; see journal 14). 20 tests;
   **byte-exact parity (0.0) with the sibling on all 70 of the owner's real filters**,
   so our EQ == EqualizerAPO. Load-bearing for the image, not cosmetic (journal 13).)_
-- [ ] **B5.3** **Full-chain render integration:** wire a per-ear comp FIR (a
+- [x] **B5.3** **Full-chain render integration:** wire a per-ear comp FIR (a
   convolution — reuse `convolve`/`surround`) + the per-channel and bus
   `ParametricEQ` (B5.1) into the render path, so the static renderer emits the full
   comp+EQ-equivalent output (not the bare bake). Verify offline against the
   sibling's full-chain effective BRIR (the B5 spike already reconstructs it). This is
   what makes the renderer both *sound* and *localise* right — closes the "moving
   snare" loop (journal 13/14). _(discovered from journal 14)_
+  _(`binaural_headtracker.output_eq`: reads an EqualizerAPO config, isolates the
+  **global per-ear chain applied to the stereo mix after the downmix** (gain + comp
+  FIR + comp/subjective biquads) and applies it as an output-bus stage — the BRIRs,
+  and so the world-lock, are untouched. Wired into both host apps via `--output-eq`
+  (pair with `--lfe-mode brir`). The renderer's neutral output == the EqualizerAPO
+  downmix (existing test), so render+EQ reproduces the whole config: **bit-exact
+  (1.5e-14) vs the sibling's `reconstruct_brir`** on the owner's `rev26_final` across
+  all 8 channels/2 ears. 7 tests; 285 total. See journal 25.)_
 - [ ] **B5.2** Preset save/load (layout + HRIR + EQ + tracker calib).
 
 ## M6 — GUI

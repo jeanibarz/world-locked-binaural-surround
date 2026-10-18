@@ -52,6 +52,7 @@ from binaural_headtracker.devices import (
 )
 from binaural_headtracker.head_pose import head_pose_from_matrix
 from binaural_headtracker.live_render import WorldLocked7p1
+from binaural_headtracker.output_eq import load_output_eq
 from binaural_headtracker.surround import load_baked_brir
 from binaural_headtracker.tracking import HeadPose, PoseFilter
 from binaural_headtracker.world import layout_7p1
@@ -94,6 +95,10 @@ def main(argv=None) -> int:
     p.add_argument("--lfe-mode", choices=("flat", "brir"), default="flat",
                    help="'flat' sums LFE non-directionally to both ears (keeps the bass the "
                         "bass-light BRIRs strip); 'brir' convolves it through its BRIR (B4.3)")
+    p.add_argument("--output-eq", type=Path, default=None,
+                   help="EqualizerAPO config whose global per-ear comp+EQ chain (the part after "
+                        "the downmix to L/R) is applied to the stereo output, so the render "
+                        "matches your tuned EqualizerAPO sound (B5.3). Pair with --lfe-mode brir.")
     args = p.parse_args(argv)
 
     brir = load_baked_brir(args.brir_dir)
@@ -110,6 +115,18 @@ def main(argv=None) -> int:
                   "(may not keep up on the full 8ch BRIR)")
     else:
         print("render: CPU (pass --gpu for the real-time full-BRIR path)")
+
+    # Global output-bus comp + EQ (B5.3): the bare BRIRs carry room/direction but not the
+    # headphone comp or subjective EQ, which EqualizerAPO applies once to the stereo mix. Apply
+    # the same per-ear chain here so the render sounds like the tuned config, not the thin bake.
+    output_eq = None
+    if args.output_eq is not None:
+        output_eq = load_output_eq(
+            args.output_eq, samplerate=brir.samplerate, block_size=args.block)
+        print(f"output EQ: {args.output_eq} (global per-ear comp+EQ on the stereo bus)")
+        if args.lfe_mode != "brir":
+            print("  note: the EQ restores the sub-bass the LFE BRIR strips — pair it with "
+                  "--lfe-mode brir to match EqualizerAPO (flat LFE would double the bass).")
     layout = layout_7p1(channels=brir.channels)  # aligned to BRIR channel order
 
     out_devs, default_out = query_output_devices()
@@ -210,7 +227,10 @@ def main(argv=None) -> int:
                 i = 0
                 rendered = []
                 while buf.shape[0] - i >= args.block:
-                    rendered.append(renderer.process_block(buf[i : i + args.block], az) * args.gain)
+                    stereo = renderer.process_block(buf[i : i + args.block], az)
+                    if output_eq is not None:
+                        stereo = output_eq.process_block(stereo)
+                    rendered.append(stereo * args.gain)
                     i += args.block
                 in_tail["buf"] = buf[i:]
                 if rendered:
