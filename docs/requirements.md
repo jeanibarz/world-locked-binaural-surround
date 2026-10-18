@@ -190,6 +190,18 @@ air-absorption, near-field) from `|p_i − p_h|`.
 
 ## 7. Latency budget (target, MVP → native)
 
+**The metric that matters is the *pose age at the moment the sound is heard*** — when the
+listener hears a block of audio, how old is the head pose baked into it — not any single
+component maximum. Four delays feed it: (1) image delay (exposure, sensor read-out, USB,
+capture buffering — *not* `1/fps`); (2) compute (landmarks + 6-DoF estimation + filtering);
+(3) audio render (block/partition scheme + device buffer — note the FIR *length* does not set
+the algorithmic latency, the block size and buffering do); (4) the residual angular error
+`ω·Δt` while the head is actually turning. **They do not simply add** — capture and DSP are
+pipelined and a pose's age depends on the phase between frame arrivals and audio blocks, so the
+honest figure is a **distribution, not one number** (measure it: B8.5).
+
+Audio-path budget (the plumbing), MVP → native:
+
 | stage | MVP (Python) | target (native) |
 |---|---|---|
 | virtual-device capture buffer | 10–20 ms | 3–10 ms |
@@ -198,6 +210,73 @@ air-absorption, near-field) from `|p_i − p_h|`.
 | **audio end-to-end** | ~30–50 ms | **< 20–30 ms** |
 | camera + pose inference | 20–40 ms | 10–25 ms |
 | pose → audio apply (smoothed) | — | < ~50 ms total |
+
+Illustrative well-optimised **60 fps** path (a design target, not a measured camera):
+capture+transfer+buffers ~16 ms · landmarks+6-DoF ~7 ms (we measure ~3 ms detect on the C270,
+journal 31) · pose→DSP ~2 ms · DSP+output ~8 ms → **~33 ms pose age at the ear**. At a brisk
+90°/s head turn that is `90 × 0.033 ≈ 3.0°` of instantaneous angular lag — the owner's
+glance-to-the-other-screen (~45°) scenario.
+
+### 7.1 Perceptual targets — why ~33 ms is good, and where the risk is
+
+Two *different* thresholds bound this; conflating them is the usual mistake. (Figures are
+published-literature recall, **not** verified in this project's knowledge bases — a KB survey
+found no latency-threshold/MAMA material; verify against the primaries, and B8.5 replaces them
+with our own measurements. See journal 36.)
+
+- **Detecting the latency itself** (the scene swims/lags): just-noticeable total system latency
+  in dynamic binaural synthesis clusters **~50–75 ms** (Lindau 2009, lowest ~52 ms). So a pose
+  age comfortably **under ~50 ms is below most listeners' detection threshold**, under ~30 ms is
+  generous headroom. This sets NFR-1's `< ~50 ms` pose-to-audio goal. The current ~70–110 ms
+  (journal 26) is still *above* threshold — hence "it reacts too slowly".
+- **Resolving the angular error as an angle**: the minimum audible *movement* angle grows with
+  velocity — **~8° at 90°/s** (Perrott & Musicant 1977). So the ~3° latency-lag during a turn is
+  **below** MAMA and is not itself resolved *during* motion; what is heard is the temporal lag.
+  But once the head **stops**, the finer static minimum-audible-angle (~1°) applies — so a pose
+  that is still stale, or that a predictor has overshot, is plainly wrong at rest.
+
+Design consequence: reduce effective lag *during* motion but settle cleanly *at the stop* — the
+signature a good predictor targets (§7.2). The world-lock premise this protects is KB-backed:
+dynamic head-coupled cues lift front/back accuracy markedly over static binaural (51.0% → 69.3%,
+`sound-source-localization/2610.01388`).
+
+### 7.2 Orientation prediction — the main lever (B8.6)
+
+The biggest win after the output-cushion fix (journal 26) is **not** more landmarks or a faster
+pose rate: it is estimating head orientation at the *future* instant the DSP will render, so the
+pose baked into a block matches the head when that block is heard. A constant-angular-velocity
+extrapolation suffices for a first cut — `q̂(t+Δt) = q(t) ⊗ exp((Δt/2)·ω(t))` — with a
+lightweight **α-β** or orientation+angular-velocity state filter (not a heavy model). Payoff: the
+tracker stays at 60 Hz while the DSP re-evaluates the *predicted* pose at block rate, decoupling
+perceived reactivity from the camera frame rate (our real bottleneck). Precautions: **limit the
+horizon** and damp velocity so an abrupt stop doesn't overshoot (the ~1° static MAA, §7.1);
+filter jitter in `ω` without re-adding latency (the one-euro trade-off in `tracking.py`). Needs a
+pose timestamp carried end-to-end and the real Δt from B8.5.
+
+### 7.3 Measuring it (B8.5) — distributions, not means
+
+Report **p50/p95/p99 + extremes** (a rare 100 ms spike wrecks a world-locked scene far more than
+a slightly higher mean). Three measurements: (1) **camera→app** — a known temporal signal
+(LED/screen timecode) in view vs the frame's software-availability timestamp, accounting for the
+exposure window + rolling-shutter skew (`t_arrival` is arrival, not mid-exposure); (2) **compute
+time** — per-stage instrumentation (partly live already: `detect_ms`, per-block render EWMA);
+(3) **motion→sound** — an external (ideally motorised) rotation reference recorded with the audio
+output, effective applied orientation recovered by cross-correlation / system identification.
+This also decides whether the current camera is already good enough.
+
+### 7.4 What's achievable without big investment (camera path, cheapest-first — B0.7)
+
+Measure before buying. (1) **Optimise the C270 we have**: fix lighting / set **manual exposure +
+fixed focus** (journal 31: the 15 fps was low-light auto-exposure, not USB; native is 30 fps,
+detect ~3 ms), keep acquisition **decoupled** and **drop-latest** (process the newest frame,
+discard the stale queue); `CAP_PROP_BUFFERSIZE=1` is not guaranteed under MSMF/DSHOW, so verify
+the achieved frame age (B8.5), don't trust the flag. (2) **Only if measurements demand it, a
+60 fps *uncompressed* webcam** (manual exposure, no autofocus) — chosen for a *mastered*
+low-latency path, not a bigger headline fps: a nominal 90–120 fps camera only shaves the frame
+*period* (16.7→11.1 ms) and says nothing about the full capture→app delay. **Period ≠ pipeline
+latency.** (3) **A second camera only for angular coverage/occlusion robustness** across the
+±45° turns, fused by an **asynchronous temporal-state estimator** (per-camera pose+timestamp+
+confidence); reach for hardware sync only if async fusion proves insufficient.
 
 ## 8. Prior art / competitive landscape (FR context)
 

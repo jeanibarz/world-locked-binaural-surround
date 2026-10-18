@@ -38,8 +38,21 @@ Working end-to-end on Windows. The static + live render engine, the camera head
 tracker, and the **world-locked 7.1 passthrough** (any system audio → head-tracked →
 headphones) are built and live-validated, with the owner's headphone comp + EQ applied on
 the output. The render hot loop runs in real time on the **CPU** via a native Rust kernel
-(no GPU required). Still open: lower end-to-end latency (native duplex), HRIR fine-tuning,
-presets, and the AI-judge calibration loop.
+(no GPU required). Still open: lower end-to-end latency, HRIR fine-tuning, presets, and the
+AI-judge calibration loop.
+
+**Where latency is heading.** The felt "it reacts too slowly" was the audio output cushion,
+not the camera (now ~70–110 ms; see journal 26). The next lever is framed around the metric
+that actually governs a world-locked scene — the **pose age at the moment the sound is
+heard** — and is pursued cheaply, with the camera we have before any new hardware: (1)
+**measure** that pose age as a distribution (not a mean), (2) add **orientation prediction**
+to the audio-render instant (constant-ω quaternion extrapolation + a light α-β filter) so
+the convolution matches the head when the block is played, and (3) optimise the existing
+webcam (manual exposure, drop-latest capture) — a faster camera only if the measurements
+demand it. The design is grounded in the psychoacoustics of dynamic binaural perception
+(latency-detection threshold ≈ 50–75 ms; a few degrees of lag is sub-threshold *during* a
+turn but not at the stop): see [`docs/requirements.md`](docs/requirements.md) § 7 and journal
+entry 36.
 
 The project is built **block by block** by an autonomous Kookr agent chain that records its
 progress in a living research journal; read
