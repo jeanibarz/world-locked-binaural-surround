@@ -147,10 +147,48 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
 
 ## M4 — End-to-end on Windows
 
-- [ ] **B4.1** Live capture from the virtual 7.1 device → engine → chosen
+- [x] **B4.1** Live capture from the virtual 7.1 device → engine → chosen
   headphone output, running continuously without dropouts.
-- [ ] **B4.2** Graceful degradation: camera loss → freeze/fade; device change
+  _(`apps/voicemeeter_passthrough.py`: world-locks **any** system audio — point apps at a
+  virtual 7.1 output (VoiceMeeter), capture that stream, world-lock every channel with the
+  head pose, play stereo to the headphone card. Two discoveries drove the design (journal
+  24): (a) **capture via WASAPI loopback** (`pyaudiowpatch`), not VoiceMeeter's output bus —
+  the bus downmixes to stereo and loses centre/LFE/surrounds, so the loopback taps the raw
+  pre-mix 7.1 on the render endpoint; (b) the full 8ch × 500 ms-BRIR render is **~0.97× RT on
+  the CPU**, so it needs the GPU. The world-lock itself is `live_render.WorldLocked7p1` —
+  generalises B3.1's `WorldLockedSource` to 8 world-fixed speakers (each steered through its
+  nearest BRIR, click-free crossfade; LFE non-directional, convolved through its own fixed
+  BRIR). For the GPU it is reformulated as a **bus mix**: a time-varying crossfade of the 8
+  inputs into 8 **fixed-filter buses** (`BusMixer` + `bus_targets`), **proven identical to the
+  voice pool offline to 1e-9** over a head sweep — so only a batched partitioned convolution
+  is host-only (`gpu_render.GpuBusConvolver`/`GpuWorldLocked7p1`, CuPy, ~6× RT at block 256,
+  full tail). Capture and output run on independent clocks, bridged by a primed silence-cushion
+  FIFO with bounded backlog. The render runs on a **worker thread**, not in the audio callback —
+  live testing showed rendering inside the WASAPI capture callback collapses throughput to
+  ~31 kHz and drops constantly (GIL + GPU sync starve the callbacks); the worker keeps the
+  callbacks microsecond-light and sustains 48 kHz drop-free. 6 new tests (neutral == static
+  render, LFE not steered, yaw steers a channel to the rotated BRIR, bus-mix == voice pool);
+  278 total, ruff clean. **Validated live on the host**: continuous, drop-free 7.1 passthrough
+  with correct channel routing (confirmed via the loopback diagnostics — `spikes/b4_1_loopback_diag.py`
+  / the `audio-loopback-diagnostics` skill). Remaining "sounds wrong" is render quality, not B4.1
+  plumbing: LFE loses its bass through a sub-bass-dead BRIR (→ B4.3) and the bare bake lacks the
+  headphone comp+EQ chain (→ B5.3). See journal 24.)_
+- [~] **B4.2** Graceful degradation: camera loss → freeze/fade; device change
   handling.
+  _(Partial, landed with B4.1: the passthrough app already handles **camera loss** — hold the
+  last head pose (audio keeps world-locking), keep the window + keys alive, and reopen the
+  camera periodically rather than spin blind. Remaining: audio **device-change** handling
+  (headphone/virtual-device hot-swap) and a deliberate fade. See journal 24.)_
+- [x] **B4.3** Non-directional LFE: route the .1 channel flat to both ears, not convolved
+  through the directional BRIR (the baked BRIRs roll off sub-bass ~−20 dB — journal 24 loopback
+  diagnostics — so the pure-sub-bass LFE disappears when steered).
+  _(`lfe_mode` on `WorldLocked7p1` + `GpuWorldLocked7p1`: `"flat"` sums LFE to both ears at a
+  per-ear gain = that ear's LFE-IR L2 norm (loudness-matched to convolution, no spectral
+  rolloff, no tail); `"brir"` keeps the old convolve-through-BRIR path (default in the renderer,
+  == the static reference, so the neutral==static / lfe-not-steered tests still hold). The
+  passthrough app defaults to `--lfe-mode flat` (it wants the bass) with `brir` to A/B. Measured
+  +14 dB at 40 Hz (flat vs brir) on CPU and GPU; GPU flat == CPU flat to 1.7e-16. 1 new test
+  (278 total). The offline static render is deliberately left as the EqualizerAPO reference.)_
 
 ## M5 — Live filters & presets
 

@@ -336,3 +336,50 @@ full story.
     and fixes the sign at the root rather than papering over it with a flag. Predicted by the
     B6.1 review of the un-tested cv2 shell; confirmed only by a live head turn on the host —
     hardware is the only real test of a sign. (→ [23](23-device-pickers-and-host-bringup.md))
+48. **To capture system 7.1, loopback the render endpoint — don't read the mixer's output
+    bus.** A virtual mixer (VoiceMeeter) downmixes its *output* bus to stereo before exposing
+    it, so reading that as a capture device silently loses centre/LFE/surrounds (measure
+    per-channel RMS and only L/R carry signal). WASAPI **loopback** (`pyaudiowpatch` on
+    Windows) taps the raw stream apps send *into* the render endpoint, before any downmix —
+    the true 8 channels. Confirm the layout by measurement, not by the device's channel count.
+    (→ [24](24-voicemeeter-passthrough.md))
+49. **Reformulate a time-varying nearest-filter crossfade as a mix into fixed-filter buses, so
+    the convolution is batched and GPU-friendly.** Steering N sources each through their
+    current nearest BRIR (a per-source voice pool, L45) is, because convolution is linear,
+    identical to: crossfade the N inputs into N **fixed-BRIR buses** (each input's gain ramping
+    toward a one-hot on its current bus), then convolve each bus with its *fixed* filter and
+    sum. The gains move, the filters never do — so the convolution becomes one batched
+    partitioned overlap-save the GPU runs in a single shot. Prove the two forms equal offline
+    (here 1e-9 over a head sweep) so only the batched conv is host-only; the routing/crossfade
+    stays tested numpy. Needed because the full 8ch × 500 ms-BRIR render is ~0.97× RT on the
+    CPU and ~6× RT on the GPU. (→ [24](24-voicemeeter-passthrough.md))
+50. **Bridge two independent audio clocks with a primed, bounded FIFO.** Capture (loopback)
+    and playback run on separate clocks and deliver in bursts. Render in the input callback
+    (it owns the freshest head pose), push into a FIFO primed with a silence cushion that
+    absorbs the jitter, and drain it in the output callback (zero-fill on underrun). Cap the
+    backlog at a few cushions and drop oldest only on real drift, so latency stays bounded
+    instead of growing. A safe first duplex; a native low-latency path comes later.
+    (→ [24](24-voicemeeter-passthrough.md))
+51. **Run GPU host Python with the cwd on a real drive, not the WSL mount.** CuPy's
+    `_get_cuda_path` falls back to `os.path.exists('/usr/local/cuda')`; from a
+    `\\wsl.localhost\…` cwd that path resolves into the WSL filesystem and CuPy loads the wrong
+    CUDA. Also pin a consistent CUDA-12 runtime wheel set (`nvidia-*-cu12`) when the system
+    toolkit is an older CUDA, or cuFFT/nvrtc break. (→ [24](24-voicemeeter-passthrough.md))
+52. **Never do heavy DSP inside a real-time audio callback — render on a worker thread.** The
+    8-ch BRIR convolution (tens of ms, GPU sync) run inside the WASAPI capture callback held the
+    GIL and blocked, starving *both* audio callbacks: effective throughput collapsed to ~31 kHz
+    and audio dropped constantly — while PortAudio's own underflow flag stayed silent, so the
+    bug is invisible unless you measure effective rates. The callback must only enqueue (capture)
+    or drain (output) and return in microseconds; a dedicated worker thread does the render and
+    the FIFO cushion absorbs its jitter. Proven by A/B: a trivial render over the identical I/O
+    bridge sustained a flawless 48 kHz, 0 underruns. (→ [24](24-voicemeeter-passthrough.md))
+53. **Diagnose hardware audio by driving a KNOWN signal through the real path and measuring —
+    not by ear, and not by trusting headless tests.** Channel order, sample rates, real-time
+    timing and spectral coloration are properties of the device path, invisible to unit tests.
+    Feed a distinct tone per channel to recover the true capture order before assuming it matches
+    your code; feed broadband per channel and compare input/output spectra to find lost bass or
+    coloration. This found that the capture order *did* match, every channel renders, but the
+    baked BRIRs roll off sub-bass ~−20 dB — so the **LFE** (pure sub-bass) disappears: route a
+    non-directional LFE flat to both ears, don't convolve it through a bass-dead directional
+    HRIR. Toolkit: `spikes/b4_1_loopback_diag.py`; method: the `audio-loopback-diagnostics`
+    skill. (→ [24](24-voicemeeter-passthrough.md))

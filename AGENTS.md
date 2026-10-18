@@ -141,6 +141,25 @@ keep a local-`C:` copy for MediaPipe), the baked BRIR dir (`docs/baked-brir-setu
 and dry source WAVs (e.g. `caisse_claire_*`). A WSLg Tk window can **preview** a dialog
 from WSL, but the camera + audio always run on the host. (See journal 02; B6.2.)
 
+**The owner's host install location is `C:\Users\ibarz\BinauralHeadtracker\`** (per-user;
+Program Files needs admin we don't have). It holds the launchers (`launch_live.py`,
+`launch_passthrough.py` — each prepends the worktree's `apps`+`src` to `sys.path`, trying
+the active dev worktree first then the `main` checkout), the double-click `.cmd` wrappers
+(they use `%~dp0`, so they keep working wherever the folder is), the local-`C:` model copy,
+and `dry_snare.wav`. Put new host launchers/assets here, not in Downloads.
+
+**GPU compute (CuPy on the RTX 3090).** The CPU can't render the 8-channel 500 ms-BRIR
+passthrough in real time (~0.97× RT); the GPU does (batched partitioned convolution ≈6×
+RT at block 256, full BRIR). Host Python has `cupy-cuda12x` **plus the matching CUDA 12
+runtime wheels** — `nvidia-{cuda-runtime,cufft,cublas,cusparse,cusolver,curand,
+cuda-nvrtc,nvjitlink}-cu12` — because the system only has CUDA 11.x toolkits and CuPy 13's
+pathfinder needs a consistent CUDA-12 set in site-packages (installing only some leaves
+cuFFT/nvrtc broken). Two gotchas when launching the host Python **from WSL**: (1) run it
+with the cwd on a **real `C:` drive**, never the WSL worktree — CuPy's `_get_cuda_path`
+falls back to `if os.path.exists('/usr/local/cuda')`, which resolves into the WSL mount
+when the process cwd is a `\\wsl.localhost\…` path and makes it load the wrong CUDA; (2)
+the owner's `.cmd` runs on Windows so neither applies there. (See journal 24; B4.1/B4.2.)
+
 ## Working discipline
 
 - **Prototype in Python first** for fast iteration, but the language is **not
