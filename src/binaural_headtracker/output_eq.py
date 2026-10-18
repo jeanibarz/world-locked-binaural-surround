@@ -198,8 +198,9 @@ class OutputEQ:
     state both carry across blocks), so there are no block-boundary clicks. The left and
     right chains are independent (the comp FIR and comp biquads differ per ear).
 
-    Adds one block of latency per ear from the :class:`PartitionedConvolver` (no extra
-    algorithmic delay); the apps' output FIFO cushion absorbs it. Build one with
+    Introduces **no algorithmic delay** beyond the block the renderer already processes: the
+    :class:`PartitionedConvolver` returns block-aligned output (its only latency is the one
+    block of input buffering that the render pipeline already incurs). Build one with
     :func:`load_output_eq`.
     """
 
