@@ -432,6 +432,19 @@ _(the chain appends here as it learns)_
   flip front↔back (the worst error) while nearest only drifts in azimuth. Smooth
   rotation is the **render layer's** crossfade, not a synthesised in-between spectrum.
   _(journals 17→18; reverses the notchwarp default.)_
+- [x] **B1.13** **Loudness-match the synthesis interpolation.** Listening to stereo on `timealign`,
+  the owner heard the bass drop when facing straight ahead and swell when the head turned. Measured
+  on the real BRIR: `nearest` is flat, but `timealign`'s time-aligned direct blend sums the
+  neighbours' low frequencies **constructively**, so interpolated directions carry **+2–3 dB** more
+  bass than the measured speaker directions — a level ripple that dips at every measured node (where
+  the head rests). Not an HRIR balance fault. Fix: `baked_interp._loudness_match` rescales each
+  synthesized BRIR's smoothed combined (L²+R²) envelope to the **weight-interpolated measured
+  endpoints**, with the **same real gain on both ears**, so ITD/ILD (localisation) are preserved
+  exactly and only the per-band loudness changes; identity at nodes. `interpolate_baked_brir(...,
+  loudness_match=False)` on the primitive (raw synthesis kept as characterised), **on by default** in
+  `live_render.interpolated_ring` so the 7.1 world-lock + test source get it. Real-BRIR ripple
+  **+2.7 dB → +0.1 dB**, flat across the head turn; highs no longer dip. 5 tests (321 total).
+  See journal 41. _(owner listening report)_
 - [x] **B3.1 note** When the tracker→render coupling lands, it **must crossfade**
   between successive `nearest` BRIRs click-free as the head/source moves (the rotating
   demo proves the shape via Hann overlap-add). _(journal 18)_ **Done in B3.1** — the

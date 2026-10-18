@@ -337,3 +337,93 @@ def test_nearest_never_synthesises_only_eight_distinct_outputs():
     for az in range(0, 360, 11):
         left, _ = interpolate_baked_brir(brir, float(az), method="nearest")
         assert any(np.array_equal(left, m) for m in measured)
+
+
+# --- loudness-match: fix the synthesis LF level ripple (B1.13) ---------------
+
+def _broadband_set(seed=1):
+    """Like the synthetic set but each direct is a short *decorrelated* broadband burst
+    (not a delta), so the time-aligned blend changes the combined level across the pan —
+    the thing the loudness match exists to correct."""
+    rng = np.random.default_rng(seed)
+    chans = DIRECTIONAL_7P1
+    left = np.zeros((len(chans), N))
+    right = np.zeros((len(chans), N))
+    base = 60
+    for i, ch in enumerate(chans):
+        az = SPEAKER_LAYOUT_7P1[ch][0]
+        lat = int(round(20 * np.sin(np.radians(az))))
+        burst_l = rng.standard_normal(24)
+        burst_r = rng.standard_normal(24)
+        left[i, base - lat : base - lat + 24] = burst_l
+        right[i, base + lat : base + lat + 24] = burst_r
+        left[i, SPLIT:] = 0.02 * rng.standard_normal(N - SPLIT)
+        right[i, SPLIT:] = 0.02 * rng.standard_normal(N - SPLIT)
+    return BakedBRIRSet(channels=chans, left=left, right=right, samplerate=FS)
+
+
+def _combined_power(left, right, lo, hi):
+    nf = 1 << int(left.size - 1).bit_length()
+    f = np.fft.rfftfreq(nf, 1.0 / FS)
+    p = np.abs(np.fft.rfft(left, nf)) ** 2 + np.abs(np.fft.rfft(right, nf)) ** 2
+    m = (f >= lo) & (f < hi)
+    return p[m].sum()
+
+
+def test_loudness_match_preserves_ild_and_itd():
+    # The same real per-frequency gain is applied to both ears, so the complex L/R ratio
+    # (hence ILD and ITD — the localisation) is identical with and without the match.
+    brir = _broadband_set()
+    l0, r0 = interpolate_baked_brir(brir, 70.0, method="timealign", loudness_match=False)
+    l1, r1 = interpolate_baked_brir(brir, 70.0, method="timealign", loudness_match=True)
+    L0, R0 = np.fft.rfft(l0), np.fft.rfft(r0)
+    L1, R1 = np.fft.rfft(l1), np.fft.rfft(r1)
+    keep = (np.abs(L0) > 1e-6) & (np.abs(R0) > 1e-6)
+    gl, gr = L1[keep] / L0[keep], R1[keep] / R0[keep]
+    assert np.allclose(gl, gr, atol=1e-6)          # same gain both ears ⇒ ILD/ITD preserved
+    assert np.allclose(gl.imag, 0.0, atol=1e-6)    # the gain is real ⇒ phase (ITD) untouched
+
+
+def test_loudness_match_is_noop_at_a_measured_node():
+    brir = _broadband_set()
+    i = brir.index("SL")
+    az = SPEAKER_LAYOUT_7P1["SL"][0]
+    left, right = interpolate_baked_brir(brir, az, method="timealign", loudness_match=True)
+    assert np.array_equal(left, brir.left[i]) and np.array_equal(right, brir.right[i])
+
+
+def test_loudness_match_holds_level_constant_across_the_pan():
+    # Equal-level endpoints ⇒ a constant perceived level across the pan. Without the match
+    # the decorrelated direct blend makes the broadband level sag between speakers; with it
+    # the level stays within ~1 dB of the endpoints at every angle.
+    brir = _broadband_set()
+    lo, _ = interpolate_baked_brir(brir, 30.0, method="nearest")   # L endpoint
+    ro = interpolate_baked_brir(brir, 30.0, method="nearest")[1]
+    ref = 10 * np.log10(_combined_power(lo, ro, 60, 4000))
+    worst_off, worst_on = 0.0, 0.0
+    for az in (45.0, 60.0, 70.0, 85.0, 100.0):  # across the L→SL gap
+        for lm, acc in ((False, "off"), (True, "on")):
+            lft, rgt = interpolate_baked_brir(brir, az, method="timealign", loudness_match=lm)
+            dev = abs(10 * np.log10(_combined_power(lft, rgt, 60, 4000)) - ref)
+            if acc == "off":
+                worst_off = max(worst_off, dev)
+            else:
+                worst_on = max(worst_on, dev)
+    assert worst_on < 1.0            # matched: within ~1 dB of the endpoints everywhere
+    assert worst_on < worst_off      # and strictly better than the un-matched synthesis
+
+
+def test_loudness_match_targets_the_interpolated_endpoint_envelope():
+    # Unequal-level endpoints: the matched combined envelope must land on the weight-
+    # interpolated endpoint envelope (here L scaled +6 dB, SL normal, midpoint ⇒ +2.5x power).
+    brir = _broadband_set()
+    li = brir.index("L")
+    brir.left[li] *= 2.0
+    brir.right[li] *= 2.0
+    el = _combined_power(brir.left[li], brir.right[li], 60, 4000)
+    si = brir.index("SL")
+    es = _combined_power(brir.left[si], brir.right[si], 60, 4000)
+    target = 0.5 * el + 0.5 * es  # 70° is the L↔SL midpoint (frac 0.5)
+    lft, rgt = interpolate_baked_brir(brir, 70.0, method="timealign", loudness_match=True)
+    got = _combined_power(lft, rgt, 60, 4000)
+    assert abs(10 * np.log10(got / target)) < 1.0

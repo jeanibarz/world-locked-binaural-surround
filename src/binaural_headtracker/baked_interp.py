@@ -53,6 +53,15 @@ ONSET_SEARCH_MS = 10.0
 # A target within this many degrees of a measured speaker is treated as exact.
 EXACT_TOL_DEG = 1e-6
 
+# Loudness-match (B1.13): the time-aligned direct blend sums the two neighbours'
+# low frequencies constructively (long wavelengths are in phase once aligned), so a
+# synthesized in-between BRIR gains ~2–3 dB of bass over the measured endpoints —
+# a level *ripple* that dips at the measured nodes. Fix it by rescaling the synth's
+# smoothed magnitude envelope to the weight-interpolated envelope of the two
+# endpoints, equally on both ears (so ITD/ILD — the imaging — are untouched).
+SMOOTH_FRAC_OCT = 1.0 / 3.0   # fractional-octave smoothing of the envelope (gentle)
+LOUDNESS_CLAMP_DB = 9.0       # bound the per-frequency correction gain
+
 
 def ring_azimuths(
     brir: BakedBRIRSet, directional: tuple[str, ...] = DIRECTIONAL_7P1
@@ -273,6 +282,49 @@ def _interp_ear(
     return out
 
 
+def _octave_smooth(power: np.ndarray, freqs: np.ndarray, frac: float) -> np.ndarray:
+    """Smooth a non-negative spectrum over a ``frac``-octave running window (fast, via a
+    cumulative sum). Wide enough to track loudness per band, not the fine comb structure."""
+    cs = np.concatenate([[0.0], np.cumsum(power)])
+    lo = np.searchsorted(freqs, freqs / 2 ** (frac / 2))
+    hi = np.maximum(np.searchsorted(freqs, freqs * 2 ** (frac / 2)), lo + 1)
+    return (cs[hi] - cs[lo]) / np.maximum(hi - lo, 1)
+
+
+def _loudness_match(
+    left: np.ndarray, right: np.ndarray,
+    lo_l: np.ndarray, lo_r: np.ndarray, hi_l: np.ndarray, hi_r: np.ndarray,
+    w_lo: float, w_hi: float, samplerate: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Rescale the synthesized ``(left, right)`` so its smoothed **combined** (L²+R²) power
+    envelope matches the weight-interpolated envelope of the two measured endpoints.
+
+    The same real per-frequency gain is applied to both ears, so the interaural level/time
+    differences (ILD/ITD) the synthesis produced — i.e. the localisation — are preserved
+    exactly; only the overall per-band loudness is corrected, removing the node-to-node
+    ripple (B1.13). At a measured node (``w_lo`` or ``w_hi`` → 1) the target equals that
+    endpoint, so a correctly-levelled synth is left essentially unchanged.
+    """
+    n = max(left.size, right.size, lo_l.size, lo_r.size, hi_l.size, hi_r.size)
+    nfft = 1 << int(n - 1).bit_length() if n > 1 else 2
+    freqs = np.fft.rfftfreq(nfft, 1.0 / samplerate)
+    hl, hr = np.fft.rfft(left, nfft), np.fft.rfft(right, nfft)
+    syn = _octave_smooth(np.abs(hl) ** 2 + np.abs(hr) ** 2, freqs, SMOOTH_FRAC_OCT)
+
+    def endpoint(l_ir: np.ndarray, r_ir: np.ndarray) -> np.ndarray:
+        a, b = np.fft.rfft(l_ir, nfft), np.fft.rfft(r_ir, nfft)
+        return _octave_smooth(np.abs(a) ** 2 + np.abs(b) ** 2, freqs, SMOOTH_FRAC_OCT)
+
+    tgt = w_lo * endpoint(lo_l, lo_r) + w_hi * endpoint(hi_l, hi_r)
+    gain = np.sqrt((tgt + 1e-20) / (syn + 1e-20))
+    lim = 10 ** (LOUDNESS_CLAMP_DB / 20.0)
+    gain = np.clip(gain, 1.0 / lim, lim)
+    gain[0] = gain[1]  # avoid a DC-bin blow-up
+    out_l = np.fft.irfft(hl * gain, nfft)[: left.size]
+    out_r = np.fft.irfft(hr * gain, nfft)[: right.size]
+    return out_l, out_r
+
+
 def interpolate_baked_brir(
     brir: BakedBRIRSet,
     az: float,
@@ -280,6 +332,7 @@ def interpolate_baked_brir(
     method: str = "nearest",
     direct_ms: float = DEFAULT_DIRECT_MS,
     directional: tuple[str, ...] = DIRECTIONAL_7P1,
+    loudness_match: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return a ``(left, right)`` BRIR for azimuth ``az`` (deg, horizontal).
 
@@ -305,6 +358,15 @@ def interpolate_baked_brir(
     For the synthesis methods: bracket ``az`` between the two adjacent speakers and
     blend their directs (per ``direct_ms``); the room tail is held (equal-power blend
     in place). An exact measured azimuth returns that speaker unchanged.
+
+    ``loudness_match`` (B1.13) corrects the synthesis methods' low-frequency level ripple:
+    the time-aligned direct blend sums the neighbours' bass constructively, so an
+    in-between BRIR gains ~2–3 dB of bass over the measured endpoints and the level dips
+    at the measured nodes (audible as a bass swell when the head turns off a speaker).
+    When set, the synth's smoothed magnitude envelope is rescaled to the weight-interpolated
+    envelope of the two endpoints, **equally on both ears** so ITD/ILD (localisation) are
+    untouched. Off by default here (the primitive stays as characterised in B1.10/journal 18);
+    the render path turns it on via :func:`live_render.interpolated_ring`.
     """
     if method not in ("nearest", "timealign", "minphase", "notchwarp"):
         raise ValueError(
@@ -347,4 +409,10 @@ def interpolate_baked_brir(
 
     left = ear(brir.left[ch_lo], brir.left[ch_hi], w_lo, w_hi, split)
     right = ear(brir.right[ch_lo], brir.right[ch_hi], w_lo, w_hi, split)
+    if loudness_match:
+        left, right = _loudness_match(
+            left, right,
+            brir.left[ch_lo], brir.right[ch_lo], brir.left[ch_hi], brir.right[ch_hi],
+            w_lo, w_hi, brir.samplerate,
+        )
     return left, right
