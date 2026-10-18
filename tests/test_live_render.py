@@ -11,6 +11,7 @@ from binaural_headtracker.live_render import (
     RING_CHANNELS,
     WorldLocked7p1,
     WorldLockedSource,
+    interpolated_ring,
     nearest_brir_index,
     render_world_locked,
     ring_azimuths,
@@ -332,3 +333,41 @@ def test_bus_mix_matches_voice_pool_7p1() -> None:
         stereo[:, 1] += fftconvolve(bus_sig[bch], brir.right[bch])
     m = min(vp.shape[0], stereo.shape[0])
     assert np.allclose(vp[:m], stereo[:m], atol=1e-9)
+
+
+def test_interpolated_ring_shape_and_nearest_on_grid() -> None:
+    brir = _synthetic_brir()
+    dense, azmap = interpolated_ring(brir, "nearest", step_deg=10.0)
+    assert dense.n_channels == 36
+    assert dense.left.shape == (36, brir.left.shape[1])
+    assert len(azmap) == 36
+    # azimuths are wrapped to (-180, 180]; the ring includes the measured directions.
+    rounded = {round(v) for v in azmap.values()}
+    assert {0, 30, -30, 110, -110, 150, -150} <= rounded
+    # a grid point ON a measured direction (30° = L) returns that real BRIR unchanged.
+    i30 = next(i for i, v in azmap.items() if abs(v - 30.0) < 1e-6)
+    assert np.allclose(dense.left[i30], brir.left[brir.index("L")])
+    assert np.allclose(dense.right[i30], brir.right[brir.index("L")])
+
+
+def test_dense_ring_source_steers_to_grid_voice() -> None:
+    # A source held at 30° through the (nearest) dense grid settles to the L BRIR's plain
+    # convolution — i.e. the azimuths override steers over the grid exactly like the 7.1 ring.
+    brir = _synthetic_brir()
+    dense, azmap = interpolated_ring(brir, "nearest", step_deg=10.0)
+    block = 128
+    src = WorldLockedSource(dense, block_size=block, fade_ms=20.0, azimuths=azmap)
+    rng = np.random.default_rng(3)
+    nb = 48
+    x = rng.standard_normal(block * nb)
+    out = np.concatenate([src.process_block(x[b * block:(b + 1) * block], 30.0)
+                          for b in range(nb)], axis=0)
+    ref_l = fftconvolve(x, brir.left[brir.index("L")])
+    start = int(round(0.020 * SR)) + brir.n_taps + 8
+    assert np.allclose(out[start:nb * block, 0], ref_l[start:nb * block], atol=1e-9)
+
+
+def test_interpolated_ring_rejects_bad_step() -> None:
+    import pytest
+    with pytest.raises(ValueError):
+        interpolated_ring(_synthetic_brir(), "nearest", step_deg=0.0)

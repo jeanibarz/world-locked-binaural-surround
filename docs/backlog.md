@@ -144,6 +144,13 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   Windows/VoiceMeeter routing deferred to M4. See journal 22.)_
 - [ ] **B3.2** Perceptual demo: a world-fixed virtual speaker that stays put when
   the head turns; capture a short A/B (head-locked vs world-locked) for review.
+- [x] **B3.3** Live interpolation-method A/B in the snare demo.
+  _(`live_render.interpolated_ring` builds a dense directional BRIR set (one BRIR every
+  `--grid-step`° synthesized via `baked_interp`), and `WorldLockedSource` gained an `azimuths=`
+  override so the voice pool steers over it. The snare demo's **M** key cycles nearest →
+  timealign → minphase → notchwarp (synthesized on first use, 0.1–1.3 s, cached). Lets the owner
+  re-evaluate the methods by ear with the corrected Dolby layout — esp. the wide 80° front→side
+  gap; `nearest` stays the default. 3 tests (308 total). See journal 33.)_
 
 ## M4 — End-to-end on Windows
 

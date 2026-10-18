@@ -93,6 +93,39 @@ def nearest_brir_index(azimuths: dict[int, float], source_az_deg: float) -> int:
     return best_i
 
 
+def interpolated_ring(
+    brir: BakedBRIRSet, method: str = "nearest", *, step_deg: float = 10.0
+) -> tuple[BakedBRIRSet, dict[int, float]]:
+    """A **dense** directional BRIR set + its azimuths, one BRIR every ``step_deg`` around the
+    ring, synthesized with ``baked_interp.interpolate_baked_brir`` under ``method``.
+
+    Feed the pair to :class:`WorldLockedSource` (``azimuths=`` override) to steer a source over
+    a fine grid instead of the 8 measured speakers — the basis for comparing interpolation
+    methods live (B3.3). ``"nearest"`` snaps each grid point to its nearest real BRIR (so it is
+    the measured ring, just sampled denser, with no synthesis); ``"timealign"`` / ``"minphase"``
+    / ``"notchwarp"`` synthesize the in-between directions (journal 18's methods). Synthesizing
+    the whole grid is the one-off cost paid when a method is selected; the voice pool then builds
+    convolvers lazily and reuses them.
+    """
+    from binaural_headtracker.baked_interp import interpolate_baked_brir
+
+    if step_deg <= 0:
+        raise ValueError("step_deg must be positive")
+    azs = np.arange(0.0, 360.0, float(step_deg))
+    n = brir.n_taps
+    left = np.zeros((azs.size, n))
+    right = np.zeros((azs.size, n))
+    for i, az in enumerate(azs):
+        lft, rgt = interpolate_baked_brir(brir, float(az), method=method)
+        lft, rgt = np.asarray(lft), np.asarray(rgt)
+        left[i, : min(lft.size, n)] = lft[:n]
+        right[i, : min(rgt.size, n)] = rgt[:n]
+    channels = tuple(f"A{int(round(a)) % 360:03d}" for a in azs)
+    dense = BakedBRIRSet(channels=channels, left=left, right=right, samplerate=brir.samplerate)
+    azimuths = {i: _wrapped_deg(float(a)) for i, a in enumerate(azs)}
+    return dense, azimuths
+
+
 @dataclass
 class _Voice:
     conv: StereoConvolver
@@ -117,12 +150,16 @@ class WorldLockedSource:
         *,
         block_size: int = 256,
         fade_ms: float = 20.0,
+        azimuths: dict[int, float] | None = None,
     ) -> None:
         if block_size <= 0:
             raise ValueError("block_size must be positive")
         self._brir = brir
         self._block = int(block_size)
-        self._azimuths = ring_azimuths(brir)
+        # ``azimuths`` overrides the default 7.1 ring: pass a channel-index → azimuth map to
+        # steer over an arbitrary direction set, e.g. a dense interpolated grid for comparing
+        # interpolation methods (``interpolated_ring``). Defaults to the measured 7.1 ring.
+        self._azimuths = azimuths if azimuths is not None else ring_azimuths(brir)
         self._fade_samples = max(1, int(round(fade_ms * 1e-3 * brir.samplerate)))
         # One voice per directional channel (built lazily to keep steady state cheap).
         self._voices: dict[int, _Voice] = {}
