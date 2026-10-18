@@ -425,23 +425,25 @@ _(the chain appends here as it learns)_
   engine clock, no loopback, no second app), with the camera tracker feeding pose over shared
   memory and the Rust kernel wrapped as the plugin. Lowest-latency architecture; only needed for
   A-V sync, so deferred behind B8.6. _(owner question, journal 44)_
-- [ ] **B8.8** **Reduce the `queue` term — the live FIFO wait came in ~15–20× the bench.** The live
-  split (B8.5e, journal 47) measured **queue 16–20 ms** at playout, against the bench's **~1 ms**
-  (`queue ≈ cushion×block`, B8.5b / journal 42, 44) — the one stage the sim under-called. Journal 46
-  flagged exactly this case (*"if queue is unexpectedly large, tighten the FIFO drift first —
-  cheap"*) but B8.6 went straight to prediction for `stale` and never came back to it. Unlike
-  `stale` (prediction *masks* it, doesn't cut it) and `device` (needs the B8.7 single-clock
-  rearchitecture), `queue` is a **real, software-reducible** latency cut — and since B8.6's horizon =
-  the measured pose-age-at-ear p50, every ms off `queue` also shortens the prediction horizon → less
-  overshoot at a stop (double win). **Host experiment (needs the VoiceMeeter+FiiO host, no code):**
-  with `--predict` on, sweep `--latency-ms` 60→45→30→20, a few minutes of normal head motion each,
-  watching the **S** panel's `queue` and **both** drop counters (underrun + overflow, both live since
-  B6.8); the lowest cushion with zero drops over several minutes = new default. **First check
-  (~10 min):** the render worker drains the whole capture backlog and `extend`s the FIFO with every
-  rendered block in one burst (`apps/voicemeeter_passthrough.py:424-429`), so confirm whether the
-  16–20 ms is the primed cushion (`--latency-ms 60` ≈ 6 blocks at 512/48k) or burst backlog — if
-  burst, lowering the cushion won't be enough and a steadier drain / render-ahead cap is the real
-  fix. _(from journals 46/47; the queue lever journal 46 named and B8.6 skipped.)_
+- [~] **B8.8** **Reduce the `queue` term — it's the cushion floor; block size is the lever.**
+  _(**Measured** on the host via interop, journal 48: `scratchpad/queue_probe.py` reproduces the
+  passthrough's loopback-capture → burst-drain worker → output FIFO with a synthetic pose, and sweeps
+  block × `--latency-ms`.)_ The live split (B8.5e, journal 47) put **queue 16–20 ms** vs the bench's
+  ~1 ms — the difference is **producer pacing** (the bench is consumer-paced, near-empty; the live
+  worker is capture-burst-paced, holding the FIFO near the cushion). The measurement kills the
+  original "sweep `--latency-ms`" guess: `cushion = max(2, …)` has a **2-block floor**, the owner
+  already runs `--latency-ms 20`, so at block 512 the cushion is *already floored* (512@20 ≡ 512@10,
+  bit-identical, queue ~31 ms). **`queue` ≈ FIFO depth ≈ cushion blocks** (512→40 ms doubles it to
+  63 ms). The only real knob is **block size, paired with a low `--latency-ms`** so the cushion
+  reaches the floor: **block 256 + `--latency-ms` 10 → queue 31→15 ms, ear-latency 69→53 ms
+  (−16 ms)**; block 256 @ 20 stays at cushion 4 = no win; **block 128 glitches** (186 underruns +
+  480 overflow drops — the 2-block cushion can't absorb the two-clock drift, journal 45; the floor is
+  drift, not CPU). Also helps prediction: B8.6's horizon = the measured pose-age-at-ear p50, so −16 ms
+  off `queue` is −16 ms off the horizon → less overshoot at a stop. **Remaining (owner, by-ear):**
+  flip the launcher to `--block 256 --latency-ms 10 --predict` and confirm the few extra overflow
+  drops (4/7 vs 3/2 over 8 s) are inaudible during real head motion before making it the default — it
+  trades cushion headroom, so it's not a blind change. `device` (22 ms shared) still needs B8.7; the
+  2-block floor is structural. _(journals 46/47/48; the queue lever journal 46 named and B8.6 skipped.)_
 - [x] **B0.6** Complete the **measured** virtual round-trip latency: once a
   loopback route exists — VoiceMeeter VAIO strip → bus **B1**, or a dedicated
   **VB-CABLE** installed — run `spikes/b0_3_virtual_device.py` and record the real
