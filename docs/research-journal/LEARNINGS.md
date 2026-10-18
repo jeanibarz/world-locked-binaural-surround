@@ -398,3 +398,19 @@ full story.
     sub-bass the LFE BRIR strips, so the output EQ must pair with `--lfe-mode brir`, not the B4.3
     flat LFE, or the bass doubles. Proven by reproducing the sibling's full-chain reconstruction
     to 1.5e-14. (→ [25](25-output-bus-comp-eq.md))
+54b. **When "it reacts too slowly" but the on-screen tracker is instant, the lag is downstream
+    in the output buffer, not the sensor.** The GUI draws the filtered pose, so a fresh GUI
+    proves camera+detect+filter are fast; the only remaining delay is the audio path. Here it
+    was the output FIFO cushion (a head turn is heard ~cushion late, because already-rendered
+    audio drains first) plus a `max_backlog` that let drift balloon it — fixed by lowering the
+    cushion, capping the backlog near it (dropping only *excess future* audio never underruns),
+    and asking the device for low latency. Diagnose latency by *which stage still looks fresh*,
+    not by guessing. (→ [26](26-reaction-latency-and-cpu-headroom.md))
+55. **Profile before porting: a GPU (or a rewrite) may be masking interpreter overhead, not a
+    real compute wall.** The 8ch×500 ms BRIR convolution that "needed" the GPU (journal 24,
+    ~0.97× RT) is actually **1.6–4.3× realtime on one CPU core** as raw partitioned convolution;
+    the full pipeline's 0.93× is Python per-block orchestration (voice bookkeeping, crossfade
+    einsum, allocations), not FFTs. And naive per-block Python threading is *slower* (0.2× RT) —
+    future-dispatch dwarfs ~180 µs of work. So the right GPU-drop path is a **targeted native
+    (Rust/PyO3) render kernel** for the hot loop only — never a full rewrite that would also drag
+    in the camera stack (MediaPipe/OpenCV) that was never the bottleneck. (→ [26](26-reaction-latency-and-cpu-headroom.md))
