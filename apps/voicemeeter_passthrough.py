@@ -383,14 +383,26 @@ def main(argv=None) -> int:
     phase = 0.0
     win = "Binaural head-tracker — world-lock passthrough"
     cv2.namedWindow(win)
+    drag = {"on": False}
 
-    def on_mouse(event, mx, my, _flags, _param):  # noqa: ANN001  — click the radar to place test
+    def on_mouse(event, mx, my, flags, _param):  # noqa: ANN001  — click/drag the radar to move test
+        # Press starts a drag (and turns the test source on, stopping any auto-rotation);
+        # moving with the button held sweeps the source live; release ends the drag.
         if event == cv2.EVENT_LBUTTONDOWN:
             az = C.radar_az_at(mx, my)
             if az is not None:
                 with lock:
                     test["world_az"] = float(az)
                     test["on"] = True
+                    test["rotate"] = False
+                drag["on"] = True
+        elif event == cv2.EVENT_MOUSEMOVE and drag["on"] and (flags & cv2.EVENT_FLAG_LBUTTON):
+            az = C.radar_az_at(mx, my, allow_outside=True)
+            if az is not None:
+                with lock:
+                    test["world_az"] = float(az)
+        elif event == cv2.EVENT_LBUTTONUP:
+            drag["on"] = False
 
     cv2.setMouseCallback(win, on_mouse)
 
