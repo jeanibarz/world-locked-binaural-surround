@@ -510,3 +510,21 @@ full story.
     first is free groundwork, not a detour. The one part software can't see (camera exposure before
     the timestamp, ~1 frame) stays an explicit labelled estimate rather than a silent omission.
     (→ [40](40-pose-age-measurement.md))
+66. **Time-aligning then blending two broadband directs inflates the bass; fix loudness with a
+    both-ears-equal real gain.** `timealign` aligns the two neighbours' direct arrivals and sums
+    them with linear weights — but once aligned, their long wavelengths are correlated and add
+    **constructively**, so a synthesized in-between BRIR gains ~2–3 dB of bass over the measured
+    endpoints. The result is a level *ripple* that dips at the measured nodes, which the listener
+    hears as the surround going bass-light whenever the head faces a speaker and swelling when it
+    turns off-axis (the tail blend already dodged this with √-power weights; the direct did not).
+    The safe correction: rescale the synth's **smoothed combined (L²+R²) envelope** to the
+    weight-interpolated **measured** endpoints, applying the **same real per-frequency gain to both
+    ears** — real + shared ⇒ the inter-ear ratio (ILD) and phase (ITD) are untouched, so loudness is
+    fixed without disturbing localisation; interpolate toward the *measured* endpoints so nodes stay
+    exact and the pan is constant-loudness. (→ [41](41-timealign-loudness-match.md))
+67. **For correlated/stereo content the effective binaural response is just the sum of the active
+    channels' BRIRs — so you can diagnose spectral complaints by exact computation, no playback.**
+    Summing the channel BRIRs at their head-relative directions and taking the magnitude separated
+    "interpolation artifact" from "HRIR balance" in a single offline measurement (nearest flat,
+    timealign rippled), and it works on the owner's real BRIR straight off disk. Reach for the exact
+    sum before reaching for a mic or a listening test. (→ [41](41-timealign-loudness-match.md))

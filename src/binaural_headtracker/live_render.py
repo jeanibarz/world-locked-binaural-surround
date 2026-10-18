@@ -95,7 +95,8 @@ def nearest_brir_index(azimuths: dict[int, float], source_az_deg: float) -> int:
 
 
 def interpolated_ring(
-    brir: BakedBRIRSet, method: str = "nearest", *, step_deg: float = 10.0
+    brir: BakedBRIRSet, method: str = "nearest", *, step_deg: float = 10.0,
+    loudness_match: bool = True,
 ) -> tuple[BakedBRIRSet, dict[int, float]]:
     """A **dense** directional BRIR set + its azimuths, one BRIR every ``step_deg`` around the
     ring, synthesized with ``baked_interp.interpolate_baked_brir`` under ``method``.
@@ -107,6 +108,13 @@ def interpolated_ring(
     / ``"notchwarp"`` synthesize the in-between directions (journal 18's methods). Synthesizing
     the whole grid is the one-off cost paid when a method is selected; the voice pool then builds
     convolvers lazily and reuses them.
+
+    ``loudness_match`` (default on, B1.13) corrects the synthesis methods' low-frequency level
+    ripple — without it, timealign's in-between directions carry ~2–3 dB more bass than the
+    measured speaker directions, so the surround sounds bass-light when the head faces a speaker
+    and swells when it turns off-axis. It rescales each synthesized BRIR's smoothed envelope to
+    the measured endpoints equally on both ears (ITD/ILD, so localisation, unchanged). No effect
+    on ``"nearest"`` (returns measured BRIRs).
     """
     from binaural_headtracker.baked_interp import interpolate_baked_brir
 
@@ -117,7 +125,8 @@ def interpolated_ring(
     left = np.zeros((azs.size, n))
     right = np.zeros((azs.size, n))
     for i, az in enumerate(azs):
-        lft, rgt = interpolate_baked_brir(brir, float(az), method=method)
+        lft, rgt = interpolate_baked_brir(brir, float(az), method=method,
+                                          loudness_match=loudness_match)
         lft, rgt = np.asarray(lft), np.asarray(rgt)
         left[i, : min(lft.size, n)] = lft[:n]
         right[i, : min(rgt.size, n)] = rgt[:n]

@@ -476,3 +476,16 @@ def test_tail_cap_none_rings_full_tail_unchanged() -> None:
         a = default.process_block(blk, float(track[i]))
         b = explicit.process_block(blk, float(track[i]))
         assert np.array_equal(a, b)
+
+
+def test_interpolated_ring_loudness_match_default_on_and_toggle() -> None:
+    """interpolated_ring applies the B1.13 loudness match to the synthesis methods by
+    default, and only then; nearest (measured BRIRs) is unaffected by the flag."""
+    brir = _synthetic_brir(n=512)
+    on, _ = interpolated_ring(brir, "timealign", step_deg=30.0)                      # default on
+    off, _ = interpolated_ring(brir, "timealign", step_deg=30.0, loudness_match=False)
+    assert not np.allclose(on.left, off.left)   # the match changes the synthesized grid
+    # nearest never synthesises, so the flag is a no-op there
+    n_on, _ = interpolated_ring(brir, "nearest", step_deg=30.0)
+    n_off, _ = interpolated_ring(brir, "nearest", step_deg=30.0, loudness_match=False)
+    assert np.array_equal(n_on.left, n_off.left) and np.array_equal(n_on.right, n_off.right)
