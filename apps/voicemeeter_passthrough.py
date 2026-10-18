@@ -128,6 +128,9 @@ def main(argv=None) -> int:
                    help="7.1 capture device index or name substring (e.g. 'VoiceMeeter Output')")
     p.add_argument("--audio-device", default=None,
                    help="headphone output device index or name substring (e.g. 'FiiO')")
+    p.add_argument("--exclusive", action="store_true",
+                   help="open the output in WASAPI exclusive mode (smallest device buffer, ~13 vs "
+                        "~22 ms shared); falls back to shared if the device refuses it")
     p.add_argument("--no-dialog", action="store_true", help="skip the picker, use the flags")
     p.add_argument("--block", type=int, default=512, help="render block size (bigger = steadier)")
     p.add_argument("--fade-ms", type=float, default=20.0)
@@ -489,11 +492,29 @@ def main(argv=None) -> int:
     worker = threading.Thread(target=render_worker, name="render", daemon=True)
     worker.start()
     in_stream.start_stream()
-    out_ctx = sd.OutputStream(samplerate=brir.samplerate, channels=2, device=out_index,
-                              blocksize=0, dtype="float32", latency="low", callback=out_cb)
+
+    def _open_output(exclusive: bool):
+        extra = sd.WasapiSettings(exclusive=True) if exclusive else None
+        ctx = sd.OutputStream(samplerate=brir.samplerate, channels=2, device=out_index,
+                              blocksize=0, dtype="float32", latency="low", callback=out_cb,
+                              extra_settings=extra)
+        ctx.start()
+        return ctx
+
+    # WASAPI exclusive mode (B0.5) takes the endpoint for a much smaller device buffer (measured
+    # ~13 ms vs ~22 ms shared, vs ~90 ms on MME). It can be refused (format/rate, or the device is
+    # in use), so fall back to shared and say so rather than failing to start.
+    try:
+        out_ctx = _open_output(args.exclusive)
+        if args.exclusive:
+            print(f"output: WASAPI exclusive ({out_ctx.latency * 1000:.0f} ms device buffer)")
+    except Exception as exc:  # noqa: BLE001
+        if not args.exclusive:
+            raise
+        print(f"WASAPI exclusive unavailable ({exc!r}); using shared mode.")
+        out_ctx = _open_output(False)
     restart = False  # Reload key (Enter): tear down cleanly, then the launcher relaunches us
     try:
-        out_ctx.start()
         while True:
             if cb_error:
                 print(f"audio callback error: {cb_error[0]!r}")

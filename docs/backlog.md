@@ -415,11 +415,18 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
 ### Discovered blocks / follow-ups
 _(the chain appends here as it learns)_
 
-- [ ] **B0.5** Exclusive-mode low-latency audit: once the virtual chain can be
-  bypassed (B0.3/B4), measure WASAPI exclusive-mode latency against a *hardware*
-  endpoint (e.g. the FiiO K11 DAC) and confirm it beats the ~22–24 ms the
-  VoiceMeeter virtual sink reports. Feeds the <30 ms budget (requirements § 2).
-  _(from journal 02)_
+- [x] **B0.5** Exclusive-mode low-latency audit. _(Done, journal 44: the output endpoint's
+  WASAPI buffer is **13 ms exclusive** vs **22 ms shared** vs ~90–100 ms on MME; the passthrough
+  gained opt-in `--exclusive` (falls back to shared) and the launcher uses it. This — plus the
+  MME→WASAPI resolver fix (B8.5c) — took **head-move→ear to p50 35–46 ms, under the ~50 ms
+  threshold**, with no DSP change. Measured via the component-split bench, B8.5b.)_
+- [ ] **B8.7** (RFC) **Eliminate VoiceMeeter via an EqualizerAPO VST.** The capture-side
+  virtual-cable buffer (~128 ms, a VoiceMeeter/VB setting) delays *audio content* / A-V sync but
+  **not** head-tracking (pose is applied fresh at render — journal 44). To remove it entirely, run
+  the binaural render as a **VST inside EqualizerAPO** on a 7.1-configured FiiO endpoint (single
+  engine clock, no loopback, no second app), with the camera tracker feeding pose over shared
+  memory and the Rust kernel wrapped as the plugin. Lowest-latency architecture; only needed for
+  A-V sync, so deferred behind B8.6. _(owner question, journal 44)_
 - [x] **B0.6** Complete the **measured** virtual round-trip latency: once a
   loopback route exists — VoiceMeeter VAIO strip → bus **B1**, or a dedicated
   **VB-CABLE** installed — run `spikes/b0_3_virtual_device.py` and record the real

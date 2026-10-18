@@ -150,11 +150,17 @@ def run_bench(brir, args) -> dict:
         total.add((now - pose_t) * 1000.0 + dev)
 
     def producer() -> None:
-        nxt = time.perf_counter()
+        # Keep the FIFO topped up to the cushion, paced by the *consumer* draining it (not by a
+        # Python sleep clock — Windows' ~15 ms timer granularity can't pace small blocks, which
+        # otherwise shows up as phantom dropouts). Refills in a burst after a coarse wake, exactly
+        # like the real worker draining a capture backlog, so a realistic cushion depth is held.
         while not stop.is_set():
-            produce_one()
-            nxt += block_s
-            stop.wait(max(0.0, nxt - time.perf_counter()))
+            with fifo_lock:
+                fill = len(fifo)
+            if fill < cushion:
+                produce_one()
+            else:
+                stop.wait(0.0005)
 
     def sim_consumer() -> None:
         nxt = time.perf_counter()
@@ -162,6 +168,17 @@ def run_bench(brir, args) -> dict:
             consume_one(time.perf_counter())
             nxt += block_s
             stop.wait(max(0.0, nxt - time.perf_counter()))
+
+    # Raise the Windows timer resolution to ~1 ms for the run, so the Python producer/consumer
+    # sleeps are fine-grained (default ~15 ms granularity otherwise causes phantom dropouts that
+    # the real hardware-clocked audio stack never sees). No-op off Windows.
+    wmm = None
+    try:
+        import ctypes
+        wmm = ctypes.windll.winmm  # type: ignore[attr-defined]
+        wmm.timeBeginPeriod(1)
+    except Exception:  # noqa: BLE001
+        wmm = None
 
     threads = [threading.Thread(target=pose_thread, daemon=True),
                threading.Thread(target=producer, daemon=True)]
@@ -218,6 +235,8 @@ def run_bench(brir, args) -> dict:
     if out_ctx is not None:
         out_ctx.stop()
         out_ctx.close()
+    if wmm is not None:
+        wmm.timeEndPeriod(1)
 
     tone_snr_db = _tone_snr(np.array(integ["acc"], dtype=np.float64), args.tone_hz, sr)
     def dist(p: LatencyProbe) -> dict:
