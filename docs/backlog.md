@@ -198,6 +198,24 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   passthrough app defaults to `--lfe-mode flat` (it wants the bass) with `brir` to A/B. Measured
   +14 dB at 40 Hz (flat vs brir) on CPU and GPU; GPU flat == CPU flat to 1.7e-16. 1 new test
   (278 total). The offline static render is deliberately left as the EqualizerAPO reference.)_
+- [x] **B4.4** One **shared interpolation method** for the whole passthrough — the method the owner
+  picks (timealign) now renders the **daily 7.1** too, not just the test source, and is shown once.
+  _(New `live_render.InterpWorldLocked7p1`: the 7.1 world-lock over a **dense interpolated ring**
+  (`interpolated_ring`, B3.3) — one synthesized BRIR every `--grid-step`° — via a generalized
+  `BusMixer` (n inputs → n_bus grid buses) + a batched convolver (`StereoConvolver`, or the native
+  `binaural_kernel.BusConvolver` with `--rust`). **Proven identical to the per-direction voice pool
+  over the same grid to 1e-9.** The passthrough builds its 7.1 renderer by method (`nearest` keeps
+  the fast 8-bus path; a synthesis method uses the dense grid) and **M cycles the one shared method,
+  rebuilding BOTH the 7.1 and the test source** under the audio lock. The method is shown **always**
+  in a title-bar chip (`_console` variant 1), so the test readout no longer repeats it. RT: `nearest`
+  keeps the fast 8-bus path (unchanged); a synthesis method on the full 7.1 is a dense N-bus
+  convolution, so it needs the native `--rust` kernel and a bigger block — pure-Python is ~1.35× RT
+  at block 1024/15° but sub-RT at 256/512, and the native kernel is ~5× faster (journal 27) with
+  ample headroom; the diagnostics panel (**S**) shows live whether it keeps up. **Also fixed the
+  test-source dropouts the owner hit with timealign**: a moving source sweeping a fine voice-pool
+  grid stacked up full-length tail voices (13 concurrent → 0.81× RT); a `max_tail_ms` cap
+  (`--max-tail-ms`, default 150 ms) fades retired voices out and drops them → 5 voices / 1.95× RT,
+  click-free, static source unchanged. 5 new tests (313 total). See journal 37.)_
 
 ## M5 — Live filters & presets
 

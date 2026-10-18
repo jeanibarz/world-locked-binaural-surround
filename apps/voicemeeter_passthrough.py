@@ -55,7 +55,12 @@ from binaural_headtracker.devices import (
 )
 from binaural_headtracker.diagnostics import classify
 from binaural_headtracker.head_pose import head_pose_from_matrix
-from binaural_headtracker.live_render import WorldLocked7p1, WorldLockedSource, interpolated_ring
+from binaural_headtracker.live_render import (
+    InterpWorldLocked7p1,
+    WorldLocked7p1,
+    WorldLockedSource,
+    interpolated_ring,
+)
 from binaural_headtracker.output_eq import load_output_eq
 from binaural_headtracker.radar import nearest_front_channel
 from binaural_headtracker.surround import load_baked_brir
@@ -155,36 +160,54 @@ def main(argv=None) -> int:
                    help="test-source WAV for the experiment layer (T); a noise tick if omitted")
     p.add_argument("--test-gain", type=float, default=0.5, help="test-source level")
     p.add_argument("--method", default="nearest", choices=EXPERIMENT_METHODS,
-                   help="test-source interpolation method to start with (cycle live with M)")
+                   help="shared interpolation method for the 7.1 AND the test source "
+                        "(cycle live with M); a synthesis method wants --rust + a bigger --block")
     p.add_argument("--grid-step", type=float, default=10.0,
-                   help="degrees between synthesized grid directions for the test source")
+                   help="degrees between synthesized grid directions (shared 7.1 + test source)")
+    p.add_argument("--max-tail-ms", type=float, default=150.0,
+                   help="cap the ring-out of a left-behind test-source grid voice (ms); bounds "
+                        "concurrent voices so a moving source on a fine grid stays real-time")
     p.add_argument("--rotate-speed", type=float, default=45.0,
                    help="auto-rotation speed of the test source in deg/s (toggle with R)")
     args = p.parse_args(argv)
 
     brir = load_baked_brir(args.brir_dir)
-    renderer = WorldLocked7p1(brir, block_size=args.block, fade_ms=args.fade_ms,
-                              lfe_mode=args.lfe_mode)
-    if args.rust:
-        try:
-            from binaural_headtracker.rust_render import RustWorldLocked7p1
-            renderer = RustWorldLocked7p1(brir, block_size=args.block, fade_ms=args.fade_ms,
+
+    def _nearest_renderer():
+        if args.rust:
+            try:
+                from binaural_headtracker.rust_render import RustWorldLocked7p1
+                print("render: nearest — native Rust kernel (CPU, no GPU)")
+                return RustWorldLocked7p1(brir, block_size=args.block, fade_ms=args.fade_ms,
                                           lfe_mode=args.lfe_mode)
-            print("render: native Rust kernel (CPU, no GPU)")
-        except Exception as exc:  # noqa: BLE001  — fall back to pure-Python CPU
-            print(f"Rust kernel unavailable ({exc!r}); build it with "
-                  "'maturin develop --release -m rust/Cargo.toml'. Falling back to CPU.")
-    elif args.gpu:
-        try:
-            from binaural_headtracker.gpu_render import GpuWorldLocked7p1
-            renderer = GpuWorldLocked7p1(brir, block_size=args.block, fade_ms=args.fade_ms,
+            except Exception as exc:  # noqa: BLE001  — fall back to pure-Python CPU
+                print(f"Rust kernel unavailable ({exc!r}); falling back to CPU.")
+        elif args.gpu:
+            try:
+                from binaural_headtracker.gpu_render import GpuWorldLocked7p1
+                print("render: nearest — GPU (CuPy)")
+                return GpuWorldLocked7p1(brir, block_size=args.block, fade_ms=args.fade_ms,
                                          lfe_mode=args.lfe_mode)
-            print("render: GPU (CuPy)")
-        except Exception as exc:  # noqa: BLE001  — fall back to CPU, which may drop out
-            print(f"GPU render unavailable ({exc!r}); falling back to CPU "
-                  "(may not keep up on the full 8ch BRIR)")
-    else:
-        print("render: pure-Python CPU (pass --rust for the native real-time path, or --gpu)")
+            except Exception as exc:  # noqa: BLE001  — fall back to CPU
+                print(f"GPU render unavailable ({exc!r}); falling back to CPU.")
+        print("render: nearest — pure-Python CPU (pass --rust or --gpu for real time)")
+        return WorldLocked7p1(brir, block_size=args.block, fade_ms=args.fade_ms,
+                              lfe_mode=args.lfe_mode)
+
+    def build_main_renderer(method: str):
+        """The full 7.1 renderer for ``method`` — the method applies to the WHOLE surround
+        (shared with the test source). 'nearest' uses the fast 8-bus path; a synthesis method
+        uses the dense interpolated grid (InterpWorldLocked7p1, B4.4), which needs a bigger
+        block for headroom (the diagnostics panel shows if it keeps up)."""
+        if method == "nearest":
+            return _nearest_renderer()
+        print(f"render: {method} — dense-grid 7.1 ({args.grid_step:.0f}°) "
+              f"{'[rust]' if args.rust else '[cpu]'}")
+        return InterpWorldLocked7p1(brir, method, block_size=args.block, fade_ms=args.fade_ms,
+                                    grid_step=args.grid_step, lfe_mode=args.lfe_mode,
+                                    use_rust=args.rust)
+
+    main_rend = {"r": build_main_renderer(args.method)}  # the 7.1 renderer, swappable live (M)
 
     # Global output-bus comp + EQ (B5.3): the bare BRIRs carry room/direction but not the
     # headphone comp or subjective EQ, which EqualizerAPO applies once to the stereo mix. Apply
@@ -208,9 +231,14 @@ def main(argv=None) -> int:
 
     def build_test_renderer(method: str) -> WorldLockedSource:
         if method == "nearest":
-            return WorldLockedSource(brir, block_size=args.block, fade_ms=args.fade_ms)
+            return WorldLockedSource(brir, block_size=args.block, fade_ms=args.fade_ms,
+                                     max_tail_ms=args.max_tail_ms)
+        # Dense grid: a moving source sweeps through many grid points, each spinning up a
+        # full-length convolution voice that otherwise rings its whole ~0.5 s tail. Cap the
+        # retired-voice tail (--max-tail-ms) so concurrent voices stay bounded → no dropouts.
         dense, azmap = interpolated_ring(brir, method, step_deg=args.grid_step)
-        return WorldLockedSource(dense, block_size=args.block, fade_ms=args.fade_ms, azimuths=azmap)
+        return WorldLockedSource(dense, block_size=args.block, fade_ms=args.fade_ms,
+                                 max_tail_ms=args.max_tail_ms, azimuths=azmap)
 
     test_renderers[args.method] = build_test_renderer(args.method)
     test = {"on": False, "world_az": 0.0, "az": 0.0, "method": args.method,
@@ -309,6 +337,7 @@ def main(argv=None) -> int:
             try:
                 with lock:
                     az = state["az"]
+                    r_main = main_rend["r"]
                     t_on, t_rnd, t_az = test["on"], test["renderer"], test["az"]
                     t_gain, t_solo = test["gain"], test["solo"]
                 cap = np.concatenate(chunks, axis=0)
@@ -325,7 +354,7 @@ def main(argv=None) -> int:
                 rendered = []
                 t0 = time.perf_counter()
                 while buf.shape[0] - i >= args.block:
-                    stereo = renderer.process_block(buf[i : i + args.block], az)
+                    stereo = r_main.process_block(buf[i : i + args.block], az)
                     if t_on:  # mix the movable test source (solo replaces the 7.1)
                         idx = (test_pos["i"] + np.arange(args.block)) % test_loop.size
                         tstereo = t_rnd.process_block(test_loop[idx], t_az) * t_gain
@@ -502,7 +531,9 @@ def main(argv=None) -> int:
                 ("facing", brir.channels[nearest_i] + ("  [flip]" if flip_az else ""), C.ACTIVE),
             ]
             if test["on"]:
-                readout.append(("test", f"{test['method']} {test['world_az']:+.0f}\xb0"
+                # method now lives in the title-bar chip (shared by 7.1 + test), so the
+                # test readout only carries the source's position/mode
+                readout.append(("test", f"{test['world_az']:+.0f}\xb0"
                                 + ("  SOLO" if test["solo"] else "")
                                 + ("  rot" if test["rotate"] else ""), C.GOOD))
             buttons = [("Test", "T", test["on"]), ("Method", "M", False),
@@ -512,8 +543,8 @@ def main(argv=None) -> int:
                 live_color=live_col, pose=pose, landmarks=landmarks, lock=None,
                 world_az=world_az, channels=brir.channels, facing_i=nearest_i, head_deg=head_deg,
                 source_az=(test["world_az"] if test["on"] else None),
-                readout=readout, buttons=buttons, diagnosis=diag, show_stats=show_stats,
-                audio_stats=True, rate_hz=rate, phase=phase)
+                readout=readout, buttons=buttons, diagnosis=diag, method=test["method"],
+                show_stats=show_stats, audio_stats=True, rate_hz=rate, phase=phase)
             cv2.imshow(win, canvas)
             key = cv2.waitKey(1) & 0xFF
             if key in (ord("q"), 27):
@@ -535,16 +566,18 @@ def main(argv=None) -> int:
                 with lock:
                     f = 0.8 if key == ord("[") else 1.25
                     test["gain"] = float(np.clip(test["gain"] * f, 0.02, 4.0))
-            if key == ord("m"):  # cycle the test source's interpolation method (synth on demand)
+            if key == ord("m"):  # cycle the SHARED method — rebuilds the 7.1 AND the test source
                 nxt = EXPERIMENT_METHODS[(EXPERIMENT_METHODS.index(test["method"]) + 1)
                                          % len(EXPERIMENT_METHODS)]
+                cv2.putText(canvas, f"switching to {nxt} (building)...", (C.CAM_W + 20, 70),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, ACCENT, 1, cv2.LINE_AA)
+                cv2.imshow(win, canvas)
+                cv2.waitKey(1)
                 if nxt not in test_renderers:
-                    cv2.putText(canvas, f"synthesizing {nxt} grid...", (C.CAM_W + 20, 70),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, ACCENT, 1, cv2.LINE_AA)
-                    cv2.imshow(win, canvas)
-                    cv2.waitKey(1)
                     test_renderers[nxt] = build_test_renderer(nxt)
+                new_main = build_main_renderer(nxt)  # dense-grid 7.1 for a synthesis method
                 with lock:
+                    main_rend["r"] = new_main
                     test["renderer"] = test_renderers[nxt]
                     test["method"] = nxt
             if key == ord("c") and recent:
