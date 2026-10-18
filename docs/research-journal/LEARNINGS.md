@@ -383,3 +383,18 @@ full story.
     non-directional LFE flat to both ears, don't convolve it through a bass-dead directional
     HRIR. Toolkit: `spikes/b4_1_loopback_diag.py`; method: the `audio-loopback-diagnostics`
     skill. (→ [24](24-voicemeeter-passthrough.md))
+54. **A headphone comp + subjective EQ is a global output-bus stage, not per-BRIR — so port it
+    once, after the downmix.** EqualizerAPO applies the owner's comp (per-ear FIR + biquads) and
+    subjective EQ to the final L/R mix, *after* the per-speaker convolution and downmix. Because
+    the renderer's neutral output already equals that downmix, the only thing a bare bake is
+    missing is this one chain; reproducing it as a stereo output-bus stage (gain + comp FIR +
+    biquads per ear) leaves the 16 BRIRs — and the world-lock steering — untouched, and is
+    retunable live. Two leverage points: (a) you don't need an acoustic loopback to find the
+    correction — both paths are digital binaural to the same DAC, so the DAC cancels and the
+    chain's own frequency response *is* "what differs", computable from the config; (b) isolate
+    the global chain from a config mechanically by accumulating ops on buses L/R and **clearing a
+    bus on any `Copy` that reassigns it** (the downmix the renderer itself makes), so only
+    post-downmix ops survive. Caveat: the comp/EQ's big bass shelves exist to restore the
+    sub-bass the LFE BRIR strips, so the output EQ must pair with `--lfe-mode brir`, not the B4.3
+    flat LFE, or the bass doubles. Proven by reproducing the sibling's full-chain reconstruction
+    to 1.5e-14. (→ [25](25-output-bus-comp-eq.md))
