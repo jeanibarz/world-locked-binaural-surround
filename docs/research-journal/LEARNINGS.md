@@ -598,3 +598,14 @@ full story.
     the per-block predicted step (max angular rate × horizon) is the cheap overshoot guard, and
     per-angle α-β beats reaching for quaternions when motion is yaw-dominated and the horizon short.
     (→ [47](47-orientation-prediction.md))
+79. **OpenCV's Hershey fonts are the ceiling on how professional a cv2 UI can look.** They are
+    single-stroke, unhinted, weightless 1960s vector fonts — jagged and small however you scale them.
+    A "looks low-res / unprofessional" complaint on an OpenCV GUI is a *rasteriser* problem, not a
+    layout one: render real **TrueType** with Pillow onto the BGR canvas instead. Route **both** the
+    draw and the width-measure through the new renderer so every computed box/button/centred label
+    stays self-consistent and the existing layout survives the swap untouched. (→ [48](48-truetype-typography.md))
+80. **Cache the coverage mask, not the composite.** Per-string "ROI→PIL→draw→back" was 2.5× the
+    Hershey cost (22 vs 8.8 ms/frame). A grayscale alpha mask keyed by `(text, family, weight, size)`
+    — colour- and position-independent — rasterises each constant label once; per frame you only
+    alpha-composite it in the wanted colour with numpy. That cut the overhead to +2.6 ms. Don't key
+    the cache on colour or the live background, or it never hits. (→ [48](48-truetype-typography.md))

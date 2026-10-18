@@ -315,6 +315,22 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   dropouts: B4.4 made timealign the *shared* method, so the full 7.1 ran timealign at the host
   launcher's `--block 256` (~90% load); the test source over music tipped it past 100%. Host
   launcher bumped to `--block 512`. 4 tests (317 total). See journal 38.)_
+- [x] **B6.9** TrueType typography for the host console (owner: "font low-res, small, not
+  professional").
+  _(Root cause: the whole console drew text via `cv2.putText`, and OpenCV ships only **Hershey**
+  stroke fonts — thin, unhinted, jagged. New `apps/_type.py` (pure numpy + Pillow, no cv2, so it
+  unit-tests on CI/WSL) renders the mockup's own faces — **IBM Plex Mono/Sans + Rajdhani**, bundled
+  under `apps/assets/fonts/` (OFL-1.1) — as anti-aliased TrueType composited onto the BGR canvas,
+  with a **cached coverage mask** per `(text,family,weight,size)` so constant labels rasterise once.
+  `_console.text()/text_w()` delegate to it and fall back to Hershey if Pillow is absent; both GUIs
+  sharpen with **no layout change** (draw + measure share the metrics). Chrome (buttons, DIAGNOSTICS
+  heading, verdict pill, radar cardinals) routed to Rajdhani. Perf: `compose` +2.6 ms/frame (11.4 vs
+  8.8). Pillow added to the `vision`+`dev` extras. Verified by before/after host PNGs. 7 tests
+  (351 total). See journal 48.)_
+- [ ] **B6.10** Route `live_tracker_audio.py`'s remaining raw `cv2.putText` overlays through the
+  shared `_console.text` for one consistent look (follow-up from B6.9).
+- [ ] **B6.11** HiDPI / resizable console window (`WINDOW_NORMAL` + integer canvas scale) so the
+  console isn't small on high-DPI displays — distinct from the B6.9 glyph-sharpness fix.
 
 ## M7 — AI-judge calibration
 
