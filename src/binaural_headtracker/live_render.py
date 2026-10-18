@@ -24,6 +24,7 @@ reproduces the rotating-snare demo as a *live* effect.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -130,7 +131,7 @@ def interpolated_ring(
 class _Voice:
     conv: StereoConvolver
     gain: float            # current input gain at the end of the last block
-    silent_blocks: int     # consecutive fully-drained (zero-in, zero-gain) blocks
+    silent_blocks: int     # consecutive zero-input blocks since this voice went silent
 
 
 class WorldLockedSource:
@@ -140,8 +141,16 @@ class WorldLockedSource:
     source is routed (via a per-sample gain ramp) into the voice for the *nearest* BRIR
     to the current head-relative azimuth; when the nearest changes, the gain crossfades
     from the old voice to the new one over ``fade_ms``. Voices whose gain has reached 0
-    keep convolving the trailing zeros so their room tail rings out naturally, and are
-    reset once drained (``tail_blocks`` of silence), so steady state runs a single voice.
+    keep convolving the trailing zeros so their room tail rings out, and are dropped once
+    drained, so steady state runs a single voice.
+
+    ``max_tail_ms`` caps how long a *retired* (left-behind) voice keeps ringing: its output
+    is faded to silence over that window and the voice is then dropped, instead of ringing
+    the BRIR's full tail (often ~0.5 s). This bounds the number of concurrent voices when
+    the source **sweeps** across a fine interpolation grid — otherwise every grid point
+    touched holds a full-length convolution alive for the whole tail, which stacks up into
+    dropouts during motion. The active voice always rings its full tail (it is never
+    released while active), so a *stationary* source sounds identical to before.
     """
 
     def __init__(
@@ -150,6 +159,7 @@ class WorldLockedSource:
         *,
         block_size: int = 256,
         fade_ms: float = 20.0,
+        max_tail_ms: float | None = None,
         azimuths: dict[int, float] | None = None,
     ) -> None:
         if block_size <= 0:
@@ -161,6 +171,15 @@ class WorldLockedSource:
         # interpolation methods (``interpolated_ring``). Defaults to the measured 7.1 ring.
         self._azimuths = azimuths if azimuths is not None else ring_azimuths(brir)
         self._fade_samples = max(1, int(round(fade_ms * 1e-3 * brir.samplerate)))
+        # A retired voice rings for at most this many blocks, with an output fade-out over
+        # the window, before it is dropped (see the class docstring). Bounds concurrent voices
+        # during a sweep; the active voice is exempt so a still source is unchanged. ``None``
+        # (the default) rings the full natural tail — the original behaviour, kept for the
+        # nearest 7.1 voice pool and the offline parity reference; a dense grid steered by a
+        # moving source caps it to stay real-time (set by the passthrough's test source).
+        self._release_blocks = (
+            None if max_tail_ms is None
+            else max(1, math.ceil(max_tail_ms * 1e-3 * brir.samplerate / self._block)))
         # One voice per directional channel (built lazily to keep steady state cheap).
         self._voices: dict[int, _Voice] = {}
         self._active: int | None = None  # the index currently being faded toward gain 1
@@ -220,27 +239,49 @@ class WorldLockedSource:
             self._active = target  # retarget; gains ramp toward the new active voice
 
         out = np.zeros((self._block, 2))
-        # Every voice with any input or residual tail must run this block.
+        # Every voice with any input or still-ringing tail must run this block.
         for idx in list(self._voices.keys()) + ([target] if target not in self._voices else []):
             v = self._voice_for(idx)
             end_gain = 1.0 if idx == self._active else 0.0
             g = self._gain_ramp(v.gain, end_gain)
             fed = x * g
             v.gain = float(g[-1])
-            if np.any(fed) or v.silent_blocks < v.conv.tail_blocks:
-                out += v.conv.process_block(fed.reshape(-1, 1))
-                v.silent_blocks = 0 if np.any(fed) else v.silent_blocks + 1
-            # else: fully drained and silent — skip, leave at rest.
+            has_input = bool(np.any(fed))
+            if has_input:
+                v.silent_blocks = 0
+            else:
+                v.silent_blocks += 1
+            # The active voice rings its full natural tail; a retired (silent, inactive) voice
+            # rings for at most ``_release_blocks`` and is faded out over that window so cutting
+            # the tail short stays click-free. This caps concurrent voices during a sweep.
+            # ``_release_blocks is None`` ⇒ no cap: every voice rings its full tail (old path).
+            capped = (idx != self._active and self._release_blocks is not None
+                      and self._release_blocks < v.conv.tail_blocks)
+            cap = self._release_blocks if capped else v.conv.tail_blocks
+            if has_input or v.silent_blocks <= cap:
+                block_out = v.conv.process_block(fed.reshape(-1, 1))
+                if capped and not has_input:
+                    # linear output fade across the whole release window: amplitude
+                    # (1 - (k-1)/R) → (1 - k/R) over block k (1-based), reaching 0 at k=R.
+                    k, R = v.silent_blocks, self._release_blocks
+                    env = np.linspace(1.0 - (k - 1) / R, 1.0 - k / R, self._block,
+                                      dtype=np.float64)
+                    block_out = block_out * env[:, None]
+                out += block_out
+            # else: past the release window (or fully drained) — skip, reap below.
         self._reap()
         return out
 
     def _reap(self) -> None:
-        """Drop voices that are at zero gain and have fully drained their tail."""
+        """Drop retired voices that have finished ringing (full tail, or capped release)."""
         for idx in list(self._voices):
             if idx == self._active:
                 continue
             v = self._voices[idx]
-            if v.gain <= 0.0 and v.silent_blocks >= v.conv.tail_blocks:
+            cap = v.conv.tail_blocks
+            if self._release_blocks is not None:
+                cap = min(self._release_blocks, cap)
+            if v.gain <= 0.0 and v.silent_blocks >= cap:
                 del self._voices[idx]
 
     def flush(self) -> np.ndarray:
@@ -421,32 +462,129 @@ class BusMixer:
     host-only piece (see :mod:`binaural_headtracker.gpu_render`).
     """
 
-    def __init__(self, n_channels: int, *, fade_samples: int) -> None:
-        self._c = int(n_channels)
+    def __init__(self, n_channels: int, n_buses: int | None = None, *,
+                 fade_samples: int) -> None:
+        self._n_in = int(n_channels)
+        self._n_bus = int(n_buses) if n_buses is not None else self._n_in
         self._fade = max(1, int(fade_samples))
-        self._gain = np.zeros((self._c, self._c))  # gain[c, b]: channel c -> bus b
+        self._gain = np.zeros((self._n_in, self._n_bus))  # gain[c, b]: channel c -> bus b
         self._started = False
 
     @property
     def n_bus(self) -> int:
-        return self._c
+        return self._n_bus
 
     def mix(self, pcm, targets) -> np.ndarray:
-        """``pcm`` ``(block, C)`` + target bus per channel → ``bus_in`` ``(C, block)``."""
+        """``pcm`` ``(block, n_in)`` + target bus per channel → ``bus_in`` ``(n_bus, block)``.
+
+        ``n_bus`` may exceed ``n_in`` — e.g. the 7 directional channels mixed into a dense
+        interpolated grid of buses (B4.4), so every channel steers through a synthesized
+        in-between BRIR, not just the 8 measured ones.
+        """
         pcm = np.asarray(pcm, dtype=np.float64)
         block = pcm.shape[0]
         targets = np.asarray(targets, dtype=np.intp).reshape(-1)
-        desired = np.zeros((self._c, self._c))
-        desired[np.arange(self._c), targets] = 1.0
+        desired = np.zeros((self._n_in, self._n_bus))
+        desired[np.arange(self._n_in), targets] = 1.0
         if not self._started:
             self._gain = desired.copy()  # start at full gain, no fade-in from silence
             self._started = True
-        start = self._gain  # (C, C)
+        start = self._gain  # (n_in, n_bus)
         step = np.where(desired >= start, 1.0, -1.0) / self._fade
-        ramp = start[:, :, None] + step[:, :, None] * np.arange(1, block + 1)  # (C,C,block)
+        ramp = start[:, :, None] + step[:, :, None] * np.arange(1, block + 1)  # (n_in,n_bus,block)
         lo = np.minimum(start, desired)[:, :, None]
         hi = np.maximum(start, desired)[:, :, None]
         ramp = np.clip(ramp, lo, hi)
         self._gain = ramp[:, :, -1]
         # bus_in[b,n] = Σ_c ramp[c,b,n] * pcm[n,c]
         return np.einsum("cbn,nc->bn", ramp, pcm)
+
+
+class InterpWorldLocked7p1:
+    """World-locked 7.1 → stereo using an interpolation **method** for every channel (B4.4).
+
+    Where :class:`WorldLocked7p1` snaps each channel to the nearest of the 8 measured BRIRs,
+    this steers the 7 directional channels through a **dense interpolated grid** — one BRIR
+    every ``grid_step`` degrees, synthesized from the measured speakers via
+    ``baked_interp.interpolate_baked_brir`` under ``method`` — so the *whole* surround field,
+    not just a single test source, gets the chosen method. It is a bus mix (7 inputs → the grid
+    buses) + one batched fixed-filter convolution, identical to a per-channel voice pool over
+    the grid (proven), so it runs on the native kernel. LFE is non-directional and handled as in
+    :class:`WorldLocked7p1` (``brir`` convolves its own fixed BRIR, ``flat`` sums it level-matched).
+
+    ``method='nearest'`` works but the 8-bus ``WorldLocked7p1`` / ``RustWorldLocked7p1`` is cheaper
+    for it; use this for the synthesis methods. ``use_rust`` runs the grid convolution on the
+    native kernel (``binaural_kernel``); otherwise a numpy :class:`StereoConvolver` (for tests/CPU).
+    """
+
+    def __init__(self, brir: BakedBRIRSet, method: str = "timealign", *, block_size: int = 256,
+                 fade_ms: float = 20.0, grid_step: float = 10.0, lfe_mode: str = "brir",
+                 use_rust: bool = False) -> None:
+        if lfe_mode not in ("brir", "flat"):
+            raise ValueError("lfe_mode must be 'brir' or 'flat'")
+        self._brir = brir
+        self._block = int(block_size)
+        self._lfe_mode = lfe_mode
+        self._dense, az = interpolated_ring(brir, method, step_deg=grid_step)
+        self._grid_az = np.array([az[i] for i in range(self._dense.n_channels)], dtype=np.float64)
+        self._dir_idx = [brir.channels.index(c) for c in RING_CHANNELS if c in brir.channels]
+        if not self._dir_idx:
+            raise ValueError("BRIR set has none of the directional ring channels")
+        fade_samples = max(1, round(fade_ms * 1e-3 * brir.samplerate))
+        self._mixer = BusMixer(len(self._dir_idx), self._dense.n_channels,
+                               fade_samples=fade_samples)
+        if use_rust:
+            import binaural_kernel
+            self._conv = binaural_kernel.BusConvolver(
+                np.ascontiguousarray(self._dense.left, dtype=np.float64),
+                np.ascontiguousarray(self._dense.right, dtype=np.float64), self._block)
+            self._rust = True
+        else:
+            self._conv = StereoConvolver(self._dense.left, self._dense.right, self._block)
+            self._rust = False
+        self._lfe_idx = brir.channels.index("LFE") if "LFE" in brir.channels else None
+        self._lfe = None
+        self._lfe_gain = (0.0, 0.0)
+        if self._lfe_idx is not None:
+            li = self._lfe_idx
+            if lfe_mode == "brir":
+                self._lfe = StereoConvolver(
+                    brir.left[li : li + 1], brir.right[li : li + 1], self._block)
+            else:
+                self._lfe_gain = (float(np.linalg.norm(brir.left[li])),
+                                  float(np.linalg.norm(brir.right[li])))
+
+    @property
+    def block_size(self) -> int:
+        return self._block
+
+    @property
+    def samplerate(self) -> int:
+        return self._brir.samplerate
+
+    def _nearest_grid(self, az_deg: float) -> int:
+        d = np.abs(((self._grid_az - az_deg + 180.0) % 360.0) - 180.0)
+        return int(np.argmin(d))
+
+    def process_block(self, pcm, azimuths) -> np.ndarray:
+        """Render one ``(block_size, C)`` 7.1 block → ``(block_size, 2)`` stereo."""
+        pcm = np.asarray(pcm, dtype=np.float64)
+        c = self._brir.n_channels
+        if pcm.ndim != 2 or pcm.shape != (self._block, c):
+            raise ValueError(f"pcm must be ({self._block}, {c}); got {pcm.shape}")
+        az = np.asarray(azimuths, dtype=np.float64).reshape(-1)
+        targets = np.array([self._nearest_grid(float(az[i])) for i in self._dir_idx], dtype=np.intp)
+        bus_in = self._mixer.mix(pcm[:, self._dir_idx], targets)  # (n_grid, block)
+        if self._rust:
+            out = np.asarray(self._conv.process(np.ascontiguousarray(bus_in)))
+        else:
+            out = self._conv.process_block(np.ascontiguousarray(bus_in.T))
+        if self._lfe_idx is not None:
+            lfe = pcm[:, self._lfe_idx]
+            if self._lfe_mode == "brir":
+                out = out + self._lfe.process_block(lfe[:, None])
+            else:
+                out = out.copy()
+                out[:, 0] += lfe * self._lfe_gain[0]
+                out[:, 1] += lfe * self._lfe_gain[1]
+        return out

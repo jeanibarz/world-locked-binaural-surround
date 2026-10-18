@@ -117,7 +117,7 @@ def _blend(img, overlay, alpha):
 
 # ---------------------------------------------------------------- titlebar
 
-def titlebar(canvas, x, y, w, h, title, live_text, live_color, *, phase=0.0):
+def titlebar(canvas, x, y, w, h, title, live_text, live_color, *, phase=0.0, method=None):
     cv2 = _cv2()
     cv2.rectangle(canvas, (x, y), (x + w, y + h), PANEL2, -1)
     cv2.line(canvas, (x, y + h), (x + w, y + h), LINE, 1, cv2.LINE_AA)
@@ -125,6 +125,14 @@ def titlebar(canvas, x, y, w, h, title, live_text, live_color, *, phase=0.0):
     for i in range(3):
         cv2.circle(canvas, (x + 14 + i * 16, cy), 5, LINE, -1, cv2.LINE_AA)
     text(canvas, title, x + 60, cy + 4, FG, 0.44, mono=True)
+    if method:
+        # persistent amber chip — the SHARED interpolation method, shown whether or not a test runs
+        chip = f"method: {method}"
+        cw = text_w(chip, 0.4, mono=True)
+        chx = x + 60 + text_w(title, 0.44, mono=True) + 18
+        rrect(canvas, chx, cy - 10, cw + 14, 20, PANEL, r=5)
+        rrect(canvas, chx, cy - 10, cw + 14, 20, ACTIVE, fill=False, r=5, thick=1)
+        text(canvas, chip, chx + 7, cy + 4, ACTIVE, 0.4, mono=True)
     if live_text:
         pill = f"{live_text}"
         tw = text_w(pill, 0.42, mono=True)
@@ -432,7 +440,7 @@ def radar_az_at(mx, my, *, allow_outside=False):
 
 def compose(frame, *, title, live, live_color=GOOD, pose=None, landmarks=None, lock=None,
             world_az=None, channels=None, facing_i=0, head_deg=0.0, source_az=None,
-            readout=(), buttons=(), diagnosis=None,
+            readout=(), buttons=(), diagnosis=None, method=None,
             show_stats=False, audio_stats=True, rate_hz=0.0, phase=0.0):
     """Assemble the full Layout-A console canvas (titlebar · camera | radar · controls).
 
@@ -442,7 +450,7 @@ def compose(frame, *, title, live, live_color=GOOD, pose=None, landmarks=None, l
     cv2 = _cv2()
     W, H = CAM_W + RAD_W, TITLE_H + CAM_H + CTRL_H
     canvas = np.full((H, W, 3), BG, np.uint8)
-    titlebar(canvas, 0, 0, W, TITLE_H, title, live, live_color, phase=phase)
+    titlebar(canvas, 0, 0, W, TITLE_H, title, live, live_color, phase=phase, method=method)
     # camera (left)
     camera_panel(frame, pose=pose, landmarks=landmarks, lock=lock)
     canvas[TITLE_H:TITLE_H + CAM_H, 0:CAM_W] = cv2.resize(frame, (CAM_W, CAM_H))

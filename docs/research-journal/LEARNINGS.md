@@ -463,3 +463,29 @@ full story.
     nominal 90–120 fps camera only shaves the frame *period* (16.7→11.1 ms) and says nothing about
     the full capture→application delay. A second camera is for angular coverage/occlusion (async
     timestamp fusion first), not speed. (→ [36](36-latency-budget-and-prediction.md))
+61. **The bus-mix reformulation generalizes from "one bus per speaker" to "one bus per direction".**
+    The world-lock renderer cross-fades its inputs into *fixed-filter buses* and batch-convolves
+    them; `nearest` needs only 8 (one per speaker). A *synthesis* method has no single nearest BRIR
+    per channel, so it fans the 8 inputs into a **dense N-bus grid** (one synthesized BRIR every
+    `grid_step`°) — same machinery, same **1e-9 parity** against the per-direction voice pool, same
+    native kernel (it already takes a bus count; no Rust change). But N buses is a *different*
+    performance regime, not a tweak: keep `nearest`'s fast 8-bus branch separate, and expect a
+    synthesis 7.1 to want `--rust` + a bigger block (pure-Python ~1.35× RT at block 1024/15°,
+    sub-RT smaller). (→ [37](37-shared-interpolation-method.md))
+62. **A hidden per-mode setting confuses more than it helps — share it and show it.** The owner
+    couldn't reason about a "method" that silently meant one thing for the test probe and another
+    (`nearest`) for the music they actually heard, and was invisible at rest. Collapsing it to **one
+    shared knob that governs the real output and is always on screen** (a title-bar chip) removed the
+    confusion outright — worth more than the extra render cost. When a control's *lifecycle* is
+    unclear to the user, unify its scope before optimizing it. (→ [37](37-shared-interpolation-method.md))
+63. **A steered voice pool's real-time cost is set by *motion*, not by the method.** Each grid
+    direction is a persistent convolver voice that rings its BRIR's full tail (~0.5 s) after the
+    source leaves it. A *stationary* source is ~1 voice (cheap, any method); a source that **sweeps**
+    a fine grid holds a full-length convolution alive for every point it passes — so the voice count,
+    and the dropouts, scale with grid density × sweep speed, not with the interpolation maths
+    (synthesis is a one-off build cost). timealign @10° hit 13 concurrent voices / 0.81× RT while
+    `nearest` (8 coarse dirs) stayed ~4 and fine. Fix: **cap the retired-voice tail** — ring a
+    left-behind voice for a bounded window with an output fade-out, then drop it; keep the *active*
+    voice's full tail so a still source is unchanged. Capping ~0.5 s → 150 ms took it to 5 voices /
+    1.95× RT, click-free. When profiling a voice/partial-mixing engine, benchmark the **moving** case;
+    the static one hides the cost. (→ [37](37-shared-interpolation-method.md))

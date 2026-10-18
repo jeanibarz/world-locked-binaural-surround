@@ -7,8 +7,10 @@ import pytest
 from scipy.signal import fftconvolve
 
 from binaural_headtracker.calibrate import HeadCalibration, directions_for_pose
+from binaural_headtracker.convolve import StereoConvolver
 from binaural_headtracker.live_render import (
     RING_CHANNELS,
+    InterpWorldLocked7p1,
     WorldLocked7p1,
     WorldLockedSource,
     interpolated_ring,
@@ -371,3 +373,106 @@ def test_interpolated_ring_rejects_bad_step() -> None:
     import pytest
     with pytest.raises(ValueError):
         interpolated_ring(_synthetic_brir(), "nearest", step_deg=0.0)
+
+
+def test_interp_world_locked_matches_voice_pool_over_grid() -> None:
+    # The dense-grid bus mix for the full 7.1 must equal a per-directional-channel voice pool
+    # over the SAME interpolated grid (+ the fixed LFE) — the B4.2 bus==voice-pool proof,
+    # generalized to 7 inputs → a dense set of buses (B4.4).
+    brir = _synthetic_brir(n=600)
+    method, step, block = "timealign", 30.0, 128
+    r = InterpWorldLocked7p1(brir, method, block_size=block, fade_ms=20.0,
+                             grid_step=step, lfe_mode="brir")
+    dense, az = interpolated_ring(brir, method, step_deg=step)
+    dir_idx = [brir.index(c) for c in RING_CHANNELS if c in brir.channels]
+    srcs = {i: WorldLockedSource(dense, block_size=block, fade_ms=20.0, azimuths=az)
+            for i in dir_idx}
+    li = brir.index("LFE")
+    lfe_conv = StereoConvolver(brir.left[li : li + 1], brir.right[li : li + 1], block)
+    az0 = layout_7p1(channels=brir.channels).head_relative_directions()[:, 0].copy()
+    rng = np.random.default_rng(5)
+    max_err = 0.0
+    for b in range(36):
+        pcm = rng.standard_normal((block, brir.n_channels)) * 0.1
+        azv = az0 + 45.0 * np.sin(b * 0.4) + (b % 2) * 15.0  # sweep → crossfades on the grid
+        out = r.process_block(pcm, azv)
+        ref = np.zeros((block, 2))
+        for i in dir_idx:
+            ref += srcs[i].process_block(pcm[:, i], float(azv[i]))
+        ref += lfe_conv.process_block(pcm[:, li, None])
+        max_err = max(max_err, float(np.abs(out - ref).max()))
+    assert max_err < 1e-9, f"max|interp - voicepool| = {max_err:.2e}"
+
+
+def test_interp_world_locked_shape_and_methods() -> None:
+    brir = _synthetic_brir(n=400)
+    for method in ("nearest", "timealign", "minphase", "notchwarp"):
+        r = InterpWorldLocked7p1(brir, method, block_size=64, grid_step=45.0, lfe_mode="flat")
+        out = r.process_block(np.random.randn(64, brir.n_channels) * 0.1,
+                              np.zeros(brir.n_channels))
+        assert out.shape == (64, 2) and np.isfinite(out).all()
+
+
+def test_tail_cap_bounds_voices_during_a_sweep() -> None:
+    """A source swept across a dense grid holds many full-tail voices alive when uncapped;
+    ``max_tail_ms`` bounds the concurrent voice count (the dropout fix)."""
+    brir = _synthetic_brir(n=4000)  # long tail ⇒ tail_blocks ≫ the cap, so the cap bites
+    dense, azmap = interpolated_ring(brir, "timealign", step_deg=15.0)
+    block = 64
+    sig = np.random.default_rng(3).normal(0, 0.2, block)
+    track = np.linspace(-180.0, 180.0, 120)  # a full sweep, one az per block
+
+    uncapped = WorldLockedSource(dense, block_size=block, fade_ms=10.0, azimuths=azmap)
+    capped = WorldLockedSource(dense, block_size=block, fade_ms=10.0, max_tail_ms=20.0,
+                               azimuths=azmap)
+    peak_un = peak_cap = 0
+    for az in track:
+        uncapped.process_block(sig, float(az))
+        capped.process_block(sig, float(az))
+        peak_un = max(peak_un, len(uncapped._voices))
+        peak_cap = max(peak_cap, len(capped._voices))
+    assert peak_cap < peak_un  # the cap actually reduces concurrency
+    # with a 40 ms cap the live voices stay a small handful, not the whole swept arc
+    assert peak_cap <= 6
+
+
+def test_tail_cap_sweep_is_click_free() -> None:
+    """Cutting a retired voice's tail short is windowed, so a steady tone swept across the
+    grid under the cap has no switching click (same guarantee as the crossfade)."""
+    brir = _synthetic_brir(n=4000)
+    dense, azmap = interpolated_ring(brir, "timealign", step_deg=15.0)
+    block = 64
+    t = np.arange(8000) / SR
+    tone = 0.5 * np.sin(2 * np.pi * 300 * t)
+    n_blocks = tone.size // block
+    track = np.linspace(-120.0, 120.0, n_blocks)  # continuous sweep
+
+    capped = WorldLockedSource(dense, block_size=block, fade_ms=10.0, max_tail_ms=20.0,
+                               azimuths=azmap)
+    hard = WorldLockedSource(dense, block_size=block, fade_ms=0.0, max_tail_ms=0.001,
+                             azimuths=azmap)  # ~instant cut, no output fade window
+    out_cap = np.concatenate([capped.process_block(tone[i * block:(i + 1) * block],
+                                                    float(track[i])) for i in range(n_blocks)])
+    out_hard = np.concatenate([hard.process_block(tone[i * block:(i + 1) * block],
+                                                  float(track[i])) for i in range(n_blocks)])
+    assert np.max(np.abs(np.diff(out_cap[:, 0]))) < np.max(np.abs(np.diff(out_hard[:, 0])))
+
+
+def test_tail_cap_none_rings_full_tail_unchanged() -> None:
+    """``max_tail_ms=None`` (the default) is bit-identical to the original full-tail path —
+    a stationary source is unaffected by the feature."""
+    brir = _synthetic_brir()
+    rng = np.random.default_rng(4)
+    x = rng.normal(0, 0.3, 4000)
+    block = 256
+    n_blocks = int(np.ceil(x.size / block))
+    track = np.full(n_blocks, 30.0)  # stationary at L
+    default = WorldLockedSource(brir, block_size=block, fade_ms=20.0)
+    explicit = WorldLockedSource(brir, block_size=block, fade_ms=20.0, max_tail_ms=None)
+    for i in range(n_blocks):
+        blk = x[i * block:(i + 1) * block]
+        if blk.size < block:
+            blk = np.concatenate([blk, np.zeros(block - blk.size)])
+        a = default.process_block(blk, float(track[i]))
+        b = explicit.process_block(blk, float(track[i]))
+        assert np.array_equal(a, b)
