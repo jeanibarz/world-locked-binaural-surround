@@ -80,8 +80,10 @@ def main(argv=None) -> int:
     p.add_argument("--block", type=int, default=512, help="render block size (bigger = steadier)")
     p.add_argument("--fade-ms", type=float, default=20.0)
     p.add_argument("--gain", type=float, default=1.0)
-    p.add_argument("--latency-ms", type=float, default=120.0,
-                   help="output buffer cushion that absorbs MME capture/output jitter")
+    p.add_argument("--latency-ms", type=float, default=60.0,
+                   help="output FIFO cushion (ms). This is the dominant head-move-to-ear delay: "
+                        "a head turn is heard ~this late, since the cushion of already-rendered "
+                        "audio drains first. Lower = snappier; raise if you get dropouts.")
     p.add_argument("--min-cutoff", type=float, default=1.0)
     p.add_argument("--beta", type=float, default=0.3)
     p.add_argument("--yaw-sign", type=float, default=1.0)
@@ -173,13 +175,14 @@ def main(argv=None) -> int:
     lock = threading.Lock()
     # The loopback capture clock ≠ the output clock, and both deliver audio in bursts, so
     # the output FIFO is primed with a silence cushion (`--latency-ms`) that absorbs the
-    # jitter; the backlog is capped at a few cushions and only drops oldest on real drift.
+    # jitter; the backlog is capped just above the cushion so clock drift can't let the queue
+    # (and so the head-move-to-ear latency) grow unbounded — it stays near the cushion.
     cushion = max(2, round(args.latency_ms * 1e-3 * brir.samplerate / args.block))
     out_fifo: deque[np.ndarray] = deque(np.zeros((args.block, 2)) for _ in range(cushion))
     fifo_lock = threading.Lock()
     in_tail = {"buf": np.zeros((0, brir.n_channels))}  # leftover capture < one block
     cb_error: list[BaseException] = []
-    max_backlog = cushion * 4
+    max_backlog = cushion * 2  # cap latency growth from drift at ~2x the target cushion
 
     # The render must NOT run in the audio callback: the full 8-ch BRIR convolution (tens of
     # ms, GPU sync) would hold the GIL and starve the capture/output callbacks, collapsing
@@ -277,7 +280,7 @@ def main(argv=None) -> int:
     worker.start()
     in_stream.start_stream()
     out_ctx = sd.OutputStream(samplerate=brir.samplerate, channels=2, device=out_index,
-                              blocksize=0, dtype="float32", callback=out_cb)
+                              blocksize=0, dtype="float32", latency="low", callback=out_cb)
     try:
         out_ctx.start()
         while True:
