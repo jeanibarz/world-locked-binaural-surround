@@ -216,6 +216,14 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   grid stacked up full-length tail voices (13 concurrent → 0.81× RT); a `max_tail_ms` cap
   (`--max-tail-ms`, default 150 ms) fades retired voices out and drops them → 5 voices / 1.95× RT,
   click-free, static source unchanged. 5 new tests (313 total). See journal 37.)_
+- [x] **B4.5** In-app **reload** so a code change needs no manual restart (owner reloads often —
+  the launchers import live from the WSL checkout, so a fresh process = latest code).
+  _(The passthrough returns `RESTART_EXIT_CODE` (97) when the owner presses **Enter** (a *Reload*
+  button in the controls bar); it tears down the audio streams/camera cleanly first. The host
+  `run_passthrough.cmd` wraps the launch in a `:loop` that relaunches while it sees 97, so a fresh
+  process picks up the latest code and re-opens the devices — no closing the window or re-running
+  `run.cmd`. Quit (**Q**/**Esc**) exits 0 → `pause`. Host-only interactive flow (no unit test);
+  AGENTS runbook updated. See journal 39.)_
 
 ## M5 — Live filters & presets
 

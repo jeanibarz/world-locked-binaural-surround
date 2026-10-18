@@ -71,6 +71,10 @@ FG = (245, 237, 232)
 MUTED = (171, 151, 139)
 ACCENT = (214, 214, 56)
 EXPERIMENT_METHODS = ("nearest", "timealign", "minphase", "notchwarp")
+# main() returns this so the host launcher can relaunch (pick up code changes) without the
+# user re-running run.cmd. run_passthrough.cmd loops while it sees this exit code; any other
+# code (0 = quit) ends. Kept distinct from 0/1/signal codes. See AGENTS.md / journal 39.
+RESTART_EXIT_CODE = 97
 
 
 def _load_mono_loop(path: Path, target_sr: int) -> np.ndarray:
@@ -462,6 +466,7 @@ def main(argv=None) -> int:
     in_stream.start_stream()
     out_ctx = sd.OutputStream(samplerate=brir.samplerate, channels=2, device=out_index,
                               blocksize=0, dtype="float32", latency="low", callback=out_cb)
+    restart = False  # Reload key (Enter): tear down cleanly, then the launcher relaunches us
     try:
         out_ctx.start()
         while True:
@@ -557,7 +562,7 @@ def main(argv=None) -> int:
                                 + ("  SOLO" if test["solo"] else "")
                                 + ("  rot" if test["rotate"] else ""), C.GOOD))
             buttons = [("Test", "T", test["on"]), ("Method", "M", False),
-                       ("Stats", "S", False), ("Quit", "Q", False)]
+                       ("Stats", "S", False), ("Reload", "⏎", False), ("Quit", "Q", False)]
             canvas = C.compose(
                 frame, title=f"world-lock passthrough — webcam {cam_index}", live=live,
                 live_color=live_col, pose=pose, landmarks=landmarks, lock=None,
@@ -568,6 +573,13 @@ def main(argv=None) -> int:
             cv2.imshow(win, canvas)
             key = cv2.waitKey(1) & 0xFF
             if key in (ord("q"), 27):
+                break
+            if key in (13, 10):  # Enter: reload — relaunch to pick up latest code (clean restart)
+                cv2.putText(canvas, "restarting...", (C.CAM_W + 20, 70),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, ACCENT, 1, cv2.LINE_AA)
+                cv2.imshow(win, canvas)
+                cv2.waitKey(1)
+                restart = True
                 break
             if key == ord("s"):
                 show_stats = not show_stats
@@ -617,7 +629,7 @@ def main(argv=None) -> int:
         pya.terminate()
         cap.release()
         cv2.destroyAllWindows()
-    return 0
+    return RESTART_EXIT_CODE if restart else 0
 
 
 if __name__ == "__main__":

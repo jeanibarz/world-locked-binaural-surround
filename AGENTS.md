@@ -210,6 +210,13 @@ only a **kernel** change (anything under `rust/`) requires rebuilding + reinstal
 (steps 1–2). Sharing with a colleague: build their platform's wheel (Linux native / Windows via
 cargo-xwin / macOS on a Mac), or they run the pure-Python fallback.
 
+**In-app reload (so a code change needs no manual restart).** The passthrough returns exit code
+`RESTART_EXIT_CODE` (97) when the owner presses **Enter** (the *Reload* button); `run_passthrough.cmd`
+wraps the `py` call in a `:loop` that relaunches while it sees 97, so a fresh process picks up the
+latest WSL code and re-opens the audio devices cleanly — no closing the window or re-running
+`run.cmd`. Quit (**Q**/**Esc**) exits 0 and falls through to `pause`. Any new host launcher that
+wants the same must keep the `if %errorlevel%==97 goto loop` line. (Journal 39.)
+
 ## Working discipline
 
 - **Prototype in Python first** for fast iteration, but the language is **not
