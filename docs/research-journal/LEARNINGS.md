@@ -435,3 +435,31 @@ full story.
     **macOS is the exception** — no clean cross-build from Linux (Apple SDK + realistically a
     Mac; you can't emulate another OS, only another CPU arch for Linux) — so build on the Mac or
     lean on the pure-Python fallback that keeps the app running everywhere. (→ [28](28-cross-platform-wheels.md))
+58. **For world-lock, the latency that matters is the *pose age at the moment the sound is
+    heard*, and it is a distribution, not a sum of component maxima.** Four delays feed it —
+    image (exposure/read-out/USB/buffering, *not* `1/fps`), compute, audio render (block +
+    device buffer, *not* FIR length), and the residual `ω·Δt` during motion — but they don't
+    simply add: capture and DSP pipeline, and a pose's age depends on the phase between frame
+    arrivals and audio blocks. So measure it as **p50/p95/p99 + extremes** (a rare 100 ms spike
+    hurts a world-locked scene far more than a higher mean), not as one averaged number.
+    (→ [36](36-latency-budget-and-prediction.md))
+59. **Two *different* perceptual thresholds bound the budget — don't conflate them.** (a)
+    Detecting the *lag itself* (the scene swims): ~50–75 ms just-noticeable total system latency
+    in dynamic binaural synthesis (Lindau 2009, lowest ~52 ms) → keep pose age under ~50 ms, ~30
+    is headroom. (b) Resolving the error *as an angle*: minimum audible *movement* angle is ~8° at
+    90°/s (Perrott & Musicant 1977), so ~3° of latency-lag during a turn is sub-threshold *during
+    motion* — but the finer ~1° static MAA applies the instant the head *stops*. Design
+    consequence: cut effective lag during motion yet **settle cleanly at the stop** — exactly what
+    a bounded-horizon orientation predictor (const-ω quaternion extrapolation + α-β, Δt→0 on
+    deceleration) targets, re-evaluated per audio block so reactivity decouples from the camera
+    fps. (These numbers are literature recall, not KB- or self-verified; B8.5 measures ours.)
+    (→ [36](36-latency-budget-and-prediction.md))
+60. **Measure the pose age before buying a camera — period ≠ pipeline latency.** Detect is ~3 ms
+    and resolution-independent; the camera (capture, not USB) is the bottleneck, and the C270's
+    earlier 15 fps was low-light **auto-exposure**, not the sensor (journal 31). So first fix
+    lighting / set manual exposure + fixed focus and decouple acquisition with **drop-latest**
+    (newest frame, discard the stale queue); only if a B8.5 measurement shows the *sensor*
+    dominates is a 60 fps **uncompressed** webcam (manual exposure, no autofocus) worth it — a
+    nominal 90–120 fps camera only shaves the frame *period* (16.7→11.1 ms) and says nothing about
+    the full capture→application delay. A second camera is for angular coverage/occlusion (async
+    timestamp fusion first), not speed. (→ [36](36-latency-budget-and-prediction.md))

@@ -319,6 +319,29 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   `python3.lib`). Windows `win_amd64` wheel installed + verified on the owner's host (~25× RT).
   macOS = build-on-Mac or the pure-Python fallback (not cross-buildable from Linux).
   `rust/build-wheels.sh`; launcher uses `--rust`. See journal 28.)_
+- [ ] **B8.5** **Pose-age / motion→sound latency measurement harness.** Measure the
+  true *pose age at the ear* as a **distribution (p50/p95/p99 + extremes, not a mean)**,
+  via three measurements (requirements § 7.3): (a) **camera→app** — a known temporal
+  signal (LED / on-screen timecode) in view vs the frame's software-availability
+  timestamp, accounting for exposure window + rolling-shutter skew; (b) **per-stage
+  compute** time (extend the existing `detect_ms` / per-block render EWMA); (c)
+  **motion→sound** — an external (ideally motorised) rotation reference recorded with the
+  audio output, effective applied orientation recovered by cross-correlation / system
+  identification. Carries a pose **timestamp** end-to-end (the seam B8.6 needs). Decides
+  whether the current C270 is already good enough before any camera spend. _(from journal
+  36; feeds NFR-1 and B8.6.)_
+- [ ] **B8.6** **Orientation prediction to the audio-render instant.** Estimate head
+  orientation at the *future* instant the DSP renders, so the pose baked into a block
+  matches the head when it is heard — a prediction stage between tracker and render. First
+  cut: constant-angular-velocity quaternion extrapolation `q̂(t+Δt) = q(t) ⊗
+  exp((Δt/2)·ω(t))` with a lightweight **α-β** / orientation+angular-velocity state filter
+  (not a heavy model). Tracker stays 60 Hz; DSP re-evaluates the predicted pose per block,
+  decoupling reactivity from the camera fps (our bottleneck). **Precautions:** limit the
+  horizon + damp velocity so an abrupt stop doesn't overshoot (the ~1° static MAA,
+  requirements § 7.1); filter `ω` jitter without re-adding latency. Depends on B8.5 for the
+  real Δt and the pose timestamp, and on a validation that it measurably lowers effective
+  lag without hurting the at-rest image. _(from journal 36; the main M8 lever after the
+  cushion fix.)_
 
 ## M9 — Fine-tuning & release
 
@@ -375,7 +398,17 @@ _(the chain appends here as it learns)_
   Resolve via better rear cues or an HRTF **set** that resolves the owner's rears
   (sibling HRTF-selection track). Re-score with the owner's **mixed-rig judge**
   (`judge_registry.best_judge()`, B7.0). **This is the next real frontier.** _(journal 18)_
-- [ ] **B0.7** Raise the head-tracking update rate: the C270 gives ~15 fps @
-  640×480 (~66 ms/frame), which dominates the <50 ms tracking budget while
-  inference is only ~12 ms (journal 05). Evaluate MJPG fourcc / lower resolution /
-  a faster camera, and measure the achievable pose update rate. _(from journal 05)_
+- [ ] **B0.7** Raise the head-tracking update rate / lower its frame age — **measure
+  first, buy last** (requirements § 7.4). Detect is only ~3 ms and resolution-independent;
+  the camera is the bottleneck (journals 05/31). Cheapest-first: (1) **optimise the C270 we
+  have** — fix lighting / set **manual exposure + fixed focus** (journal 31 showed the
+  15 fps was low-light auto-exposure, not USB; native is 30 fps), keep acquisition
+  **decoupled + drop-latest** (newest frame, discard the stale queue); verify the achieved
+  frame age with B8.5 rather than trusting `CAP_PROP_BUFFERSIZE=1` (not guaranteed under
+  MSMF/DSHOW). (2) **Only if B8.5 shows the sensor dominates, a 60 fps *uncompressed*
+  webcam** (manual exposure, no autofocus) for a *mastered* low-latency path — not a nominal
+  90–120 fps one (period ≠ pipeline latency). (3) **A second camera only for angular
+  coverage/occlusion** across the ±45° turns (FR-13), fused asynchronously by timestamp;
+  hardware sync only if async fusion is insufficient. Also worth a bench: a minimal
+  `solvePnP` orientation estimator vs MediaPipe if only yaw/pitch/roll matters. _(from
+  journals 05/31/36)_
