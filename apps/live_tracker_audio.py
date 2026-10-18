@@ -46,7 +46,7 @@ from binaural_headtracker.devices import (
     settings_dialog,
 )
 from binaural_headtracker.head_pose import head_pose_from_matrix
-from binaural_headtracker.live_render import WorldLockedSource, source_layout
+from binaural_headtracker.live_render import WorldLockedSource, interpolated_ring, source_layout
 from binaural_headtracker.output_eq import load_output_eq
 from binaural_headtracker.surround import load_baked_brir
 from binaural_headtracker.tracking import HeadPose, PoseFilter
@@ -112,13 +112,30 @@ def main(argv=None) -> int:
     p.add_argument("--output-eq", type=Path, default=None,
                    help="EqualizerAPO config whose global per-ear comp+EQ chain is applied to "
                         "the stereo output, matching your tuned EqualizerAPO sound (B5.3)")
+    p.add_argument("--method", default="nearest",
+                   choices=("nearest", "timealign", "minphase", "notchwarp"),
+                   help="BRIR direction method to start with; cycle live with M (B3.3). "
+                        "'nearest' = the measured 8-speaker ring; the others synthesize a dense "
+                        "grid of in-between directions (journal 18) so you can A/B them by ear.")
+    p.add_argument("--grid-step", type=float, default=10.0,
+                   help="degrees between synthesized grid directions for the non-nearest methods")
     args = p.parse_args(argv)
 
     brir = load_baked_brir(args.brir_dir)
     loop = _load_mono_loop(args.source, brir.samplerate)
     if loop.size == 0:
         raise SystemExit("source loop is empty")
-    renderer = WorldLockedSource(brir, block_size=args.block, fade_ms=args.fade_ms)
+    METHODS = ("nearest", "timealign", "minphase", "notchwarp")
+
+    def build_renderer(method: str) -> WorldLockedSource:
+        """Single-source renderer for ``method``: the measured 8-BRIR ring for 'nearest', or a
+        dense interpolated grid (every ``--grid-step``°) for the synthesis methods (B3.3)."""
+        if method == "nearest":
+            return WorldLockedSource(brir, block_size=args.block, fade_ms=args.fade_ms)
+        dense, azmap = interpolated_ring(brir, method, step_deg=args.grid_step)
+        return WorldLockedSource(dense, block_size=args.block, fade_ms=args.fade_ms, azimuths=azmap)
+
+    renderers = {args.method: build_renderer(args.method)}  # built lazily per method, cached
     layout = source_layout(world_az_deg=args.world_az)
     # Global output-bus comp + EQ (B5.3): apply the owner's headphone comp + subjective EQ to
     # the stereo output so the demo sounds like the tuned EqualizerAPO config, not the bare bake.
@@ -143,7 +160,8 @@ def main(argv=None) -> int:
 
     # Shared head-relative source azimuth: written by the camera thread, read by audio.
     state = {"az": args.world_az, "active": "--", "cal": HeadCalibration(
-        0.0, 0.0, 0.0, args.yaw_sign, args.pitch_sign, args.roll_sign)}
+        0.0, 0.0, 0.0, args.yaw_sign, args.pitch_sign, args.roll_sign),
+        "renderer": renderers[args.method], "method": args.method}
     lock = threading.Lock()
     recorded: list[np.ndarray] = []
     az_track: list[float] = []
@@ -164,7 +182,8 @@ def main(argv=None) -> int:
                 pos = int((pos + args.block) % loop.size)
                 with lock:
                     az = state["az"]
-                stereo = renderer.process_block(mono, az)
+                    rnd = state["renderer"]
+                stereo = rnd.process_block(mono, az)
                 if output_eq is not None:
                     stereo = output_eq.process_block(stereo)
                 stereo = stereo * args.gain
@@ -223,7 +242,9 @@ def main(argv=None) -> int:
             else:
                 cv2.putText(frame, "no face", (12, 28),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, MUTED, 1, cv2.LINE_AA)
-            cv2.putText(frame, "[C] recenter   [F] flip L/R   [Q] quit",
+            cv2.putText(frame, f"method: {state['method'].upper()}   (grid {args.grid_step:g} deg)",
+                        (12, 52), cv2.FONT_HERSHEY_SIMPLEX, 0.6, ACTIVE, 1, cv2.LINE_AA)
+            cv2.putText(frame, "[C] recenter   [F] flip L/R   [M] method   [Q] quit",
                         (12, frame.shape[0] - 14),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, FG, 1, cv2.LINE_AA)
             cv2.imshow(win, frame)
@@ -232,6 +253,17 @@ def main(argv=None) -> int:
                 break
             if key == ord("f"):
                 flip_az = not flip_az  # toggle live if the world-lock turns the wrong way
+            if key == ord("m"):  # cycle the interpolation method (B3.3), synthesizing on demand
+                nxt = METHODS[(METHODS.index(state["method"]) + 1) % len(METHODS)]
+                if nxt not in renderers:
+                    cv2.putText(frame, f"synthesizing {nxt} grid...", (12, 76),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, ACCENT, 1, cv2.LINE_AA)
+                    cv2.imshow(win, frame)
+                    cv2.waitKey(1)
+                    renderers[nxt] = build_renderer(nxt)  # ~1-2 s; audio keeps playing old method
+                with lock:
+                    state["renderer"] = renderers[nxt]
+                    state["method"] = nxt
             if key == ord("c") and recent:
                 new_cal = calibrate_neutral(list(recent), yaw_sign=args.yaw_sign,
                                             pitch_sign=args.pitch_sign, roll_sign=args.roll_sign)
