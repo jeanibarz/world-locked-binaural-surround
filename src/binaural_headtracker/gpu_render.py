@@ -92,12 +92,24 @@ class GpuWorldLocked7p1:
     """
 
     def __init__(self, brir: BakedBRIRSet, *, block_size: int = 256, fade_ms: float = 20.0,
-                 dtype="complex64") -> None:
+                 dtype="complex64", lfe_mode: str = "brir") -> None:
+        if lfe_mode not in ("brir", "flat"):
+            raise ValueError("lfe_mode must be 'brir' or 'flat'")
         self._brir = brir
         self._block = int(block_size)
+        self._lfe_mode = lfe_mode
         fade_samples = max(1, round(fade_ms * 1e-3 * brir.samplerate))
         self._mixer = BusMixer(brir.n_channels, fade_samples=fade_samples)
         self._conv = GpuBusConvolver(brir, block_size, dtype=dtype)
+        # Flat LFE (B4.3): keep the LFE out of the GPU buses (zero its input column) and sum it
+        # flat on the host at the per-ear LFE-IR L2 norm — mirrors WorldLocked7p1's flat mode,
+        # preserving sub-bass the bass-light BRIR would strip. See live_render.WorldLocked7p1.
+        self._lfe_idx = brir.channels.index("LFE") if "LFE" in brir.channels else None
+        self._lfe_gain = (0.0, 0.0)
+        if lfe_mode == "flat" and self._lfe_idx is not None:
+            li = self._lfe_idx
+            self._lfe_gain = (float(np.linalg.norm(brir.left[li])),
+                              float(np.linalg.norm(brir.right[li])))
 
     @property
     def block_size(self) -> int:
@@ -112,5 +124,13 @@ class GpuWorldLocked7p1:
         c = self._brir.n_channels
         if pcm.ndim != 2 or pcm.shape != (self._block, c):
             raise ValueError(f"pcm must be ({self._block}, {c}); got {pcm.shape}")
+        if self._lfe_mode == "flat" and self._lfe_idx is not None:
+            pcm = pcm.copy()
+            lfe = pcm[:, self._lfe_idx].copy()
+            pcm[:, self._lfe_idx] = 0.0  # keep LFE out of the convolved buses
         bus_in = self._mixer.mix(pcm, bus_targets(self._brir, azimuths))  # (C, block)
-        return self._conv.process(bus_in)
+        out = self._conv.process(bus_in)
+        if self._lfe_mode == "flat" and self._lfe_idx is not None:
+            out[:, 0] += lfe * self._lfe_gain[0]
+            out[:, 1] += lfe * self._lfe_gain[1]
+        return out

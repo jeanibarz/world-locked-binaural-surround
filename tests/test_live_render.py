@@ -258,6 +258,28 @@ def test_7p1_lfe_is_not_steered() -> None:
     assert np.allclose(out[:m, 1], ref_r[:m], atol=1e-9)
 
 
+def test_7p1_lfe_flat_mode_sums_non_directional() -> None:
+    """lfe_mode='flat' (B4.3) adds LFE straight to both ears at the per-ear IR L2 norm — no
+    convolution — so it keeps the sub-bass the bass-light BRIR would strip, with no tail."""
+    brir = _synthetic_brir()
+    rng = np.random.default_rng(9)
+    pcm = np.zeros((2000, brir.n_channels))
+    sig = rng.normal(0, 0.3, 2000)
+    pcm[:, brir.index("LFE")] = sig  # LFE-only; directional channels silent
+    block = 256
+    w = WorldLocked7p1(brir, block_size=block, fade_ms=20.0, lfe_mode="flat")
+    out = _run_7p1(w, pcm, _neutral_azimuths(brir), block)
+
+    li = brir.index("LFE")
+    g_l, g_r = np.linalg.norm(brir.left[li]), np.linalg.norm(brir.right[li])
+    n = pcm.shape[0]
+    assert np.allclose(out[:n, 0], sig * g_l, atol=1e-9)   # flat, block-aligned, no filtering
+    assert np.allclose(out[:n, 1], sig * g_r, atol=1e-9)
+    assert np.max(np.abs(out[n:])) < 1e-9                  # flat LFE adds no convolution tail
+    with pytest.raises(ValueError):
+        WorldLocked7p1(brir, block_size=block, lfe_mode="bogus")
+
+
 # --- B4.2: bus-mix reformulation (what the GPU batches) == the voice pool --------------
 
 def test_bus_mixer_steady_state_routes_full_gain() -> None:

@@ -257,8 +257,10 @@ class WorldLocked7p1:
     The full-passthrough generalisation of :class:`WorldLockedSource`: the 8 input
     channels are the 8 **world-fixed** 7.1 speakers, and each directional channel gets its
     own steered voice pool (nearest BRIR + click-free crossfade) so that, as the head
-    turns, the whole 7.1 field stays locked in the room. LFE is non-directional bass, so it
-    is **not** steered — it is convolved through its own fixed BRIR and summed.
+    turns, the whole 7.1 field stays locked in the room. LFE is non-directional bass, so it is
+    **not** steered: ``lfe_mode="brir"`` convolves it through its own fixed BRIR and sums (the
+    default, == the static reference); ``lfe_mode="flat"`` sums it flat to both ears at a
+    level-matched gain, preserving the sub-bass the bass-light BRIRs would otherwise strip (B4.3).
 
     This is what makes *any* 7.1 system audio (captured from the virtual device) head-locked
     to the world. The world-lock geometry stays in the tested layer: the caller passes the
@@ -267,11 +269,15 @@ class WorldLocked7p1:
     only the per-channel voice pools and the sum.
     """
 
-    def __init__(self, brir: BakedBRIRSet, *, block_size: int = 256, fade_ms: float = 20.0) -> None:
+    def __init__(self, brir: BakedBRIRSet, *, block_size: int = 256, fade_ms: float = 20.0,
+                 lfe_mode: str = "brir") -> None:
         if block_size <= 0:
             raise ValueError("block_size must be positive")
+        if lfe_mode not in ("brir", "flat"):
+            raise ValueError("lfe_mode must be 'brir' or 'flat'")
         self._brir = brir
         self._block = int(block_size)
+        self._lfe_mode = lfe_mode
         self._dir_idx = [brir.channels.index(c) for c in RING_CHANNELS if c in brir.channels]
         if not self._dir_idx:
             raise ValueError("BRIR set has none of the directional ring channels")
@@ -280,9 +286,22 @@ class WorldLocked7p1:
             for i in self._dir_idx
         }
         self._lfe_idx = brir.channels.index("LFE") if "LFE" in brir.channels else None
+        self._lfe = None
+        self._lfe_gain = (0.0, 0.0)
         if self._lfe_idx is not None:
             li = self._lfe_idx
-            self._lfe = StereoConvolver(brir.left[li : li + 1], brir.right[li : li + 1], block_size)
+            if lfe_mode == "brir":
+                # Steer-free: LFE through its own fixed BRIR (matches the static reference).
+                self._lfe = StereoConvolver(
+                    brir.left[li : li + 1], brir.right[li : li + 1], block_size)
+            else:
+                # Non-directional flat mix to both ears (B4.3): the baked BRIRs roll off the
+                # sub-bass ~-20 dB, so convolving the pure-sub-bass LFE kills the bass. Sum it
+                # flat instead, at a per-ear gain = that ear's LFE-IR L2 norm, which preserves
+                # the loudness convolution would give (RMS_out ≈ RMS_in·‖ir‖) without the
+                # spectral rolloff. (journal 24)
+                self._lfe_gain = (float(np.linalg.norm(brir.left[li])),
+                                  float(np.linalg.norm(brir.right[li])))
 
     @property
     def block_size(self) -> int:
@@ -310,13 +329,22 @@ class WorldLocked7p1:
         for i, src in self._sources.items():
             out += src.process_block(pcm[:, i], float(az[i]))
         if self._lfe_idx is not None:
-            out += self._lfe.process_block(pcm[:, self._lfe_idx : self._lfe_idx + 1])
+            lfe = pcm[:, self._lfe_idx]
+            if self._lfe_mode == "brir":
+                out += self._lfe.process_block(lfe[:, None])
+            else:  # flat: non-directional sum to both ears, no convolution (no tail)
+                out[:, 0] += lfe * self._lfe_gain[0]
+                out[:, 1] += lfe * self._lfe_gain[1]
         return out
 
     def flush(self) -> np.ndarray:
-        """Flush every channel's remaining tail → stereo (longest component's length)."""
+        """Flush every channel's remaining tail → stereo (longest component's length).
+
+        Flat-LFE adds no tail (it is a gain, not a convolution), so only the directional
+        voices (and, in ``brir`` mode, the LFE convolver) ring out here.
+        """
         tails = [src.flush() for src in self._sources.values()]
-        if self._lfe_idx is not None:
+        if self._lfe is not None:
             tails.append(self._lfe.flush())
         n = max((t.shape[0] for t in tails), default=0)
         out = np.zeros((n, 2))

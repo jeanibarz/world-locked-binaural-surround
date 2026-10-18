@@ -91,14 +91,19 @@ def main(argv=None) -> int:
                    help="render on the GPU (CuPy) — needed for the full-BRIR 8ch path in real time")
     p.add_argument("--monitor", action="store_true",
                    help="print per-channel captured input RMS ~1/s (diagnose channel layout)")
+    p.add_argument("--lfe-mode", choices=("flat", "brir"), default="flat",
+                   help="'flat' sums LFE non-directionally to both ears (keeps the bass the "
+                        "bass-light BRIRs strip); 'brir' convolves it through its BRIR (B4.3)")
     args = p.parse_args(argv)
 
     brir = load_baked_brir(args.brir_dir)
-    renderer = WorldLocked7p1(brir, block_size=args.block, fade_ms=args.fade_ms)
+    renderer = WorldLocked7p1(brir, block_size=args.block, fade_ms=args.fade_ms,
+                              lfe_mode=args.lfe_mode)
     if args.gpu:
         try:
             from binaural_headtracker.gpu_render import GpuWorldLocked7p1
-            renderer = GpuWorldLocked7p1(brir, block_size=args.block, fade_ms=args.fade_ms)
+            renderer = GpuWorldLocked7p1(brir, block_size=args.block, fade_ms=args.fade_ms,
+                                         lfe_mode=args.lfe_mode)
             print("render: GPU (CuPy)")
         except Exception as exc:  # noqa: BLE001  — fall back to CPU, which may drop out
             print(f"GPU render unavailable ({exc!r}); falling back to CPU "
