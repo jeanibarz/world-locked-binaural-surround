@@ -376,6 +376,13 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   stale ≈ one camera interval (both small); the ~75 ms gap between the sim's 68 ms and the real 143 ms
   is the **WASAPI shared-mode device buffer (~90–100 ms)** — why block size barely moved the total.
   **Remaining:** run the host device sweep to confirm shared-vs-exclusive, then act on B0.5.)_
+- [~] **B8.5c** **Output was on MME → prefer WASAPI.** The sweep's ambiguous-`"FiiO"` failure (4 host
+  APIs) revealed `resolve_output_device` returned the **first** match = **MME** (~90–100 ms shared
+  buffer), so the passthrough output had been on MME — the fixed device term journal 42 pinned. Now
+  the resolver prefers **WASAPI** (then WDM-KS, DirectSound, MME) for an ambiguous name; the bench
+  resolves via the same helper; the passthrough logs the output host API + buffer on startup. Likely
+  the single biggest latency win, no DSP change. 1 test (325 total). Journal 43. **Remaining:** the
+  host sweep now runs — quantify shared vs exclusive, then wire opt-in exclusive (B0.5).
   via three measurements (requirements § 7.3): (a) **camera→app** — a known temporal
   signal (LED / on-screen timecode) in view vs the frame's software-availability
   timestamp, accounting for exposure window + rolling-shutter skew; (b) **per-stage

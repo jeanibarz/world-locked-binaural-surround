@@ -65,14 +65,22 @@ def camera_choices(indices) -> list[DeviceChoice]:
     return [DeviceChoice(index=int(i), label=f"Camera {int(i)}") for i in indices]
 
 
+# When one device (e.g. "FiiO K11") is exposed by several Windows host APIs, prefer the
+# lowest-latency one. WASAPI (shared, and the only one that supports exclusive mode) beats
+# WDM-KS, DirectSound and especially MME, whose shared buffer is ~90–100 ms (journal 43).
+_HOSTAPI_PRIORITY = ("wasapi", "wdm-ks", "directsound", "mme")
+
+
 def resolve_output_device(spec, choices: list[DeviceChoice]) -> int | None:
     """Resolve an ``--audio-device`` spec to a device index.
 
     ``spec`` may be ``None`` (use the system default → ``None``, which tells
     ``sounddevice`` to use its default), an ``int`` / all-digit string (a device index,
-    returned as-is), or a case-insensitive substring matched against the choice labels
-    (first match wins). Raises :class:`ValueError` if a name spec matches nothing, so a
-    typo fails loudly instead of silently playing out the wrong device.
+    returned as-is), or a case-insensitive substring matched against the choice labels.
+    When the substring matches **several** devices — the same hardware under MME, DirectSound,
+    WASAPI, … — the **lowest-latency host API wins** (WASAPI first), so a bare name like
+    ``"FiiO"`` lands on WASAPI rather than MME's big buffer. Raises :class:`ValueError` if a
+    name spec matches nothing, so a typo fails loudly instead of playing the wrong device.
     """
     if spec is None:
         return None
@@ -82,13 +90,23 @@ def resolve_output_device(spec, choices: list[DeviceChoice]) -> int | None:
     if s.lstrip("-").isdigit():
         return int(s)
     low = s.lower()
-    for c in choices:
-        if low in c.label.lower():
-            return c.index
-    raise ValueError(
-        f"no output device matching {spec!r}; available: "
-        + ", ".join(c.label for c in choices)
-    )
+    matches = [c for c in choices if low in c.label.lower()]
+    if not matches:
+        raise ValueError(
+            f"no output device matching {spec!r}; available: "
+            + ", ".join(c.label for c in choices)
+        )
+    if len(matches) == 1:
+        return matches[0].index
+
+    def rank(c: DeviceChoice) -> int:
+        lab = c.label.lower()
+        for i, api in enumerate(_HOSTAPI_PRIORITY):
+            if api in lab:
+                return i
+        return len(_HOSTAPI_PRIORITY)  # unknown host API → after the known ones
+
+    return min(matches, key=rank).index
 
 
 def default_choice_label(choices: list[DeviceChoice], index: int | None) -> str | None:

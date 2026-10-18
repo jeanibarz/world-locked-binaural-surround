@@ -71,6 +71,25 @@ def test_resolve_unknown_name_raises() -> None:
         resolve_output_device("nonexistent-device", choices)
 
 
+def test_resolve_ambiguous_name_prefers_wasapi_over_mme() -> None:
+    # The same hardware under several host APIs (as Windows exposes a DAC): a bare name must
+    # resolve to the WASAPI entry (low latency, exclusive-capable), not MME's big buffer.
+    raw = [
+        {"name": "FiiO K11", "max_output_channels": 2, "hostapi": 0},  # MME
+        {"name": "FiiO K11", "max_output_channels": 2, "hostapi": 1},  # DirectSound
+        {"name": "FiiO K11", "max_output_channels": 2, "hostapi": 2},  # WASAPI
+        {"name": "FiiO K11", "max_output_channels": 2, "hostapi": 3},  # WDM-KS
+    ]
+    apis = ["MME", "Windows DirectSound", "Windows WASAPI", "Windows WDM-KS"]
+    choices = output_device_choices(raw, apis)
+    assert resolve_output_device("FiiO", choices) == 2          # the WASAPI index
+    # WDM-KS beats DirectSound/MME when WASAPI is absent (list → MME, DirectSound, WDM-KS at 0,1,2)
+    no_wasapi = output_device_choices(raw[:2] + raw[3:], apis)
+    assert resolve_output_device("FiiO", no_wasapi) == 2        # the WDM-KS index here
+    # an unambiguous name still resolves to its single match
+    assert resolve_output_device("WDM-KS", choices) == 3
+
+
 def test_default_choice_label() -> None:
     choices = output_device_choices(RAW, HOSTAPIS, default_index=2)
     assert default_choice_label(choices, 2) == choices[1].label
