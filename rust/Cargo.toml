@@ -10,7 +10,10 @@ name = "binaural_kernel"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.22", features = ["extension-module"] }
+# abi3-py310: one stable-ABI wheel per platform runs on CPython 3.10+ (incl. the newest).
+# generate-import-lib: synthesize the Windows `python3.lib` so the abi3 wheel cross-compiles
+# from Linux/WSL (via cargo-xwin) without a Windows Python install.
+pyo3 = { version = "0.22", features = ["extension-module", "abi3-py310", "generate-import-lib"] }
 numpy = "0.22"
 realfft = "3.4"
 rayon = "1.10"

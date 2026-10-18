@@ -278,6 +278,12 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   (Python 0.4×), so the GPU is now optional and low-latency small blocks are viable. 7 tests
   (292 total). See journal 27. Follow-ups: pull BusMixer/LFE into the kernel; native low-latency
   duplex (replace the Python audio bridge). → issue #31._
+- [x] **B8.3** Distributable cross-platform wheels for the kernel, **no paid CI**.
+  _(abi3 (`abi3-py310`) → one wheel per platform for CPython 3.10+; cross-compiled locally from
+  WSL: Linux native + **Windows via `cargo-xwin`** (`generate-import-lib` synthesises
+  `python3.lib`). Windows `win_amd64` wheel installed + verified on the owner's host (~25× RT).
+  macOS = build-on-Mac or the pure-Python fallback (not cross-buildable from Linux).
+  `rust/build-wheels.sh`; launcher uses `--rust`. See journal 28.)_
 
 ## M9 — Fine-tuning & release
 

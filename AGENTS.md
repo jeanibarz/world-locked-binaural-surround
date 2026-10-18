@@ -169,6 +169,17 @@ the Python renderer), so the GPU is now optional. Build it into the venv with a 
 select it with `--rust` (takes precedence over `--gpu`; falls back to pure-Python CPU if
 unbuilt). `rust/target/` is gitignored; `rust/Cargo.lock` is committed. (See journal 27.)
 
+**Distributing the kernel cross-platform (B8.3).** Built **abi3** (`abi3-py310`), so one wheel
+per platform runs on CPython 3.10+ (including the newest — the host Python version is gated by
+mediapipe/opencv wheels, not the kernel). `rust/build-wheels.sh [linux|windows|all]` builds
+wheels into `dist/` (gitignored) with **no CI**: Linux native, and **Windows cross-compiled from
+WSL** via `cargo-xwin` + `pyo3/generate-import-lib` (prereqs in the script header: the
+windows-msvc target, `cargo install cargo-xwin`, `apt install clang lld llvm`, a `clang-cl`
+symlink, and a native-ext4 `CARGO_TARGET_DIR` — `llvm-dlltool` EACCESes on `/mnt/*`). **macOS is
+not cross-buildable from Linux** (Apple SDK + a Mac): the Mac colleague runs `maturin build`
+locally or uses the pure-Python fallback. Install a built wheel with `pip install <wheel>` into
+the Python that runs the app. (See journal 28.)
+
 ## Working discipline
 
 - **Prototype in Python first** for fast iteration, but the language is **not

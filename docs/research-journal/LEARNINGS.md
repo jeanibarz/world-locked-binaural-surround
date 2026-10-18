@@ -425,3 +425,13 @@ full story.
     inverse real FFT by `nfft`, zero the DC/Nyquist imaginary bins to match numpy). Keep it an
     **optional accelerator** (separate maturin crate, `importorskip` on CI) so the Python wheel
     and CI stay toolchain-free. (→ [27](27-rust-render-kernel.md))
+57. **A native extension can be shipped cross-platform from one Linux box, no paid CI — build
+    abi3 and cross-compile.** `abi3-py310` makes one stable-ABI wheel per platform cover CPython
+    3.10+ (incl. the newest), so you never rebuild per Python minor and "use a recent Python" is
+    free. Windows wheels cross-compile from WSL with `cargo-xwin` (+ `pyo3/generate-import-lib`
+    to synthesise `python3.lib`, no Windows/VS); the gotchas are a rustc new enough for
+    cargo-xwin, the LLVM CLI tools (`clang`/`lld`/`llvm`, plus a `clang-cl` symlink Ubuntu omits),
+    and a **native-ext4 `CARGO_TARGET_DIR`** (`llvm-dlltool` EACCESes on `/mnt/*` drive mounts).
+    **macOS is the exception** — no clean cross-build from Linux (Apple SDK + realistically a
+    Mac; you can't emulate another OS, only another CPU arch for Linux) — so build on the Mac or
+    lean on the pure-Python fallback that keeps the app running everywhere. (→ [28](28-cross-platform-wheels.md))
