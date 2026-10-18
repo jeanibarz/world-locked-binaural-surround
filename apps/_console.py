@@ -51,6 +51,27 @@ def health_color(h: Health):
     return {Health.OK: GOOD, Health.TIGHT: ACTIVE, Health.RISK: RISK, Health.FAILING: RED}[h]
 
 
+def apply_camera_settings(cap, *, width=0, height=0, fps=0, mjpg=False):
+    """Apply optional camera settings (0 = leave the driver default) and return the actual
+    (width, height, fps) the driver negotiated. Harmless if a request isn't honoured."""
+    cv2 = _cv2()
+    try:
+        if mjpg:
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        if width:
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, int(width))
+        if height:
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, int(height))
+        if fps:
+            cap.set(cv2.CAP_PROP_FPS, int(fps))
+    except Exception:  # noqa: BLE001 — a camera that rejects a set() should not crash startup
+        pass
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+    f = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+    return w, h, f
+
+
 def text(img, s, x, y, color, scale=0.42, thick=1, *, mono=False):
     cv2 = _cv2()
     font = cv2.FONT_HERSHEY_PLAIN if mono else cv2.FONT_HERSHEY_SIMPLEX
@@ -196,7 +217,7 @@ def radar(canvas, cx, cy, R, dirs, channels, nearest_i, *, legend=True):
     if legend:
         ly = cy + R + 34
         cv2.circle(canvas, (cx - 90, ly - 4), 5, ACTIVE, -1, cv2.LINE_AA)
-        text(canvas, "active speaker", cx - 78, ly, MUTED, 0.36)
+        text(canvas, "facing", cx - 78, ly, MUTED, 0.36)
         arr = np.array([[cx + 42, ly - 9], [cx + 48, ly], [cx + 36, ly]])
         cv2.fillPoly(canvas, [arr], FG)
         text(canvas, "you", cx + 54, ly, MUTED, 0.36)
@@ -311,13 +332,29 @@ def stats_panel(canvas, x, y, w, h, d: Diagnosis, *, audio=True, extra_rate_hz=0
     else:
         text(canvas, "audio not running (calibration only)", cxl, yy, FAINT, 0.4, mono=True)
         yy += 24
-    if extra_rate_hz:
-        text(canvas, "tracker", cxl, yy, MUTED, 0.42, mono=True)
-        text(canvas, f"{extra_rate_hz:.0f} Hz", cxl + 120, yy, ACCENT, 0.42, mono=True)
-        yy += 24
+    # Tracker / camera pipeline (shown in both audio and calibration modes).
+    rate = 1000.0 / d.loop_ms if d.loop_ms > 0 else extra_rate_hz
+    text(canvas, "tracker", cxl, yy, MUTED, 0.42, mono=True)
+    loop_txt = f"{rate:.0f} Hz" + (f"  ({d.loop_ms:.0f} ms/frame)" if d.loop_ms > 0 else "")
+    text(canvas, loop_txt, cxl + 120, yy, ACCENT, 0.42, mono=True)
+    yy += 20
+    if d.detect_ms > 0:
+        text(canvas, "detect", cxl, yy, MUTED, 0.42, mono=True)
+        text(canvas, f"{d.detect_ms:.1f} ms/frame", cxl + 120, yy, FG, 0.4, mono=True)
+        yy += 20
+    if d.cam_w and d.cam_h:
+        text(canvas, "camera", cxl, yy, MUTED, 0.42, mono=True)
+        cam_txt = f"{d.cam_w}x{d.cam_h}" + (f" @ {d.camera_fps:.0f} fps" if d.camera_fps else "")
+        text(canvas, cam_txt, cxl + 120, yy, FG, 0.4, mono=True)
+        yy += 20
+    if d.tracking_note:
+        for line in _wrap(d.tracking_note, int((w - 2 * pad) / 7)):
+            text(canvas, line, cxl, yy, FAINT, 0.36, mono=True)
+            yy += 15
+    yy += 6
     cv2.line(canvas, (cxl, yy - 6), (x + w - pad, yy - 6), LINE, 1, cv2.LINE_AA)
     yy += 6
-    for r in d.reasons[:3]:
+    for r in d.reasons[:2]:
         for line in _wrap(r, int((w - 2 * pad) / 7)):
             text(canvas, line, cxl, yy, MUTED, 0.36, mono=True)
             yy += 15

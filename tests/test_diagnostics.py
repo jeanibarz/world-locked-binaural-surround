@@ -80,3 +80,28 @@ def test_cold_start_zeros_are_safe():
 
 def test_health_rank_orders_worst_last():
     assert Health.OK.rank < Health.TIGHT.rank < Health.RISK.rank < Health.FAILING.rank
+
+
+def test_tracking_note_camera_limited():
+    # 30 Hz loop, 3 ms detect, camera says 30 fps → at the camera's hardware rate.
+    d = classify(**{**BASE, "pose_rate_hz": 30.0, "detect_ms": 3.0, "camera_fps": 30.0})
+    assert d.loop_ms == pytest.approx(1000.0 / 30.0)
+    assert "camera" in d.tracking_note and "hardware rate" in d.tracking_note
+    assert d.detect_ms == 3.0 and d.camera_fps == 30.0
+
+
+def test_tracking_note_low_light_drop():
+    # Camera reports 30 fps but only 14 Hz delivered with fast detect → low-light auto-exposure.
+    d = classify(**{**BASE, "pose_rate_hz": 14.0, "detect_ms": 3.0, "camera_fps": 30.0})
+    assert "low light" in d.tracking_note
+
+
+def test_tracking_note_detection_limited():
+    # Slow detect dominating the loop → flagged as detection-bound (resolution won't help).
+    d = classify(**{**BASE, "pose_rate_hz": 12.0, "detect_ms": 70.0, "camera_fps": 30.0})
+    assert "detection is the limit" in d.tracking_note
+
+
+def test_tracking_note_empty_without_rate():
+    d = classify(**{**BASE, "pose_rate_hz": 0.0})
+    assert d.tracking_note == "" and d.loop_ms == 0.0

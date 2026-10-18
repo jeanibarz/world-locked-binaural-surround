@@ -57,6 +57,13 @@ class Diagnosis:
     recent_underruns: int
     fifo_fill_blocks: float
     cushion_blocks: int
+    # camera / tracker pipeline
+    loop_ms: float              # one tracker loop (camera read + detect + draw)
+    detect_ms: float            # face-detection time per frame
+    camera_fps: float           # the camera driver's reported frame rate
+    cam_w: int
+    cam_h: int
+    tracking_note: str          # plain-language note on what limits the tracker rate
 
 
 def classify(
@@ -71,6 +78,10 @@ def classify(
     input_latency_ms: float = 0.0,
     pose_rate_hz: float = 0.0,
     recent_underruns: int = 0,
+    detect_ms: float = 0.0,
+    camera_fps: float = 0.0,
+    cam_w: int = 0,
+    cam_h: int = 0,
 ) -> Diagnosis:
     """Diagnose real-time health + estimate end-to-end latency from live numbers.
 
@@ -121,6 +132,25 @@ def classify(
             "buffer steady, no dropouts"
         )
 
+    # What limits the tracker rate? (detection vs low light vs the camera's own fps)
+    loop_ms = 1000.0 / pose_rate_hz if pose_rate_hz > 0 else 0.0
+    if pose_rate_hz <= 0:
+        tracking_note = ""
+    elif detect_ms > 0 and detect_ms > 0.6 * loop_ms:
+        tracking_note = (f"face detection is the limit (~{detect_ms:.0f} ms/frame); "
+                         "camera resolution won't change it")
+    elif camera_fps > 0 and pose_rate_hz < 0.6 * camera_fps:
+        tracking_note = (f"frame rate has dropped below the camera's {camera_fps:.0f} fps — "
+                         "likely low light (auto-exposure); add light or fix the exposure")
+    elif camera_fps > 0 and pose_rate_hz >= 0.85 * camera_fps:
+        tracking_note = (f"at the camera's {camera_fps:.0f} fps — its hardware rate; "
+                         "a faster webcam is the only way to more")
+    elif camera_fps > 0:
+        tracking_note = (f"a little below the camera's {camera_fps:.0f} fps — "
+                         "capture/draw overhead, not detection")
+    else:
+        tracking_note = f"tracker ~{pose_rate_hz:.0f} Hz"
+
     return Diagnosis(
         health=health,
         reasons=tuple(reasons),
@@ -135,4 +165,10 @@ def classify(
         recent_underruns=recent_underruns,
         fifo_fill_blocks=fifo_fill_blocks,
         cushion_blocks=cushion_blocks,
+        loop_ms=loop_ms,
+        detect_ms=max(0.0, detect_ms),
+        camera_fps=max(0.0, camera_fps),
+        cam_w=int(cam_w),
+        cam_h=int(cam_h),
+        tracking_note=tracking_note,
     )

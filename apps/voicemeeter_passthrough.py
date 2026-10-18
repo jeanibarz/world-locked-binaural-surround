@@ -110,6 +110,9 @@ def main(argv=None) -> int:
                    help="EqualizerAPO config whose global per-ear comp+EQ chain (the part after "
                         "the downmix to L/R) is applied to the stereo output, so the render "
                         "matches your tuned EqualizerAPO sound (B5.3). Pair with --lfe-mode brir.")
+    p.add_argument("--cam-width", type=int, default=0, help="request camera width (0 = default)")
+    p.add_argument("--cam-height", type=int, default=0, help="request camera height (0 = default)")
+    p.add_argument("--cam-fps", type=int, default=0, help="request camera fps (0 = default)")
     args = p.parse_args(argv)
 
     brir = load_baked_brir(args.brir_dir)
@@ -295,6 +298,9 @@ def main(argv=None) -> int:
         output_facial_transformation_matrixes=True, num_faces=1))
     cap = cv2.VideoCapture(cam_index)
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # freshest frame, don't trail buffered ones
+    cam_w, cam_h, cam_fps = C.apply_camera_settings(
+        cap, width=args.cam_width, height=args.cam_height, fps=args.cam_fps)
+    detect_ms = 0.0
     recent: deque[HeadPose] = deque(maxlen=20)
     pose_filter = PoseFilter(args.min_cutoff, args.beta)
     flip_az = args.flip_az
@@ -342,7 +348,10 @@ def main(argv=None) -> int:
             times.append(now)
             phase = (phase + 0.03) % 1.0
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)  # un-mirrored → real yaw sign
+            td = time.perf_counter()
             result = detector.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
+            dms = (time.perf_counter() - td) * 1000.0
+            detect_ms = 0.9 * detect_ms + 0.1 * dms if detect_ms else dms
             frame = cv2.flip(frame, 1)  # mirror for display only
             pose = None
             landmarks = result.face_landmarks[0] if result.face_landmarks else None
@@ -377,14 +386,15 @@ def main(argv=None) -> int:
                 fifo_fill_blocks=fifo_fill, cushion_blocks=cushion,
                 output_latency_ms=out_lat_ms,
                 input_latency_ms=1000.0 * args.block / brir.samplerate,
-                pose_rate_hz=rate, recent_underruns=recent_under)
+                pose_rate_hz=rate, recent_underruns=recent_under,
+                detect_ms=detect_ms, camera_fps=cam_fps, cam_w=cam_w, cam_h=cam_h)
 
             live = "TRACKING" if pose is not None else "NO FACE"
             live_col = C.GOOD if pose is not None else C.MUTED
             readout = [
                 ("rate", f"{rate:3.0f}Hz", C.GOOD if rate >= 20 else C.ACTIVE),
                 ("lat", f"~{diag.end_to_end_ms:.0f}ms", C.health_color(diag.health)),
-                ("active", brir.channels[nearest_i] + ("  [flip]" if flip_az else ""), C.ACTIVE),
+                ("facing", brir.channels[nearest_i] + ("  [flip]" if flip_az else ""), C.ACTIVE),
             ]
             buttons = [("Recenter", "C", True), ("Stats", "S", False),
                        ("Flip", "F", False), ("Quit", "Q", False)]
