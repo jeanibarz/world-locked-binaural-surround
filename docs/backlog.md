@@ -423,27 +423,27 @@ _(the chain appends here as it learns)_
   **not** head-tracking (pose is applied fresh at render — journal 44). To remove it entirely, run
   the binaural render as a **VST inside EqualizerAPO** on a 7.1-configured FiiO endpoint (single
   engine clock, no loopback, no second app), with the camera tracker feeding pose over shared
-  memory and the Rust kernel wrapped as the plugin. Lowest-latency architecture; only needed for
-  A-V sync, so deferred behind B8.6. _(owner question, journal 44)_
-- [~] **B8.8** **Reduce the `queue` term — it's the cushion floor; block size is the lever.**
-  _(**Measured** on the host via interop, journal 48: `scratchpad/queue_probe.py` reproduces the
-  passthrough's loopback-capture → burst-drain worker → output FIFO with a synthetic pose, and sweeps
-  block × `--latency-ms`.)_ The live split (B8.5e, journal 47) put **queue 16–20 ms** vs the bench's
-  ~1 ms — the difference is **producer pacing** (the bench is consumer-paced, near-empty; the live
-  worker is capture-burst-paced, holding the FIFO near the cushion). The measurement kills the
-  original "sweep `--latency-ms`" guess: `cushion = max(2, …)` has a **2-block floor**, the owner
-  already runs `--latency-ms 20`, so at block 512 the cushion is *already floored* (512@20 ≡ 512@10,
-  bit-identical, queue ~31 ms). **`queue` ≈ FIFO depth ≈ cushion blocks** (512→40 ms doubles it to
-  63 ms). The only real knob is **block size, paired with a low `--latency-ms`** so the cushion
-  reaches the floor: **block 256 + `--latency-ms` 10 → queue 31→15 ms, ear-latency 69→53 ms
-  (−16 ms)**; block 256 @ 20 stays at cushion 4 = no win; **block 128 glitches** (186 underruns +
-  480 overflow drops — the 2-block cushion can't absorb the two-clock drift, journal 45; the floor is
-  drift, not CPU). Also helps prediction: B8.6's horizon = the measured pose-age-at-ear p50, so −16 ms
-  off `queue` is −16 ms off the horizon → less overshoot at a stop. **Remaining (owner, by-ear):**
-  flip the launcher to `--block 256 --latency-ms 10 --predict` and confirm the few extra overflow
-  drops (4/7 vs 3/2 over 8 s) are inaudible during real head motion before making it the default — it
-  trades cushion headroom, so it's not a blind change. `device` (22 ms shared) still needs B8.7; the
-  2-block floor is structural. _(journals 46/47/48; the queue lever journal 46 named and B8.6 skipped.)_
+  memory and the Rust kernel wrapped as the plugin. Lowest-latency architecture. **Now also the only
+  clean way to cut the `queue` term** (B8.8/journal 48): a single engine clock removes the two-clock
+  drift, so the output cushion can be small without glitching — the two-clock loopback can't (its FIFO
+  is both the latency and the drift-absorber). So B8.7 is no longer just A-V sync; it's the head-latency
+  floor below ~70 ms too. _(owner question, journal 44; promoted by B8.8, journal 48)_
+- [x] **B8.8** **Reduce the `queue` term — measured: no cheap win, it trades off against audible
+  glitches; folds into B8.7.** _(**Measured** on the host via interop, journal 48:
+  `scratchpad/queue_probe.py` reproduces the passthrough's loopback-capture → burst-drain worker →
+  output FIFO with a synthetic pose, sweeping block × `--latency-ms`, incl. a 60 s glitch-rate run.)_
+  `queue` ≈ output-FIFO depth ≈ cushion blocks (512: `--latency-ms` 20→40 doubles it 31→63 ms). The
+  original "sweep `--latency-ms`" guess was wrong — `cushion = max(2, …)` floors at 2 blocks and the
+  owner already runs `--latency-ms 20`, so at block 512 it's *already floored* (512@20 ≡ 512@10).
+  Block 256 + `--latency-ms` 10 does cut ear-latency 69→53 ms (−16 ms), **but treating every drop as
+  audible it's a regression: ~15 glitches/min vs ~5 at 512@20 (3×)**; block 128 glitches hard
+  (186+480 drops). **The queue and glitch-freedom trade off directly through the cushion** — in a
+  two-clock loopback the FIFO depth is both the latency and the drift-absorber (512@40 = 0 drops
+  proves more cushion = clean), so you can't shrink `queue` without raising the glitch rate. WASAPI
+  shared's resampling (journal 45) puts 512@20 near the clean floor for this architecture. **The only
+  clean way lower is to remove the two-clock drift: B8.7** (EqualizerAPO VST, single engine clock, no
+  loopback) or an async drift-compensating resampler — so B8.8 folds into B8.7, not a flag change.
+  _(journals 46/47/48; the queue lever journal 46 named, B8.6 skipped, and the measurement closed.)_
 - [x] **B0.6** Complete the **measured** virtual round-trip latency: once a
   loopback route exists — VoiceMeeter VAIO strip → bus **B1**, or a dedicated
   **VB-CABLE** installed — run `spikes/b0_3_virtual_device.py` and record the real
