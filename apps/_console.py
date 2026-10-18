@@ -356,10 +356,10 @@ def stats_panel(canvas, x, y, w, h, d: Diagnosis, *, audio=True, extra_rate_hz=0
              cxl + 270, yy, GOOD if measured else FAINT, 0.36, mono=True)
         yy += 22
         if measured and getattr(d, "pose_age_n", 0):
-            # the measured distribution: tail matters more than the median for world-lock
-            text(canvas, f"  pose->ear  p95 {d.pose_age_p95_ms:.0f}  p99 "
-                 f"{d.pose_age_p99_ms:.0f} ms  (+~{d.tracking_ms / 1.5:.0f} cam, n={d.pose_age_n})",
-                 cxl, yy, FAINT, 0.36, mono=True)
+            # measured split — which stage owns the latency: stale (camera) / queue (FIFO) / device
+            text(canvas, f"  stale {d.pose_age_stale_ms:.0f} + queue {d.pose_age_queue_ms:.0f} + "
+                 f"dev {d.pose_age_device_ms:.0f}   p95 {d.pose_age_p95_ms:.0f} p99 "
+                 f"{d.pose_age_p99_ms:.0f} ms", cxl, yy, FAINT, 0.36, mono=True)
         else:
             text(canvas, f"  tracking ~{d.tracking_ms:.0f} - render+buffer ~"
                  f"{d.audio_out_latency_ms + d.render_ms:.0f} ms", cxl, yy, FAINT, 0.36, mono=True)

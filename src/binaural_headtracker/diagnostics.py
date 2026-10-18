@@ -64,6 +64,9 @@ class Diagnosis:
     pose_age_p95_ms: float
     pose_age_p99_ms: float
     pose_age_n: int             # number of measured samples behind the distribution
+    pose_age_stale_ms: float    # of the measured pose age: the pose→render part (camera + worker)
+    pose_age_queue_ms: float    # the render→playout part (output FIFO wait)
+    pose_age_device_ms: float   # the device output buffer
     recent_underruns: int
     recent_overflows: int    # FIFO overflow drops (clock drift / capture bursts) — also audible
     fifo_fill_blocks: float
@@ -96,6 +99,9 @@ def classify(
     measured_pose_age_p95_ms: float = 0.0,
     measured_pose_age_p99_ms: float = 0.0,
     measured_pose_age_n: int = 0,
+    measured_stale_ms: float = 0.0,
+    measured_queue_ms: float = 0.0,
+    measured_device_ms: float = 0.0,
     detect_ms: float = 0.0,
     camera_fps: float = 0.0,
     cam_w: int = 0,
@@ -216,6 +222,9 @@ def classify(
         pose_age_p95_ms=pose_age_p95,
         pose_age_p99_ms=pose_age_p99,
         pose_age_n=pose_age_n,
+        pose_age_stale_ms=max(0.0, float(measured_stale_ms)),
+        pose_age_queue_ms=max(0.0, float(measured_queue_ms)),
+        pose_age_device_ms=max(0.0, float(measured_device_ms)),
         recent_underruns=recent_underruns,
         recent_overflows=max(0, int(recent_overflows)),
         fifo_fill_blocks=fifo_fill_blocks,

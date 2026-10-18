@@ -320,7 +320,9 @@ def main(argv=None) -> int:
     # jitter; the backlog is capped just above the cushion so clock drift can't let the queue
     # (and so the head-move-to-ear latency) grow unbounded — it stays near the cushion.
     cushion = max(2, round(args.latency_ms * 1e-3 * brir.samplerate / args.block))
-    out_fifo: deque[np.ndarray] = deque(np.zeros((args.block, 2)) for _ in range(cushion))
+    # Each FIFO entry is (stereo_block, pose_t, render_t) so the output callback can measure the
+    # pose-age-at-ear precisely at *playout* and split it into stale / queue / device (B8.5e).
+    out_fifo: deque = deque((np.zeros((args.block, 2)), None, None) for _ in range(cushion))
     fifo_lock = threading.Lock()
     in_tail = {"buf": np.zeros((0, brir.n_channels))}  # leftover capture < one block
     cb_error: list[BaseException] = []
@@ -336,9 +338,10 @@ def main(argv=None) -> int:
     # it carries and the audio still queued ahead of it, so the GUI shows a real distribution
     # (p50/p95/p99) instead of the old estimate. ``out_lat`` is the output device buffer (ms),
     # refreshed by the GUI loop from the live stream (the worker can't read it before it exists).
-    ear_probe = LatencyProbe()
+    ear_probe = LatencyProbe()        # total pose-age-at-ear (stale + queue + device)
+    stale_probe = LatencyProbe()      # pose age when the block was rendered (camera + worker)
+    queue_probe = LatencyProbe()      # time the block then waited in the output FIFO
     out_lat = {"ms": 0.0}
-    block_ms = 1000.0 * args.block / brir.samplerate
 
     # The render must NOT run in the audio callback: the full 8-ch BRIR convolution (tens of
     # ms, GPU sync) would hold the GIL and starve the capture/output callbacks, collapsing
@@ -413,22 +416,15 @@ def main(argv=None) -> int:
                     meter["test_ms"] = (0.9 * meter["test_ms"] + 0.1 * test_per_ms
                                         if meter["test_ms"] else test_per_ms)
                 if rendered:
+                    render_t = time.monotonic()  # tag every block of this batch with its pose + now
                     with fifo_lock:
-                        out_fifo.extend(rendered)
+                        out_fifo.extend((b, pose_t, render_t) for b in rendered)
                         while len(out_fifo) > max_backlog:  # bound latency: drop oldest
                             out_fifo.popleft()
                             # An overflow drop is an audible glitch too (discarded audio), from the
                             # capture/output clocks drifting faster than the cushion absorbs — count
                             # it, else "0 dropouts" lies while the ear hears glitches (B6.8).
                             meter["over_ts"].append(time.monotonic())
-                        ahead = max(0, len(out_fifo) - len(rendered))  # blocks before ours play
-                    # Measured pose age at the ear: how old this pose is now, plus the audio still
-                    # queued *ahead* of the first block we just pushed (it carries this pose), plus
-                    # the device's own buffer. (The camera exposure before pose_t is not
-                    # software-measurable — folded into a labelled ~1-frame estimate elsewhere.)
-                    if pose_t is not None:
-                        age_ms = (time.monotonic() - pose_t) * 1000.0
-                        ear_probe.add(age_ms + ahead * block_ms + out_lat["ms"])
             except BaseException as exc:  # noqa: BLE001
                 cb_error.append(exc)
 
@@ -436,10 +432,19 @@ def main(argv=None) -> int:
 
     def out_cb(outdata, frames, _t, status):  # noqa: ANN001  (FIFO → headphones)
         try:
+            now = time.monotonic()
+            dev = out_lat["ms"]
             buf = out_carry["buf"]
             with fifo_lock:
                 while buf.shape[0] < frames and out_fifo:
-                    buf = np.concatenate([buf, out_fifo.popleft()], axis=0)
+                    block, pose_t, render_t = out_fifo.popleft()
+                    # Measure pose-age-at-ear at the moment the block is handed to the device:
+                    # stale (pose→render) + queue (render→now) + the device buffer.
+                    if pose_t is not None:
+                        stale_probe.add((render_t - pose_t) * 1000.0)
+                        queue_probe.add((now - render_t) * 1000.0)
+                        ear_probe.add((now - pose_t) * 1000.0 + dev)
+                    buf = np.concatenate([buf, block], axis=0)
             n = min(frames, buf.shape[0])
             outdata[:n] = buf[:n].astype(np.float32)
             if n < frames:
@@ -606,6 +611,9 @@ def main(argv=None) -> int:
                 measured_pose_age_ms=(ear.p50 if ear.n else None),
                 measured_pose_age_p95_ms=ear.p95, measured_pose_age_p99_ms=ear.p99,
                 measured_pose_age_n=ear.n,
+                measured_stale_ms=stale_probe.stats().p50,
+                measured_queue_ms=queue_probe.stats().p50,
+                measured_device_ms=out_lat_ms,
                 detect_ms=detect_ms, camera_fps=cam_fps, cam_w=cam_w, cam_h=cam_h)
 
             live = "TRACKING" if pose is not None else "NO FACE"
@@ -691,9 +699,12 @@ def main(argv=None) -> int:
         cv2.destroyAllWindows()
         es = ear_probe.stats()  # measured pose-age-at-ear distribution for the session (B8.5)
         if es.n:
+            ss, qs = stale_probe.stats(), queue_probe.stats()
             print(f"pose-age-at-ear (measured, n={es.n}): p50 {es.p50:.0f}  p95 {es.p95:.0f}  "
                   f"p99 {es.p99:.0f}  min {es.min:.0f}  max {es.max:.0f} ms  "
                   f"(+ ~1 camera frame of exposure not counted)", flush=True)
+            print(f"  split p50: stale {ss.p50:.0f} (camera+worker) + queue {qs.p50:.0f} (FIFO) + "
+                  f"device {out_lat['ms']:.0f} ms", flush=True)
     return RESTART_EXIT_CODE if restart else 0
 
 
