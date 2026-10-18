@@ -585,3 +585,16 @@ full story.
     exactly — and the split says which knob to turn. Make the live app and the offline bench measure
     the same way so their numbers agree and a discrepancy is signal, not instrumentation.
     (→ [46](46-live-latency-component-split.md))
+77. **You can't remove camera pose staleness, but you can predict through it — with the *measured*
+    delay as the horizon.** ~40 ms of the head-move→ear latency is the pose being that old when its
+    sound is heard; no buffer touches it. An α-β tracker (position+velocity) per Euler angle
+    extrapolates the pose forward, and feeding the **live-measured pose-age-at-ear p50** (B8.5e) back
+    as the horizon makes it self-tune to the real pipeline — stable, because prediction changes the
+    pose *value*, not the timing the probe measures. Prediction doesn't shrink the delay; it cancels
+    its effect (effective staleness → the predictor's error, small during smooth motion), and it
+    smooths the camera's frame-jitter tail. (→ [47](47-orientation-prediction.md))
+78. **Bound the extrapolation *step*, not just the horizon.** Const-velocity look-ahead overshoots at
+    an abrupt stop (the velocity hasn't decayed yet), and the ~1° static MAA is unforgiving. Clamping
+    the per-block predicted step (max angular rate × horizon) is the cheap overshoot guard, and
+    per-angle α-β beats reaching for quaternions when motion is yaw-dominated and the horizon short.
+    (→ [47](47-orientation-prediction.md))

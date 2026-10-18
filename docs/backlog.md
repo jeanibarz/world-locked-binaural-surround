@@ -392,18 +392,16 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   identification. Carries a pose **timestamp** end-to-end (the seam B8.6 needs). Decides
   whether the current C270 is already good enough before any camera spend. _(from journal
   36; feeds NFR-1 and B8.6.)_
-- [ ] **B8.6** **Orientation prediction to the audio-render instant.** Estimate head
-  orientation at the *future* instant the DSP renders, so the pose baked into a block
-  matches the head when it is heard — a prediction stage between tracker and render. First
-  cut: constant-angular-velocity quaternion extrapolation `q̂(t+Δt) = q(t) ⊗
-  exp((Δt/2)·ω(t))` with a lightweight **α-β** / orientation+angular-velocity state filter
-  (not a heavy model). Tracker stays 60 Hz; DSP re-evaluates the predicted pose per block,
-  decoupling reactivity from the camera fps (our bottleneck). **Precautions:** limit the
-  horizon + damp velocity so an abrupt stop doesn't overshoot (the ~1° static MAA,
-  requirements § 7.1); filter `ω` jitter without re-adding latency. Depends on B8.5 for the
-  real Δt and the pose timestamp, and on a validation that it measurably lowers effective
-  lag without hurting the at-rest image. _(from journal 36; the main M8 lever after the
-  cushion fix.)_
+- [x] **B8.6** **Orientation prediction to the audio-render instant.** _(Done, first cut, journal 47:
+  `prediction.py` — a per-Euler-angle **α-β** tracker (position+velocity) extrapolates the pose
+  forward by a bounded horizon, with the step clamped (`max_rate_dps × horizon`) so an abrupt stop
+  doesn't overshoot the ~1° static MAA. Per-angle linear extrapolation rather than quaternion
+  const-ω: head motion is yaw-dominated and the horizon is short, so it suffices (quaternion kept as
+  a refinement). The passthrough steers the audio on `predict(pose, horizon)` with the **horizon =
+  the live-measured pose-age-at-ear p50** (B8.5e), self-tuning to the real delay; HUD shows the real
+  pose. `--predict` / `--predict-ms` (0 = auto), launcher-enabled, `predict NNms` readout. 7 tests
+  (334 total). **Remaining:** by-ear validation on the host (tighter during turns? clean settle at a
+  stop?) and tuning the gains; an optional motion→sound ground-truth (B8.5 §c) needs host hardware.)_
 
 ## M9 — Fine-tuning & release
 
