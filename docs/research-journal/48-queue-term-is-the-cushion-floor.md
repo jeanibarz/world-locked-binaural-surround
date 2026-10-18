@@ -1,4 +1,4 @@
-# 48 — The queue term is the cushion floor; block size is the lever (B8.8)
+# 48 — The queue term is the cushion; it trades off against audible glitches (B8.8)
 
 **Date:** 2026-10-18  ·  **Milestone:** M8 (latency hardening)  ·  **Status:** measured (host, via interop)
 
@@ -70,11 +70,35 @@ mechanism, not offset.)
 - **A `max(2, …)` floor is a floor you can't tune past** — the cushion can't follow `--latency-ms`
   below 2 blocks, so block size is the only way down, and it's bounded below by clock drift, not CPU.
 
+## Addendum — under "treat every overflow drop as audible", block 256 is rejected
+
+The owner's rule: assume any drop *will* be heard sometimes, so the metric is **glitches/minute**,
+not "is this one masked". A 60 s run per config (drops over 60 s = drops/min):
+
+| config | queue | ear p50 | underruns/min | overflow/min | glitches/min |
+|---|---|---|---|---|---|
+| 512 @ 20 (current) | 31 ms | 69 ms | 3 | 2 | **~5** |
+| 256 @ 10 (candidate) | 15 ms | 53 ms | 6 | 9 | **~15 (3×)** |
+
+So block 256 buys −16 ms at **3× the glitch rate** — a regression under this rule, not a win. And the
+earlier sweep already showed **512 @ 40 (cushion 4) ran 0/0 drops** while 512 @ 20 glitches: the
+overflow is **clock drift/jitter that needs buffer headroom**, not a burst over-fill. That kills the
+"render-ahead cap" idea — a shallower FIFO, however it's drained, has less room for the drift.
+
+**The real finding: `queue` and glitch-freedom trade off directly through the cushion.** In a
+two-clock loopback (VoiceMeeter capture clock ≠ FiiO output clock) the FIFO depth is *both* the
+latency and the drift-absorber; you can't shrink one without raising the other. WASAPI shared's
+resampling hides most of the drift (journal 45), so 512 @ 20 (~5 glitches/min, mostly masked on real
+content — why the owner tolerates it) is near the clean floor for *this* architecture.
+
 ## Decision / next
 
-- **B8.8's fix is block 256 + `--latency-ms` ~10** (not a `--latency-ms` sweep), for ~−16 ms ear
-  latency, gated on a host **by-ear** check that the few extra overflow drops are inaudible during
-  real head motion + `--predict`. Not shipped as a blind default — it trades cushion headroom.
-- The 2-block cushion floor and the single-source-vs-feeder offset are the remaining uncertainties; a
-  live S-panel read at block 256/`--latency-ms` 10 on the owner's real source confirms the absolute
-  number. Backlog B8.8 updated to replace the latency-ms guess with this.
+- **Do NOT pursue block 256** (or any shallower cushion) as a latency lever — it trades a real
+  latency cut for a proportional rise in audible glitches. B8.8's cheap-software win does not exist:
+  the queue is already near its glitch-limited floor.
+- **The only clean way below it is to remove the two-clock drift**, so a shallow cushion runs clean:
+  **B8.7** (render as an EqualizerAPO VST on a single engine clock — no loopback, no drift) is the
+  real floor, or, shorter of that, an **async drift-compensating resampler** that locks capture↔output
+  so the FIFO can be small without starving. Both are bigger than a flag change; B8.8 folds into B8.7.
+- `stale` (camera, masked by B8.6 prediction) and `device` (22 ms shared, needs B8.7) are unchanged.
+  Net: the ~70 ms live floor is structural until B8.7.
