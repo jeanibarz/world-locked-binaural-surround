@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import math
 
+import _type  # TTF text rendering (B6.8); falls back to Hershey if Pillow/fonts are absent
 import numpy as np
 
 from binaural_headtracker.diagnostics import Diagnosis, Health
@@ -74,14 +75,42 @@ def apply_camera_settings(cap, *, width=0, height=0, fps=0, mjpg=False):
     return w, h, f
 
 
-def text(img, s, x, y, color, scale=0.42, thick=1, *, mono=False):
+# The console speaks in cv2 `scale`; TTF speaks in pixels. These factors convert one to the
+# other, chosen so a line keeps roughly its old footprint (fixed-width panels don't overflow)
+# while the glyphs become crisp, hinted TrueType — mono a touch tighter than sans, matching the
+# two faces. One small global bump answers the owner's "too small" without breaking the layout.
+_PX_MONO = 32.0
+_PX_SANS = 36.0
+
+
+def _ttf_spec(scale, thick, mono, family):
+    """Map the legacy (scale, thick, mono) args to a TTF (family, weight, size_px)."""
+    if family is None:
+        family = "mono" if mono else "sans"
+    px = scale * (_PX_MONO if family == "mono" else _PX_SANS)
+    weight = "semibold" if thick >= 2 else "regular"
+    return family, weight, int(round(px))
+
+
+def text(img, s, x, y, color, scale=0.42, thick=1, *, mono=False, family=None):
+    """Draw text at baseline-left (x, y). Uses bundled TrueType faces (IBM Plex / Rajdhani);
+    falls back to cv2 Hershey only if TTF rendering is unavailable. ``family`` overrides the
+    mono/sans choice (e.g. ``"display"`` for Rajdhani headings/buttons)."""
+    fam, weight, px = _ttf_spec(scale, thick, mono, family)
+    if _type.draw_text(img, s, x, y, color, px, family=fam, weight=weight):
+        return
     cv2 = _cv2()
     font = cv2.FONT_HERSHEY_PLAIN if mono else cv2.FONT_HERSHEY_SIMPLEX
     sc = scale * 1.25 if mono else scale
     cv2.putText(img, s, (int(x), int(y)), font, sc, color, thick, cv2.LINE_AA)
 
 
-def text_w(s, scale=0.42, thick=1, *, mono=False):
+def text_w(s, scale=0.42, thick=1, *, mono=False, family=None):
+    """Advance width in px of the string as :func:`text` would draw it (TTF metrics; Hershey
+    fallback matches the fallback draw)."""
+    fam, weight, px = _ttf_spec(scale, thick, mono, family)
+    if _type.available():
+        return _type.text_width(s, px, family=fam, weight=weight)
     cv2 = _cv2()
     font = cv2.FONT_HERSHEY_PLAIN if mono else cv2.FONT_HERSHEY_SIMPLEX
     sc = scale * 1.25 if mono else scale
@@ -219,7 +248,8 @@ def radar(canvas, cx, cy, R, world_az, channels, facing_i, *, head_deg=0.0,
     # cardinal labels are WORLD directions (fixed)
     for lbl, az in (("FRONT", 0), ("LEFT", 90), ("BACK", 180), ("RIGHT", -90)):
         x, y = azimuth_to_radar_xy(float(az), R + 18, cx, cy)
-        text(canvas, lbl, x - text_w(lbl, 0.36) / 2, y + 4, MUTED, 0.36)
+        text(canvas, lbl, x - text_w(lbl, 0.4, thick=2, family="display") / 2, y + 4,
+             MUTED, 0.4, thick=2, family="display")
     # fixed world speakers
     for i, ch in enumerate(channels):
         x, y = azimuth_to_radar_xy(float(world_az[i]), R, cx, cy)
@@ -290,13 +320,13 @@ def controls_bar(canvas, x, y, w, h, readout, buttons):
     bx = x + w - 14
     for btxt, key, accent in reversed(buttons):
         label = f"{btxt} [{key}]"
-        bw = text_w(label, 0.42) + 22
+        bw = text_w(label, 0.46, thick=2, family="display") + 24
         col = ACTIVE if accent else FG
         bgc = (int(ACTIVE[0] * 0.18 + PANEL[0]), int(ACTIVE[1] * 0.18 + PANEL[1]),
                int(ACTIVE[2] * 0.18 + PANEL[2])) if accent else PANEL
         rrect(canvas, bx - bw, cyb - 15, bw, 30, bgc, r=7)
         rrect(canvas, bx - bw, cyb - 15, bw, 30, ACTIVE if accent else LINE, fill=False, r=7)
-        text(canvas, label, bx - bw + 11, cyb + 4, col, 0.42)
+        text(canvas, label, bx - bw + 12, cyb + 5, col, 0.46, thick=2, family="display")
         bx -= bw + 10
 
 
@@ -323,13 +353,13 @@ def stats_panel(canvas, x, y, w, h, d: Diagnosis, *, audio=True, extra_rate_hz=0
     pad = 16
     cxl = x + pad
     yy = y + 30
-    text(canvas, "DIAGNOSTICS", cxl, yy, ACCENT, 0.5)
+    text(canvas, "DIAGNOSTICS", cxl, yy, ACCENT, 0.52, thick=2, family="display")
     # verdict pill
     hc = health_color(d.health)
     label = d.health.value.upper()
-    pw = text_w(label, 0.5) + 20
+    pw = text_w(label, 0.52, thick=2, family="display") + 22
     rrect(canvas, x + w - pad - pw, yy - 16, pw, 22, hc, r=11)
-    text(canvas, label, x + w - pad - pw + 10, yy, BG, 0.5)
+    text(canvas, label, x + w - pad - pw + 11, yy, BG, 0.52, thick=2, family="display")
     yy += 16
     cv2.line(canvas, (cxl, yy), (x + w - pad, yy), LINE, 1, cv2.LINE_AA)
     yy += 20

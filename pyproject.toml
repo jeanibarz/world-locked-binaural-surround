@@ -32,6 +32,9 @@ dependencies = [
 dev = [
     "pytest>=7.0",
     "ruff>=0.6",
+    # Pillow (HPND) so the apps/_type TTF renderer is exercised by the test suite on
+    # CI/WSL (it is pure-enough to install without a camera/audio device, unlike cv2).
+    "pillow>=10",
 ]
 # Audio-I/O spike dependency (B0.2). sounddevice (MIT) wraps PortAudio (MIT) and
 # exposes WASAPI on Windows. Kept OUT of the baseline and dev extras so `uv sync`
@@ -48,9 +51,15 @@ audio = [
 # (`py -3.12 -m pip install mediapipe opencv-python`) or here with
 # `uv sync --extra vision`. The portable pose/latency math in
 # binaural_headtracker.head_pose needs neither and is unit-tested without them.
+# Pillow (HPND, permissive — donationware-safe) renders the host console's text as
+# anti-aliased TrueType (apps/_type.py, B6.8); opencv ships only Hershey stroke fonts,
+# which looked low-res/small. Pillow is pure-enough to install on CI/WSL, so the
+# _type unit test runs there even though cv2/mediapipe stay host-only; apps/_console.py
+# falls back to Hershey if it is absent.
 vision = [
     "mediapipe>=0.10",
     "opencv-python>=4.8",
+    "pillow>=10",
 ]
 # Passthrough capture dependency (B4.1). pyaudiowpatch (MIT) is a Windows-only fork
 # of PyAudio that exposes WASAPI **loopback** — the only way to tap the raw pre-mix
