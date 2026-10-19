@@ -55,6 +55,27 @@ def _c(rgba: M.RGBA) -> list[int]:
     return [int(v) for v in rgba]
 
 
+def _dpg_font_path(path: Path) -> str:
+    """Return a path Dear PyGui's font loader can actually open.
+
+    On the Windows host the app imports from the WSL checkout over a ``\\\\wsl.localhost\\…`` UNC
+    path, and Dear PyGui's TTF loader (like MediaPipe's model loader; see AGENTS.md) fails on UNC.
+    Python itself reads UNC fine, so copy the face to a local temp dir once and hand DPG that. A
+    normal local path (WSL/CI, where fonts live under the repo) is returned unchanged.
+    """
+    s = str(path)
+    if not s.startswith("\\\\"):  # not a UNC path → load in place
+        return s
+    import shutil
+    import tempfile
+    cache = Path(tempfile.gettempdir()) / "bht_fonts"
+    cache.mkdir(parents=True, exist_ok=True)
+    local = cache / path.name
+    if not local.exists() or local.stat().st_size != path.stat().st_size:
+        shutil.copyfile(path, local)  # Python reads the UNC source fine
+    return str(local)
+
+
 def _frame_to_texture(rgb, tw: int, th: int):
     """A HxWx3 uint8 RGB frame → a flat RGBA float list (0..1) at ``tw×th`` for a dynamic texture.
 
@@ -76,7 +97,7 @@ class CockpitWindow:
     """The Dear PyGui cockpit window. Build once with :meth:`setup`, then :meth:`update` +
     :meth:`render_frame` per loop; :meth:`running` reports the viewport state."""
 
-    def __init__(self, *, title: str = "Binaural Console — cockpit") -> None:
+    def __init__(self, *, title: str = "Binaural Console - cockpit") -> None:
         self.title = title
         self._fonts: dict[str, int | str] = {}
         self._tex = "cam_tex"
@@ -107,6 +128,15 @@ class CockpitWindow:
 
         with dpg.window(tag=self._win, no_scrollbar=True):
             dpg.add_drawlist(width=CANVAS_W, height=CANVAS_H, tag=self._canvas)
+            # Dear PyGui 2.x dropped the per-call `font=` on draw_text; a drawlist's drawn text
+            # instead follows the font bound to the drawlist item. Bind the mono face (the data
+            # cockpit's primary type) so canvas labels are IBM Plex Mono, not the default atlas;
+            # the headline/display face is a slice-2 refinement (one font per drawlist in 2.x).
+            if self._fonts.get("mono"):
+                try:
+                    dpg.bind_item_font(self._canvas, self._fonts["mono"])
+                except Exception:  # noqa: BLE001 — a failed bind just leaves the default font
+                    pass
             with dpg.group(horizontal=True):
                 dpg.add_text("method")
                 dpg.add_combo(
@@ -133,7 +163,10 @@ class CockpitWindow:
                 dpg.add_button(label="Quit", callback=lambda: self.on_quit())
         dpg.set_primary_window(self._win, True)
 
-        dpg.create_viewport(title=self.title, width=CANVAS_W + 24, height=CANVAS_H + 86,
+        # Height leaves room below the canvas for the controls row + titlebar, with a margin so a
+        # high-DPI host (where the OS window is smaller in content px) doesn't clip the controls.
+        dpg.create_viewport(title=self.title, width=CANVAS_W + 28, height=CANVAS_H + 150,
+                            min_width=CANVAS_W + 20, min_height=CANVAS_H + 120,
                             clear_color=_c(M.BG))
         dpg.setup_dearpygui()
         dpg.show_viewport()
@@ -153,7 +186,7 @@ class CockpitWindow:
                 path = _FONT_DIR / fname
                 if path.exists():
                     try:
-                        self._fonts[key] = dpg.add_font(str(path), size)
+                        self._fonts[key] = dpg.add_font(_dpg_font_path(path), size)
                     except Exception:  # noqa: BLE001 — a bad face just falls back to the default
                         pass
 
@@ -212,12 +245,12 @@ class CockpitWindow:
         dpg.draw_rectangle((x, y), (x + w, y + h), fill=_c(M.PANEL), color=_c(M.LINE),
                            rounding=8, parent=cv)
         if title:
-            dpg.draw_text((x + 10, y + 7), title, color=_c(M.ACCENT), size=13,
-                          font=self._fonts.get("display_sm"), parent=cv)
+            dpg.draw_text((x + 10, y + 7), title, color=_c(M.ACCENT), size=13, parent=cv)
 
-    def _text(self, dpg, x, y, s, color, size=14, font="mono"):
-        dpg.draw_text((x, y), s, color=_c(color), size=size,
-                      font=self._fonts.get(font), parent=self._canvas)
+    def _text(self, dpg, x, y, s, color, size=14, font="mono"):  # noqa: ARG002 — font reserved
+        # `font` is kept in the signature (call sites name a face) but NOT forwarded: DPG 2.x
+        # draw_text has no per-call font — the drawlist's bound font (set in setup) is used.
+        dpg.draw_text((x, y), s, color=_c(color), size=size, parent=self._canvas)
 
     def _radar(self, dpg, world_az, channels, facing_i, head_deg, source_az):
         cv = self._canvas
@@ -232,9 +265,10 @@ class CockpitWindow:
         dpg.draw_polygon(poly, color=(*M.ACCENT[:3], 0), fill=(*M.ACCENT[:3], 36), parent=cv)
         for lbl, az in (("FRONT", 0), ("LEFT", 90), ("BACK", 180), ("RIGHT", -90)):
             x, y = azimuth_to_radar_xy(float(az), R + 16, cx, cy)
-            dpg.draw_text((x - 16, y - 7), lbl, color=_c(M.MUTED), size=12,
-                          font=self._fonts.get("display_sm"), parent=cv)
+            dpg.draw_text((x - 16, y - 7), lbl, color=_c(M.MUTED), size=12, parent=cv)
         for i, ch in enumerate(channels):
+            if ch == "LFE":
+                continue  # non-directional (sits at az 0, atop C) — not an azimuth-radar speaker
             x, y = azimuth_to_radar_xy(float(world_az[i]), R, cx, cy)
             on = i == facing_i
             col = M.ACTIVE if on else M.ACCENT
