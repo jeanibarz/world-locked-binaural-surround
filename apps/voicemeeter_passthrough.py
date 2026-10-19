@@ -183,12 +183,24 @@ def main(argv=None) -> int:
                         "concurrent voices so a moving source on a fine grid stays real-time")
     p.add_argument("--rotate-speed", type=float, default=45.0,
                    help="auto-rotation speed of the test source in deg/s (toggle with R)")
+    p.add_argument("--ui", choices=("console", "cockpit"), default="console",
+                   help="front-end: 'console' = the OpenCV window (default); 'cockpit' = the "
+                        "native Dear PyGui cockpit (B6.12) — same engine, resizable, with live "
+                        "method/backend/predict/test controls. Needs the 'gui' extra (dearpygui).")
     args = p.parse_args(argv)
 
     brir = load_baked_brir(args.brir_dir)
 
-    def _nearest_renderer():
-        if args.rust:
+    def _resolve_backend(backend: str | None) -> tuple[bool, bool]:
+        """(use_rust, use_gpu) for an explicit backend ('cpu'/'rust'/'gpu'), else the launch flags.
+        Lets the cockpit switch backend live (B6.12 slice 2) without restarting."""
+        if backend is None:
+            return args.rust, args.gpu
+        return backend == "rust", backend == "gpu"
+
+    def _nearest_renderer(backend: str | None = None):
+        use_rust, use_gpu = _resolve_backend(backend)
+        if use_rust:
             try:
                 from binaural_headtracker.rust_render import RustWorldLocked7p1
                 print("render: nearest — native Rust kernel (CPU, no GPU)")
@@ -196,7 +208,7 @@ def main(argv=None) -> int:
                                           lfe_mode=args.lfe_mode)
             except Exception as exc:  # noqa: BLE001  — fall back to pure-Python CPU
                 print(f"Rust kernel unavailable ({exc!r}); falling back to CPU.")
-        elif args.gpu:
+        elif use_gpu:
             try:
                 from binaural_headtracker.gpu_render import GpuWorldLocked7p1
                 print("render: nearest — GPU (CuPy)")
@@ -208,18 +220,20 @@ def main(argv=None) -> int:
         return WorldLocked7p1(brir, block_size=args.block, fade_ms=args.fade_ms,
                               lfe_mode=args.lfe_mode)
 
-    def build_main_renderer(method: str):
+    def build_main_renderer(method: str, backend: str | None = None):
         """The full 7.1 renderer for ``method`` — the method applies to the WHOLE surround
         (shared with the test source). 'nearest' uses the fast 8-bus path; a synthesis method
         uses the dense interpolated grid (InterpWorldLocked7p1, B4.4), which needs a bigger
-        block for headroom (the diagnostics panel shows if it keeps up)."""
+        block for headroom (the diagnostics panel shows if it keeps up). ``backend`` (cpu/rust/gpu)
+        overrides the launch flags so the cockpit can switch it live."""
+        use_rust, _ = _resolve_backend(backend)
         if method == "nearest":
-            return _nearest_renderer()
+            return _nearest_renderer(backend)
         print(f"render: {method} — dense-grid 7.1 ({args.grid_step:.0f}°) "
-              f"{'[rust]' if args.rust else '[cpu]'}")
+              f"{'[rust]' if use_rust else '[cpu]'}")
         return InterpWorldLocked7p1(brir, method, block_size=args.block, fade_ms=args.fade_ms,
                                     grid_step=args.grid_step, lfe_mode=args.lfe_mode,
-                                    use_rust=args.rust)
+                                    use_rust=use_rust)
 
     def render_label(renderer, method: str) -> str:
         """A one-line description of what the 7.1 is actually running: engine · method [· grid]."""
@@ -479,7 +493,8 @@ def main(argv=None) -> int:
     show_stats = False
     phase = 0.0
     win = "Binaural head-tracker — world-lock passthrough"
-    cv2.namedWindow(win)
+    if args.ui == "console":
+        cv2.namedWindow(win)
     drag = {"on": False}
 
     def on_mouse(event, mx, my, flags, _param):  # noqa: ANN001  — click/drag the radar to move test
@@ -501,7 +516,8 @@ def main(argv=None) -> int:
         elif event == cv2.EVENT_LBUTTONUP:
             drag["on"] = False
 
-    cv2.setMouseCallback(win, on_mouse)
+    if args.ui == "console":
+        cv2.setMouseCallback(win, on_mouse)
 
     # Capture = PyAudio WASAPI loopback (raw 7.1); output = sounddevice to the headphones
     # (blocksize=0 lets it pick the host-native buffer; the callbacks handle any frame count).
@@ -532,9 +548,169 @@ def main(argv=None) -> int:
             raise
         print(f"WASAPI exclusive unavailable ({exc!r}); using shared mode.")
         out_ctx = _open_output(False)
+    def _run_cockpit() -> bool:
+        """Drive the live engine through the Dear PyGui cockpit (B6.12 slice 2).
+
+        Same audio path as the console — this only replaces the display + input. The camera/pose/
+        diagnostics are computed exactly as the console loop does; the result feeds the cockpit's
+        view-model, and the cockpit's control hooks mutate the live engine state (method, backend,
+        predict, the test source placed/dragged on the radar, recenter). Returns True to reload."""
+        nonlocal cap
+        import cockpit_view as CK
+
+        from binaural_headtracker import cockpit as CM
+
+        win_ck = CK.CockpitWindow(title=f"world-lock passthrough — webcam {cam_index}")
+        q = {"stop": False, "restart": False}
+        cur = {"backend": ("rust" if args.rust else "gpu" if args.gpu else "cpu"),
+               "predict": args.predict}
+        predictor_ck = PosePredictor()
+
+        def _recenter() -> None:
+            if recent:
+                with lock:
+                    state["cal"] = calibrate_neutral(
+                        list(recent), yaw_sign=args.yaw_sign, pitch_sign=args.pitch_sign,
+                        roll_sign=args.roll_sign)
+
+        def _set_method(m: str) -> None:
+            if m not in EXPERIMENT_METHODS:
+                return
+            if m not in test_renderers:
+                test_renderers[m] = build_test_renderer(m)
+            nm = build_main_renderer(m, cur["backend"])
+            with lock:
+                main_rend["r"], main_rend["label"] = nm, render_label(nm, m)
+                test["renderer"], test["method"] = test_renderers[m], m
+
+        def _set_backend(b: str) -> None:
+            cur["backend"] = b
+            nm = build_main_renderer(test["method"], b)
+            with lock:
+                main_rend["r"], main_rend["label"] = nm, render_label(nm, test["method"])
+
+        def _tog(key: str):
+            def f(on) -> None:  # noqa: ANN001
+                with lock:
+                    test[key] = bool(on)
+            return f
+
+        def _place(az) -> None:  # noqa: ANN001  — radar click/drag → world azimuth
+            with lock:
+                test["world_az"], test["on"], test["rotate"] = float(az), True, False
+
+        win_ck.on_quit = lambda: q.__setitem__("stop", True)
+        win_ck.on_recenter = _recenter
+        win_ck.on_method = _set_method
+        win_ck.on_backend = _set_backend
+        win_ck.on_test = _tog("on")
+        win_ck.on_solo = _tog("solo")
+        win_ck.on_rotate = _tog("rotate")
+        win_ck.on_place_test = _place
+        win_ck.on_predict = lambda on: cur.__setitem__("predict", bool(on))
+        win_ck.setup()
+
+        detect_ms = 0.0
+        times_ck: deque[float] = deque(maxlen=60)
+        miss = 0
+        try:
+            while win_ck.running() and not q["stop"]:
+                if cb_error:
+                    print(f"audio callback error: {cb_error[0]!r}")
+                    break
+                ok, frame = cap.read()
+                if not ok:  # camera lost — hold the last pose (audio keeps world-locking)
+                    miss += 1
+                    if miss % 90 == 0:
+                        cap.release()
+                        cap = cv2.VideoCapture(cam_index)
+                    win_ck.render_frame()
+                    continue
+                miss = 0
+                now = time.monotonic()
+                times_ck.append(now)
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)  # un-mirrored → real yaw sign
+                td = time.perf_counter()
+                result = detector.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
+                dms = (time.perf_counter() - td) * 1000.0
+                detect_ms = 0.9 * detect_ms + 0.1 * dms if detect_ms else dms
+                disp = cv2.flip(rgb, 1)  # mirror for display only (cockpit camera panel is RGB)
+                pose = None
+                with lock:
+                    cal = state["cal"]
+                predict_ms_used = 0.0
+                if result.facial_transformation_matrixes:
+                    yaw, pitch, roll = head_pose_from_matrix(
+                        np.asarray(result.facial_transformation_matrixes[0]))
+                    pose = pose_filter.update(HeadPose(yaw, pitch, roll, now))
+                    recent.append(pose)
+                    pose_for_az = pose
+                    if cur["predict"]:
+                        predictor_ck.update(pose)
+                        es = ear_probe.stats()
+                        predict_ms_used = (args.predict_ms if args.predict_ms > 0
+                                           else (es.p50 if es.n > 30 else 60.0))
+                        pose_for_az = predictor_ck.predict(pose, predict_ms_used)
+                    dirs = directions_for_pose(cal, pose_for_az, layout)
+                else:
+                    dirs = layout.head_relative_directions()
+                if flip_az:
+                    dirs = dirs.copy()
+                    dirs[:, 0] = -dirs[:, 0]
+                if pose is not None:
+                    with lock:
+                        state["az"] = dirs[:, 0].copy()
+                        state["pose_t"] = pose.t
+                nearest_i = nearest_front_channel(dirs)
+                head_deg = -float(dirs[c_idx][0])
+                dt = (times_ck[-1] - times_ck[-2]) if len(times_ck) >= 2 else 0.0
+                with lock:
+                    if test["rotate"]:
+                        test["world_az"] = (test["world_az"] + args.rotate_speed * dt + 180.0) \
+                            % 360.0 - 180.0
+                    test["az"] = float(test["world_az"]) + float(dirs[c_idx][0])
+                    t_on, t_world_az = test["on"], test["world_az"]
+                span = times_ck[-1] - times_ck[0]
+                rate = (len(times_ck) - 1) / span if len(times_ck) > 1 and span > 0 else 0.0
+                with fifo_lock:
+                    fifo_fill = len(out_fifo)
+                recent_under = sum(1 for t in tuple(meter["under_ts"]) if now - t < 2.0)
+                recent_over = sum(1 for t in tuple(meter["over_ts"]) if now - t < 2.0)
+                out_lat_ms = float(getattr(out_ctx, "latency", 0.0) or 0.0) * 1000.0
+                out_lat["ms"] = out_lat_ms
+                rlabel = main_rend["label"] + ("  · test ON" if t_on else "")
+                ear = ear_probe.stats()
+                diag = classify(
+                    block_size=args.block, samplerate=brir.samplerate,
+                    render_ms=meter["ms"], render_ms_peak=meter["peak"],
+                    render_ms_test=(meter["test_ms"] if t_on else 0.0),
+                    render_label=rlabel, fifo_fill_blocks=fifo_fill, cushion_blocks=cushion,
+                    output_latency_ms=out_lat_ms,
+                    input_latency_ms=1000.0 * args.block / brir.samplerate,
+                    pose_rate_hz=rate, recent_underruns=recent_under, recent_overflows=recent_over,
+                    measured_pose_age_ms=(ear.p50 if ear.n else None),
+                    measured_pose_age_p95_ms=ear.p95, measured_pose_age_p99_ms=ear.p99,
+                    measured_pose_age_n=ear.n, measured_stale_ms=stale_probe.stats().p50,
+                    measured_queue_ms=queue_probe.stats().p50, measured_device_ms=out_lat_ms,
+                    detect_ms=detect_ms, camera_fps=cam_fps, cam_w=cam_w, cam_h=cam_h)
+                view = CM.build_view(
+                    diag, latency_samples=ear_probe.samples(), rate_hz=rate,
+                    method=test["method"], backend=cur["backend"],
+                    predict_ms=(predict_ms_used if cur["predict"] else None),
+                    facing_label=brir.channels[nearest_i], flipped=flip_az)
+                win_ck.set_test_state(t_on, t_world_az)  # reflect engine state on the radar
+                win_ck.update(view, camera_rgb=disp, world_az=world_az, channels=brir.channels,
+                              facing_i=nearest_i, head_deg=head_deg)
+                win_ck.render_frame()
+        finally:
+            win_ck.teardown()
+        return q["restart"]
+
     restart = False  # Reload key (Enter): tear down cleanly, then the launcher relaunches us
     try:
-        while True:
+        if args.ui == "cockpit":
+            restart = _run_cockpit()
+        while args.ui == "console":
             if cb_error:
                 print(f"audio callback error: {cb_error[0]!r}")
                 break

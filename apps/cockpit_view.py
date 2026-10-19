@@ -107,10 +107,11 @@ class CockpitWindow:
         self._canvas = "cockpit_canvas"
         self._win = "cockpit_win"
         self._host = "canvas_host"  # auto-filling child; its measured size drives the fit-scale
+        self._src_cb = "ck_src"     # the test-source checkbox, so engine state can sync it
         self._k = 1.0  # live fit-scale: design canvas → current window (set each frame)
         # Test-source state the view owns, so a radar click/drag moves the source live even in the
         # preview (and the live app reads it back). Placed by clicking the radar; dragged to move.
-        self._test_on = True
+        self._test_on = False
         self._test_az = 60.0
         self._solo = False
         self._rotate = False
@@ -201,7 +202,7 @@ class CockpitWindow:
                                  "Click the radar to place it; drag to move it continuously.\n"
                                  "source = on/off · solo = hear only it (mute the mix) · "
                                  "orbit = auto-rotate it around you.")
-                dpg.add_checkbox(label="source", default_value=True,
+                dpg.add_checkbox(label="source", tag=self._src_cb,
                                  callback=lambda s, a: self._set_test(bool(a)))
                 dpg.add_checkbox(label="solo", callback=lambda s, a: self._set_solo(bool(a)))
                 dpg.add_checkbox(label="orbit", callback=lambda s, a: self._set_rotate(bool(a)))
@@ -242,6 +243,18 @@ class CockpitWindow:
     def _set_predict(self, on: bool) -> None:
         self._predict = on
         self.on_predict(on)
+
+    def set_test_state(self, on: bool, az: float) -> None:
+        """Reflect the live engine's test-source state on the radar + the 'source' checkbox (so a
+        key/other UI change, or the engine's auto-rotation, keeps the view in sync)."""
+        self._test_on = bool(on)
+        self._test_az = float(az)
+        try:
+            import dearpygui.dearpygui as dpg
+            if dpg.does_item_exist(self._src_cb):
+                dpg.set_value(self._src_cb, bool(on))
+        except Exception:  # noqa: BLE001 — the checkbox is a convenience mirror, never critical
+            pass
 
     def _radar_az_at(self, dx, dy):
         """World azimuth (deg) for a DESIGN-space point on the radar, else None (inverse of
@@ -571,6 +584,7 @@ def run_preview() -> int:
     quit_flag = {"q": False}
     win.on_quit = lambda: quit_flag.__setitem__("q", True)
     win.setup()
+    win.set_test_state(True, 60.0)  # preview: show the test source so the radar marker is visible
 
     t0 = tprev = time.monotonic()
     try:

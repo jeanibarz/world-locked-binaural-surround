@@ -621,3 +621,16 @@ full story.
     drops straight onto Dear PyGui: the view-model is unit-tested on CI with no display, and drawing
     the whole canvas as one full-redraw drawlist (mirroring cv2 `compose`) keeps the view a faithful
     function of the model, with no per-widget state to drift. (→ [49](49-dpg-cockpit.md))
+83. **A second front-end for a real-time engine is a display swap, not a rewrite** — when the
+    per-frame compute (capture → detect → pose → state → diagnose) is separated from draw+input.
+    Both loops call the same compute and differ only in render target (cv2 `imshow` vs a Dear PyGui
+    drawlist) and control source (waitKey vs the view's hooks). Default the `--ui` switch to the
+    proven path so the addition is strictly additive and can't break existing users, and mutate the
+    shared engine state from the hooks under the **same lock** the audio threads use. Live
+    method/backend switching then costs one parameter on the renderer builder. (→ [50](50-cockpit-live-engine.md))
+84. **A DPI-unaware process on a scaled display gets lied to:** Windows reports 96 DPI and virtualises
+    the window while the GUI toolkit scales drawing by the real ratio, so a canvas sized from a
+    measured (physical) rect renders DPI× too big and clips. Call `SetProcessDpiAwarenessContext`
+    before the toolkit starts, then measured sizes and 1:1 drawing share one pixel space and a
+    `size = measured / design` fit fills the window at any scale. Measure and draw in the *same*
+    item's coordinate space. (→ [50](50-cockpit-live-engine.md))
