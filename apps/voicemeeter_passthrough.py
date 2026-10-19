@@ -613,6 +613,7 @@ def main(argv=None) -> int:
         detect_ms = 0.0
         times_ck: deque[float] = deque(maxlen=60)
         miss = 0
+        predict_ms_used = 0.0  # persist across frames so a no-face frame doesn't blink it to 0
         try:
             while win_ck.running() and not q["stop"]:
                 if cb_error:
@@ -638,7 +639,6 @@ def main(argv=None) -> int:
                 pose = None
                 with lock:
                     cal = state["cal"]
-                predict_ms_used = 0.0
                 if result.facial_transformation_matrixes:
                     yaw, pitch, roll = head_pose_from_matrix(
                         np.asarray(result.facial_transformation_matrixes[0]))
