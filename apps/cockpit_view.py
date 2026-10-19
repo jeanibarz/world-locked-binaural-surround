@@ -42,6 +42,7 @@ LAG_X, LAG_Y, LAG_W, LAG_H = 810, 12, 190, 300  # wider STATUS box so its readou
 PANEL_Y = 324  # the wide latency panel under the camera/radar
 CONTROLS_H = 74  # height reserved below the scaled canvas for the two native controls rows
 MARGIN = 10      # window padding kept around the scaled canvas
+_TEXT_CAL = 1.09  # draw_text renders ~9% wider than get_text_size reports (measured on the host)
 
 
 def available() -> bool:
@@ -437,13 +438,16 @@ class CockpitWindow:
     def _text_size(self, dpg, s, size):
         """Exact (width, height) of `s` in DESIGN coords at design `size`, from Dear PyGui's own
         glyph metrics (`get_text_size`) for the bound mono atlas — scaled from the atlas size to
-        `size`. No hand-tuned widths; guards to a monospace estimate if measuring fails."""
+        `size`. Measured on the host: ``draw_text`` renders ~9% wider than ``get_text_size``
+        reports (a proportional, size-independent mismatch), so the width is multiplied by
+        ``_TEXT_CAL`` — otherwise a label's box is short and it spills right, off-centring it.
+        Guards to a monospace estimate if measuring fails."""
         try:
             f = self._fonts.get("mono")
             m = dpg.get_text_size(s, font=f) if f else dpg.get_text_size(s)
             if m and m[0] and m[0] > 0:
                 r = size / self._mono_px
-                return m[0] * r, m[1] * r
+                return m[0] * r * _TEXT_CAL, m[1] * r
         except Exception:  # noqa: BLE001 — measuring may be unavailable before the atlas is built
             pass
         return len(s) * 0.6 * size, size  # fallback estimate
