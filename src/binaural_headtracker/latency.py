@@ -68,6 +68,15 @@ class LatencyProbe:
     def __len__(self) -> int:
         return len(self._samples)
 
+    def samples(self) -> tuple[float, ...]:
+        """A snapshot of the current window's raw samples (ms), oldest first.
+
+        For a histogram/sparkline that wants the distribution's *shape*, not just the
+        percentiles. Like :meth:`stats`, this is a cheap atomic snapshot of the deque, so the
+        GUI thread may call it while the worker appends — a slightly stale copy is harmless.
+        """
+        return tuple(self._samples)
+
     def stats(self) -> LatencyStats:
         """Reduce the current window to a distribution. Empty ⇒ all-zero stats, ``n == 0``."""
         snap = np.fromiter(tuple(self._samples), dtype=np.float64)

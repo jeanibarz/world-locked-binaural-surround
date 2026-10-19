@@ -331,6 +331,23 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   shared `_console.text` for one consistent look (follow-up from B6.9).
 - [ ] **B6.11** HiDPI / resizable console window (`WINDOW_NORMAL` + integer canvas scale) so the
   console isn't small on high-DPI displays — distinct from the B6.9 glyph-sharpness fix.
+- [~] **B6.12** **Dear PyGui cockpit** — a native, resizable second host front-end chosen from a
+  two-round GUI-mockup review (the owner picked the cockpit look + Dear PyGui over Qt; **MIT vs
+  Qt's LGPL** was the deciding factor for the donationware/closed target). Organised around the
+  head→ear **latency distribution + stale/queue/device split** with **realtime method +
+  CPU/Rust/GPU** controls, a prominent camera, and the world-locked radar. Additive — the cv2
+  console stays the default.
+  _(Slice 1 done, journal 49: pure `binaural_headtracker.cockpit` view-model — `latency_histogram`
+  + `build_view(diag, samples…) → CockpitView` — `LatencyProbe.samples()`, and `apps/cockpit_view.py`
+  (lazy dpg import, one full-redraw drawlist, realtime control hooks, synthetic `run_preview()`).
+  `gui` extra adds `dearpygui>=1.11` (MIT), host-only. 18 tests (363 total). **dpg drawing not yet
+  host-verified** — no display on WSL.)_
+  - [ ] **B6.12 slice 2** — host visual check of `run_preview()`, then wire the cockpit to the live
+    passthrough engine (refactor the engine out of `voicemeeter_passthrough.py` so both the cv2
+    console and the cockpit drive it; feed real `Diagnosis` + `probe.samples()` + camera frame; make
+    the control hooks mutate the running method/backend/cushion/predict).
+  - [ ] **B6.12 slice 3** — camera texture polish, radar drag-to-place parity, session presets, and
+    a `--ui {console,cockpit}` selector on the host app.
 
 ## M7 — AI-judge calibration
 

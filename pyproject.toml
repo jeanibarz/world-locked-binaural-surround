@@ -79,6 +79,16 @@ loopback = [
 gpu = [
     "cupy-cuda12x>=13",
 ]
+# Dear PyGui cockpit front-end (B6.12) — OPTIONAL, host-only. dearpygui (MIT) is the native
+# GUI runtime for apps/cockpit_view.py, chosen over Qt precisely because MIT carries no
+# copyleft/relink obligations for a future donationware or closed release (Qt's PySide6 is
+# LGPL-3; journal 48). It needs a GPU/display, so it is kept OUT of the baseline and dev
+# extras to keep `uv sync` green on headless WSL/CI; the portable view-model in
+# binaural_headtracker.cockpit imports it never and is unit-tested without it. Install on the
+# host: `py -3.12 -m pip install dearpygui` or here with `uv sync --extra gui`.
+gui = [
+    "dearpygui>=1.11",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

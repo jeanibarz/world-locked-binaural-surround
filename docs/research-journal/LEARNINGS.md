@@ -609,3 +609,15 @@ full story.
     — colour- and position-independent — rasterises each constant label once; per frame you only
     alpha-composite it in the wanted colour with numpy. That cut the overhead to +2.6 ms. Don't key
     the cache on colour or the live background, or it never hits. (→ [48](48-truetype-typography.md))
+81. **Decide a GUI toolkit's licence before its ergonomics when the target is donationware/closed.**
+    Qt via PySide6 is **LGPL-3**: you may sell a closed binary, but you must keep Qt a replaceable
+    dynamically-linked library (the relink provision) and ship licence notices on every release, or
+    pay for a commercial seat — a permanent compliance tax. Dear PyGui (MIT) and pywebview (BSD)
+    carry none of that. For "open-source now, maybe sell later", a permissive toolkit keeps every
+    door open; LGPL narrows them. (→ [49](49-dpg-cockpit.md))
+82. **A second GUI toolkit reuses the same model/view split as the first.** The pattern that made
+    the cv2 console testable — pure, headless logic in `src/binaural_headtracker/` (`radar`,
+    `diagnostics`, now `cockpit`), host-only drawing in `apps/` behind a *lazy* toolkit import —
+    drops straight onto Dear PyGui: the view-model is unit-tested on CI with no display, and drawing
+    the whole canvas as one full-redraw drawlist (mirroring cv2 `compose`) keeps the view a faithful
+    function of the model, with no per-widget state to drift. (→ [49](49-dpg-cockpit.md))
