@@ -463,7 +463,7 @@ class CockpitWindow:
 
     def _radar(self, dpg, world_az, channels, facing_i, head_deg, source_az):
         cx, cy = RAD_X + RAD_W / 2, RAD_Y + RAD_H / 2 + 6
-        R = RAD_W / 2 - 34
+        R = RAD_W / 2 - 50   # leave room OUTSIDE the ring for the per-speaker labels + cardinals
         for f in (1.0, 0.66, 0.33):
             self._circle(dpg, cx, cy, R * f, color=M.LINE)
         # 0°/180° (vertical) and ±90° (horizontal) azimuth axes — a dashed reference cross, so the
@@ -475,15 +475,15 @@ class CockpitWindow:
         for d in range(-28, 29, 4):
             poly.append(azimuth_to_radar_xy(head_deg + d, R, cx, cy))
         self._poly(dpg, poly, color=(*M.ACCENT[:3], 0), fill=(*M.ACCENT[:3], 36))
-        # cardinal words at the axis ends, OUTSIDE the ring — centred on each axis and symmetric
-        # left↔right: FRONT/BACK centred on the vertical axis, LEFT/RIGHT mirrored either side.
-        self._ctext(dpg, cx, cy - R - 15, "FRONT", M.FAINT, 11, "c")
-        self._ctext(dpg, cx, cy + R + 15, "BACK", M.FAINT, 11, "c")
-        self._ctext(dpg, cx - R - 12, cy, "LEFT", M.FAINT, 11, "r")
-        self._ctext(dpg, cx + R + 12, cy, "RIGHT", M.FAINT, 11, "l")
-        # speakers: a dashed spoke from the centre to each, and a channel+angle label placed
-        # INSIDE the ring — so the three front speakers (C/FL/FR) don't pile onto the FRONT
-        # cardinal and the top edge the way outside labels do.
+        # cardinal words: FRONT/BACK further out on the vertical axis (clear of C's label), LEFT/
+        # RIGHT on the horizontal axis. Centred/edge-aligned from the measured box → symmetric.
+        self._ctext(dpg, cx, cy - R - 30, "FRONT", M.FAINT, 11, "c")
+        self._ctext(dpg, cx, cy + R + 30, "BACK", M.FAINT, 11, "c")
+        self._ctext(dpg, cx - R - 14, cy, "LEFT", M.FAINT, 11, "r")
+        self._ctext(dpg, cx + R + 14, cy, "RIGHT", M.FAINT, 11, "l")
+        # speakers: a dashed spoke from the centre to each dot, and a channel+angle label placed
+        # just OUTSIDE the dot (radially outward) — so left labels sit left of their dot and right
+        # labels right of theirs, a true left↔right mirror, each centred on the measured box.
         for i, ch in enumerate(channels):
             if ch == "LFE":
                 continue  # non-directional (sits at az 0, atop C) — not an azimuth-radar speaker
@@ -495,12 +495,9 @@ class CockpitWindow:
             if on:
                 self._circle(dpg, x, y, 12, color=M.ACTIVE)
             self._circle(dpg, x, y, 7 if on else 5, color=M.PANEL, fill=col)
-            # label inset a fixed distance from the DOT toward the centre (not at a fixed ring
-            # radius) — so the dot-to-label gap is the same at every angle and a near-horizontal
-            # speaker like SL/SR (±110°) no longer has its label sitting on top of its dot.
             lab = f"{ch} {az:+.0f}°" if abs(az) > 0.5 else f"{ch} 0°"
-            ux, uy = (cx - x) / R, (cy - y) / R
-            self._ctext(dpg, x + ux * 30, y + uy * 30, lab, M.ACTIVE if on else M.MUTED, 11, "c")
+            lx, ly = azimuth_to_radar_xy(az, R + 16, cx, cy)  # radially just outside the dot
+            self._ctext(dpg, lx, ly, lab, M.ACTIVE if on else M.MUTED, 11, "c")
         if source_az is not None:
             sx, sy = azimuth_to_radar_xy(float(source_az), R, cx, cy)
             self._line(dpg, cx, cy, sx, sy, color=M.GOOD)
