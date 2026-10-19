@@ -42,7 +42,6 @@ LAG_X, LAG_Y, LAG_W, LAG_H = 810, 12, 190, 300  # wider STATUS box so its readou
 PANEL_Y = 324  # the wide latency panel under the camera/radar
 CONTROLS_H = 74  # height reserved below the scaled canvas for the two native controls rows
 MARGIN = 10      # window padding kept around the scaled canvas
-_TEXT_CAL = 1.09  # draw_text renders ~9% wider than get_text_size reports (measured on the host)
 
 
 def available() -> bool:
@@ -167,13 +166,20 @@ class CockpitWindow:
             # client pixels with item sizes otherwise overflows the window on a 150% display).
             with dpg.child_window(tag=self._host, border=False, width=-1, height=-CONTROLS_H):
                 dpg.add_drawlist(width=CANVAS_W, height=CANVAS_H, tag=self._canvas)
-                # DPG 2.x dropped per-call `font=` on draw_text; a drawlist's text follows the font
-                # bound to the drawlist item. Bind the mono face (the data cockpit's primary type).
-                if self._fonts.get("mono"):
-                    try:
-                        dpg.bind_item_font(self._canvas, self._fonts["mono"])
-                    except Exception:  # noqa: BLE001 — a failed bind just leaves the default font
-                        pass
+            # DPG 2.x dropped per-call `font=` on draw_text, and a font bound to the DRAWLIST item
+            # itself is silently ignored (verified on the host, DPG 2.3.1): draw_text renders with
+            # the font of the enclosing *container* (window / child / group), else the global one.
+            # So bind the mono face (the data cockpit's primary type) to the host child, which
+            # holds only the canvas. `_text_size` measures with this same face + atlas, so the
+            # measured box is exactly the rendered box — which is what centred/mirrored labels
+            # rely on. (Binding the drawlist used to leave the canvas in the global sans face while
+            # it was measured in mono: every label's ink sat flush-left in a too-wide box, a uniform
+            # ~4–6 px left lean that read as left↔right asymmetry on the radar.)
+            if self._fonts.get("mono"):
+                try:
+                    dpg.bind_item_font(self._host, self._fonts["mono"])
+                except Exception:  # noqa: BLE001 — a failed bind just leaves the default font
+                    pass
             # Two rows so the controls fit a narrow window instead of running off the right edge.
             with dpg.group(horizontal=True):   # row 1 — the render engine
                 dpg.add_text("method")
@@ -437,17 +443,16 @@ class CockpitWindow:
 
     def _text_size(self, dpg, s, size):
         """Exact (width, height) of `s` in DESIGN coords at design `size`, from Dear PyGui's own
-        glyph metrics (`get_text_size`) for the bound mono atlas — scaled from the atlas size to
-        `size`. Measured on the host: ``draw_text`` renders ~9% wider than ``get_text_size``
-        reports (a proportional, size-independent mismatch), so the width is multiplied by
-        ``_TEXT_CAL`` — otherwise a label's box is short and it spills right, off-centring it.
+        glyph metrics (`get_text_size`) for the mono atlas the canvas renders with (see `setup`),
+        scaled linearly from the atlas size to `size` — ImGui scales glyph advances linearly, so
+        this IS the rendered advance box (verified on the host to the pixel; no calibration).
         Guards to a monospace estimate if measuring fails."""
         try:
             f = self._fonts.get("mono")
             m = dpg.get_text_size(s, font=f) if f else dpg.get_text_size(s)
             if m and m[0] and m[0] > 0:
                 r = size / self._mono_px
-                return m[0] * r * _TEXT_CAL, m[1] * r
+                return m[0] * r, m[1] * r
         except Exception:  # noqa: BLE001 — measuring may be unavailable before the atlas is built
             pass
         return len(s) * 0.6 * size, size  # fallback estimate
@@ -500,8 +505,15 @@ class CockpitWindow:
                 self._circle(dpg, x, y, 12, color=M.ACTIVE)
             self._circle(dpg, x, y, 7 if on else 5, color=M.PANEL, fill=col)
             lab = f"{ch} {az:+.0f}°" if abs(az) > 0.5 else f"{ch} 0°"
-            lx, ly = azimuth_to_radar_xy(az, R + 16, cx, cy)  # radially just outside the dot
-            self._ctext(dpg, lx, ly, lab, M.ACTIVE if on else M.MUTED, 11, "c")
+            # Label centre pushed outward along the dot's radial by the box's own support distance
+            # in that direction (half-width·|ux| + half-height·|uy|) plus a fixed clearance, so the
+            # box edge NEAREST the dot always clears it by the same amount — a wide label near the
+            # horizontal no longer runs back over its dot (which hid the `°` on the left and the
+            # channel letter on the right). |ux|, |uy| are even in az, so mirror pairs stay exact.
+            w, h = self._text_size(dpg, lab, 11)
+            ux, uy = -math.sin(math.radians(az)), -math.cos(math.radians(az))
+            d = 12 + (w / 2) * abs(ux) + (h / 2) * abs(uy)
+            self._ctext(dpg, x + ux * d, y + uy * d, lab, M.ACTIVE if on else M.MUTED, 11, "c")
         if source_az is not None:
             sx, sy = azimuth_to_radar_xy(float(source_az), R, cx, cy)
             self._line(dpg, cx, cy, sx, sy, color=M.GOOD)
