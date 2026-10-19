@@ -711,8 +711,8 @@ def run_preview() -> int:
     import numpy as np
 
     from binaural_headtracker.diagnostics import classify
-    from binaural_headtracker.head_pose import HeadPose
     from binaural_headtracker.radar import nearest_front_channel
+    from binaural_headtracker.tracking import HeadPose
 
     channels = ["FL", "FR", "C", "LFE", "SL", "SR", "RL", "RR"]
     world_az = [30.0, -30.0, 0.0, 0.0, 110.0, -110.0, 150.0, -150.0]
