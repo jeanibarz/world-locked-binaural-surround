@@ -198,6 +198,13 @@ def main(argv=None) -> int:
             return args.rust, args.gpu
         return backend == "rust", backend == "gpu"
 
+    # The render block size is live (cockpit stepper): the builders below read ``blk["n"]`` so a
+    # change rebuilds every renderer at the new size, and the worker snapshots it per batch under
+    # ``lock`` so the slice width always matches the renderer it hands the slice to. The output
+    # stream is blocksize=0 (device-native) and re-sliced by the callback, so it needs no reopen;
+    # only the cushion math (blocks ↔ ms) and the rendered partition size follow the block.
+    blk = {"n": int(args.block)}
+
     def _nearest_renderer(backend: str | None = None):
         """Build the fast 8-bus nearest renderer for ``backend``. Returns ``(renderer, reason)``
         where ``reason`` is a short failure string when a requested accelerator (rust/gpu) was
@@ -208,26 +215,26 @@ def main(argv=None) -> int:
             try:
                 from binaural_headtracker.rust_render import RustWorldLocked7p1
                 print("render: nearest — native Rust kernel (CPU, no GPU)")
-                return RustWorldLocked7p1(brir, block_size=args.block, fade_ms=args.fade_ms,
+                return RustWorldLocked7p1(brir, block_size=blk["n"], fade_ms=args.fade_ms,
                                           lfe_mode=args.lfe_mode), None
             except Exception as exc:  # noqa: BLE001  — fall back to pure-Python CPU
                 reason = f"Rust kernel unavailable ({type(exc).__name__})"
                 print(f"{reason}: {exc!r}; falling back to CPU.")
-                return (WorldLocked7p1(brir, block_size=args.block, fade_ms=args.fade_ms,
+                return (WorldLocked7p1(brir, block_size=blk["n"], fade_ms=args.fade_ms,
                                        lfe_mode=args.lfe_mode), reason)
         if use_gpu:
             try:
                 from binaural_headtracker.gpu_render import GpuWorldLocked7p1
                 print("render: nearest — GPU (CuPy)")
-                return GpuWorldLocked7p1(brir, block_size=args.block, fade_ms=args.fade_ms,
+                return GpuWorldLocked7p1(brir, block_size=blk["n"], fade_ms=args.fade_ms,
                                          lfe_mode=args.lfe_mode), None
             except Exception as exc:  # noqa: BLE001  — fall back to CPU
                 reason = f"GPU unavailable ({type(exc).__name__})"
                 print(f"{reason}: {exc!r}; falling back to CPU.")
-                return (WorldLocked7p1(brir, block_size=args.block, fade_ms=args.fade_ms,
+                return (WorldLocked7p1(brir, block_size=blk["n"], fade_ms=args.fade_ms,
                                        lfe_mode=args.lfe_mode), reason)
         print("render: nearest — pure-Python CPU (pass --rust or --gpu for real time)")
-        return WorldLocked7p1(brir, block_size=args.block, fade_ms=args.fade_ms,
+        return WorldLocked7p1(brir, block_size=blk["n"], fade_ms=args.fade_ms,
                               lfe_mode=args.lfe_mode), None
 
     def build_main_renderer(method: str, backend: str | None = None):
@@ -244,7 +251,7 @@ def main(argv=None) -> int:
         use_rust = backend in ("rust", "gpu") if backend else args.rust
         print(f"render: {method} — dense-grid 7.1 ({args.grid_step:.0f}°) "
               f"{'[rust]' if use_rust else '[cpu]'}")
-        r = InterpWorldLocked7p1(brir, method, block_size=args.block, fade_ms=args.fade_ms,
+        r = InterpWorldLocked7p1(brir, method, block_size=blk["n"], fade_ms=args.fade_ms,
                                  grid_step=args.grid_step, lfe_mode=args.lfe_mode,
                                  use_rust=use_rust)
         # If rust was asked for but the dense-grid engine fell back to CPU (kernel unbuilt), say so.
@@ -276,10 +283,15 @@ def main(argv=None) -> int:
     # Global output-bus comp + EQ (B5.3): the bare BRIRs carry room/direction but not the
     # headphone comp or subjective EQ, which EqualizerAPO applies once to the stereo mix. Apply
     # the same per-ear chain here so the render sounds like the tuned config, not the thin bake.
-    output_eq = None
+    def build_output_eq(block: int):
+        """The per-ear comp+EQ for the stereo bus, sized to ``block`` — rebuilt on a live block
+        change (its FFT partitions are block-sized). ``None`` when no --output-eq was given."""
+        if args.output_eq is None:
+            return None
+        return load_output_eq(args.output_eq, samplerate=brir.samplerate, block_size=block)
+
+    eqh = {"eq": build_output_eq(blk["n"])}  # holder so _set_block can swap it under the lock
     if args.output_eq is not None:
-        output_eq = load_output_eq(
-            args.output_eq, samplerate=brir.samplerate, block_size=args.block)
         print(f"output EQ: {args.output_eq} (global per-ear comp+EQ on the stereo bus)")
         if args.lfe_mode != "brir":
             print("  note: the EQ restores the sub-bass the LFE BRIR strips — pair it with "
@@ -295,13 +307,13 @@ def main(argv=None) -> int:
 
     def build_test_renderer(method: str) -> WorldLockedSource:
         if method == "nearest":
-            return WorldLockedSource(brir, block_size=args.block, fade_ms=args.fade_ms,
+            return WorldLockedSource(brir, block_size=blk["n"], fade_ms=args.fade_ms,
                                      max_tail_ms=args.max_tail_ms)
         # Dense grid: a moving source sweeps through many grid points, each spinning up a
         # full-length convolution voice that otherwise rings its whole ~0.5 s tail. Cap the
         # retired-voice tail (--max-tail-ms) so concurrent voices stay bounded → no dropouts.
         dense, azmap = interpolated_ring(brir, method, step_deg=args.grid_step)
-        return WorldLockedSource(dense, block_size=args.block, fade_ms=args.fade_ms,
+        return WorldLockedSource(dense, block_size=blk["n"], fade_ms=args.fade_ms,
                                  max_tail_ms=args.max_tail_ms, azimuths=azmap)
 
     test_renderers[args.method] = build_test_renderer(args.method)
@@ -364,10 +376,10 @@ def main(argv=None) -> int:
     # the output FIFO is primed with a silence cushion (`--latency-ms`) that absorbs the
     # jitter; the backlog is capped just above the cushion so clock drift can't let the queue
     # (and so the head-move-to-ear latency) grow unbounded — it stays near the cushion.
-    cushion = max(2, round(args.latency_ms * 1e-3 * brir.samplerate / args.block))
+    cushion = max(2, round(args.latency_ms * 1e-3 * brir.samplerate / blk["n"]))
     # Each FIFO entry is (stereo_block, pose_t, render_t) so the output callback can measure the
     # pose-age-at-ear precisely at *playout* and split it into stale / queue / device (B8.5e).
-    out_fifo: deque = deque((np.zeros((args.block, 2)), None, None) for _ in range(cushion))
+    out_fifo: deque = deque((np.zeros((blk["n"], 2)), None, None) for _ in range(cushion))
     fifo_lock = threading.Lock()
     in_tail = {"buf": np.zeros((0, brir.n_channels))}  # leftover capture < one block
     cb_error: list[BaseException] = []
@@ -434,6 +446,8 @@ def main(argv=None) -> int:
                     az = state["az"]
                     pose_t = state["pose_t"]
                     r_main = main_rend["r"]
+                    cur_blk = blk["n"]      # snapshot with r_main so the slice width matches it
+                    cur_eq = eqh["eq"]
                     t_on, t_rnd, t_az = test["on"], test["renderer"], test["az"]
                     t_gain, t_solo = test["gain"], test["solo"]
                 cap = np.concatenate(chunks, axis=0)
@@ -450,19 +464,19 @@ def main(argv=None) -> int:
                 rendered = []
                 t0 = time.perf_counter()
                 test_dt = 0.0  # time spent on the test source alone (to split the load readout)
-                while buf.shape[0] - i >= args.block:
-                    stereo = r_main.process_block(buf[i : i + args.block], az)
+                while buf.shape[0] - i >= cur_blk:
+                    stereo = r_main.process_block(buf[i : i + cur_blk], az)
                     if t_on:  # mix the movable test source (solo replaces the 7.1)
                         t_test0 = time.perf_counter()
-                        idx = (test_pos["i"] + np.arange(args.block)) % test_loop.size
+                        idx = (test_pos["i"] + np.arange(cur_blk)) % test_loop.size
                         tstereo = t_rnd.process_block(test_loop[idx], t_az) * t_gain
-                        test_pos["i"] = int((test_pos["i"] + args.block) % test_loop.size)
+                        test_pos["i"] = int((test_pos["i"] + cur_blk) % test_loop.size)
                         stereo = tstereo if t_solo else stereo + tstereo
                         test_dt += time.perf_counter() - t_test0
-                    if output_eq is not None:
-                        stereo = output_eq.process_block(stereo)
+                    if cur_eq is not None:
+                        stereo = cur_eq.process_block(stereo)
                     rendered.append(stereo * args.gain)
-                    i += args.block
+                    i += cur_blk
                 in_tail["buf"] = buf[i:]
                 if rendered:  # per-block render time: EWMA mean + a slowly-decaying peak
                     per_ms = (time.perf_counter() - t0) * 1000.0 / len(rendered)
@@ -653,19 +667,48 @@ def main(argv=None) -> int:
 
         def _set_cushion(ms) -> None:  # noqa: ANN001  — output FIFO cushion (ms), live
             nonlocal cushion, max_backlog, in_q_max
-            nc = max(2, round(float(ms) * 1e-3 * brir.samplerate / args.block))
+            nc = max(2, round(float(ms) * 1e-3 * brir.samplerate / blk["n"]))
             with fifo_lock:
                 cushion, max_backlog, in_q_max = nc, nc * 2, max(8, 4 * nc)
                 # grow immediately with a little silence so raising it takes audible effect now;
                 # lowering just lets the worker trim to the smaller max_backlog next cycle.
                 while len(out_fifo) < cushion:
-                    out_fifo.appendleft((np.zeros((args.block, 2)), None, None))
+                    out_fifo.appendleft((np.zeros((blk["n"], 2)), None, None))
+
+        def _set_block(n) -> None:  # noqa: ANN001  — render block size (frames), live
+            """Swap the render block size without a restart. Rebuilds every renderer + the output EQ
+            at the new size and keeps the cushion's *duration* (not its block count) — all under
+            ``lock`` so the worker never slices at one width while holding a renderer built for
+            another. One brief glitch at the swap (the renderers lose their overlap tails); larger
+            for GPU (cuFFT replan). The output stream is blocksize=0 so it needs no reopen."""
+            nonlocal cushion, max_backlog, in_q_max
+            n = int(n)
+            old_blk = blk["n"]
+            if n == old_blk or n < 32:
+                return
+            with lock:
+                blk["n"] = n  # builders below now size to n
+                nm, _ = build_main_renderer(test["method"], cur["backend"])
+                main_rend["r"], main_rend["label"] = nm, render_label(nm, test["method"])
+                test_renderers.clear()  # drop old-block test voices; rebuild the active one at n
+                test_renderers[test["method"]] = build_test_renderer(test["method"])
+                test["renderer"] = test_renderers[test["method"]]
+                eqh["eq"] = build_output_eq(n)
+                with fifo_lock:
+                    cushion = max(2, round(cushion * old_blk / n))  # preserve the cushion's ms
+                    max_backlog, in_q_max = cushion * 2, max(8, 4 * cushion)
+                    while len(out_fifo) > max_backlog:          # block grew → trim surplus
+                        out_fifo.popleft()
+                    while len(out_fifo) < cushion:              # block shrank → top up to target
+                        out_fifo.appendleft((np.zeros((n, 2)), None, None))
+            win_ck.set_block_display(n)
 
         win_ck.on_quit = lambda: q.__setitem__("stop", True)
         win_ck.on_recenter = _recenter
         win_ck.on_method = _set_method
         win_ck.on_backend = _set_backend
         win_ck.on_cushion = _set_cushion
+        win_ck.on_block = _set_block
         win_ck.on_test = _tog("on")
         win_ck.on_solo = _tog("solo")
         win_ck.on_rotate = _tog("rotate")
@@ -673,6 +716,7 @@ def main(argv=None) -> int:
         win_ck.on_predict = lambda on: cur.__setitem__("predict", bool(on))
         win_ck.setup()
         win_ck.set_cushion_display(args.latency_ms)  # slider → the real launch cushion, not 60
+        win_ck.set_block_display(blk["n"])           # stepper → the real launch block size
         cur["backend"] = _backend_of(main_rend["r"])  # the engine that actually built at launch
         win_ck.set_backend_display(cur["backend"])    # radio → real launch backend (not 'rust'),
         if args.gpu and cur["backend"] != "gpu":      # and warn if --gpu silently fell back
@@ -750,12 +794,12 @@ def main(argv=None) -> int:
                 rlabel = main_rend["label"] + ("  · test ON" if t_on else "")
                 ear = ear_probe.stats()
                 diag = classify(
-                    block_size=args.block, samplerate=brir.samplerate,
+                    block_size=blk["n"], samplerate=brir.samplerate,
                     render_ms=meter["ms"], render_ms_peak=meter["peak"],
                     render_ms_test=(meter["test_ms"] if t_on else 0.0),
                     render_label=rlabel, fifo_fill_blocks=fifo_fill, cushion_blocks=cushion,
                     output_latency_ms=out_lat_ms,
-                    input_latency_ms=1000.0 * args.block / brir.samplerate,
+                    input_latency_ms=1000.0 * blk["n"] / brir.samplerate,
                     pose_rate_hz=rate, recent_underruns=recent_under, recent_overflows=recent_over,
                     measured_pose_age_ms=(ear.p50 if ear.n else None),
                     measured_pose_age_p95_ms=ear.p95, measured_pose_age_p99_ms=ear.p99,
@@ -867,13 +911,13 @@ def main(argv=None) -> int:
             rlabel = main_rend["label"] + ("  · test ON" if test["on"] else "")
             ear = ear_probe.stats()  # measured pose-age-at-ear distribution (B8.5)
             diag = classify(
-                block_size=args.block, samplerate=brir.samplerate,
+                block_size=blk["n"], samplerate=brir.samplerate,
                 render_ms=meter["ms"], render_ms_peak=meter["peak"],
                 render_ms_test=(meter["test_ms"] if test["on"] else 0.0),
                 render_label=rlabel,
                 fifo_fill_blocks=fifo_fill, cushion_blocks=cushion,
                 output_latency_ms=out_lat_ms,
-                input_latency_ms=1000.0 * args.block / brir.samplerate,
+                input_latency_ms=1000.0 * blk["n"] / brir.samplerate,
                 pose_rate_hz=rate, recent_underruns=recent_under,
                 recent_overflows=recent_over,
                 measured_pose_age_ms=(ear.p50 if ear.n else None),

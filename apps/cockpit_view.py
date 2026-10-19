@@ -110,6 +110,9 @@ class CockpitWindow:
         self._src_cb = "ck_src"     # the test-source checkbox, so engine state can sync it
         self._backend_rb = "ck_backend"  # the backend radio, so a failed switch can snap it back
         self._cushion_sl = "ck_cushion"  # the cushion slider, so the live value can seed it
+        self._block_txt = "ck_block"     # the block ± stepper's value text
+        self._block_vals = (256, 512, 1024, 2048)  # power-of-two block sizes the stepper cycles
+        self._block_i = 1                # index into _block_vals (default 512)
         self._toasts: list[dict] = []    # transient banners (backend-switch errors): text/color/exp
         self._mono_px = 36          # the mono atlas size (see _load_fonts); text is measured at it
         self._k = 1.0  # live fit-scale: design canvas → current window (set each frame)
@@ -124,6 +127,7 @@ class CockpitWindow:
         self.on_method = lambda method: None
         self.on_backend = lambda backend: None
         self.on_cushion = lambda ms: None
+        self.on_block = lambda n: None        # render block size (frames) — the ± stepper, live
         self.on_predict = lambda on: None
         self.on_exclusive = lambda on: None
         self.on_test = lambda on: None        # movable test source on/off (the console's T)
@@ -182,32 +186,48 @@ class CockpitWindow:
                     dpg.bind_item_font(self._host, self._fonts["mono"])
                 except Exception:  # noqa: BLE001 — a failed bind just leaves the default font
                     pass
-            # Two rows so the controls fit a narrow window instead of running off the right edge.
-            with dpg.group(horizontal=True):   # row 1 — the render engine
-                dpg.add_text("method")
-                dpg.add_combo(
-                    ("nearest", "timealign", "minphase", "notchwarp"),
-                    default_value="nearest", width=120,
-                    callback=lambda s, a: self.on_method(a))
-                dpg.add_spacer(width=8)
-                dpg.add_text("backend")
-                dpg.add_radio_button(
-                    ("cpu", "rust", "gpu"), tag=self._backend_rb, default_value="rust",
-                    horizontal=True, callback=lambda s, a: self.on_backend(a))
-                dpg.add_spacer(width=8)
-                dpg.add_text("cushion")
-                dpg.add_slider_int(
-                    tag=self._cushion_sl, default_value=60, min_value=20, max_value=120, width=120,
-                    format="%d ms", callback=lambda s, a: self.on_cushion(float(a)))
-            with dpg.group(horizontal=True):   # row 2 — prediction, the test source, actions
+            # Row 1 = every SETTING (engine · output · tracking); row 2 = the test group + actions.
+            # Section labels in accent, thin dividers between, so the strip reads as grouped cells
+            # instead of one undifferentiated run of widgets.
+            def _sec(txt):
+                dpg.add_text(txt, color=_c(M.ACCENT))
+
+            def _div():
+                dpg.add_spacer(width=9)
+                dpg.add_text("|", color=_c(M.LINE))
+                dpg.add_spacer(width=6)
+
+            with dpg.group(horizontal=True):   # row 1 — settings
+                _sec("ENGINE")
+                dpg.add_combo(("nearest", "timealign", "minphase", "notchwarp"),
+                              default_value="nearest", width=106,
+                              callback=lambda s, a: self.on_method(a))
+                dpg.add_radio_button(("cpu", "rust", "gpu"), tag=self._backend_rb,
+                                     default_value="rust", horizontal=True,
+                                     callback=lambda s, a: self.on_backend(a))
+                dpg.add_text("block", color=_c(M.MUTED))
+                dpg.add_button(label="-", width=26, callback=lambda: self._step_block(-1))
+                dpg.add_text("512", tag=self._block_txt)
+                dpg.add_button(label="+", width=26, callback=lambda: self._step_block(+1))
+                _div()
+                _sec("OUTPUT")
+                dpg.add_text("cushion", color=_c(M.MUTED))
+                dpg.add_slider_int(tag=self._cushion_sl, default_value=60, min_value=20,
+                                   max_value=120, width=116, format="%d ms",
+                                   callback=lambda s, a: self.on_cushion(float(a)))
+                _div()
+                _sec("TRACK")
                 dpg.add_checkbox(label="predict", default_value=True,
                                  callback=lambda s, a: self._set_predict(bool(a)))
                 dpg.add_checkbox(label="exclusive",
                                  callback=lambda s, a: self.on_exclusive(bool(a)))
-                dpg.add_spacer(width=12)
+                _div()
+                dpg.add_button(label="Recenter", callback=lambda: self.on_recenter())
+                dpg.add_button(label="Quit", callback=lambda: self.on_quit())
+            with dpg.group(horizontal=True):   # row 2 — the test group only
                 # Test-source experiment layer (the console's T/O/R): a movable virtual sound for
                 # A/B-ing localization. Click the radar to place it, drag to move it continuously.
-                tst = dpg.add_text("test:")
+                tst = dpg.add_text("TEST", color=_c(M.ACCENT))
                 with dpg.tooltip(tst):
                     dpg.add_text("A movable virtual test sound for A/B-ing localization.\n"
                                  "Click the radar to place it; drag to move it continuously.\n"
@@ -217,9 +237,6 @@ class CockpitWindow:
                                  callback=lambda s, a: self._set_test(bool(a)))
                 dpg.add_checkbox(label="solo", callback=lambda s, a: self._set_solo(bool(a)))
                 dpg.add_checkbox(label="orbit", callback=lambda s, a: self._set_rotate(bool(a)))
-                dpg.add_spacer(width=12)
-                dpg.add_button(label="Recenter", callback=lambda: self.on_recenter())
-                dpg.add_button(label="Quit", callback=lambda: self.on_quit())
         dpg.set_primary_window(self._win, True)
 
         # Height leaves room below the canvas for the controls row + titlebar, with a margin so a
@@ -261,6 +278,34 @@ class CockpitWindow:
             import dearpygui.dearpygui as dpg
             if dpg.does_item_exist(self._cushion_sl):
                 dpg.set_value(self._cushion_sl, int(round(ms)))
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _step_block(self, delta: int) -> None:
+        """± button on the block stepper: move one power-of-two and fire ``on_block`` live."""
+        i = max(0, min(len(self._block_vals) - 1, self._block_i + delta))
+        if i == self._block_i:
+            return
+        self._block_i = i
+        n = self._block_vals[i]
+        try:
+            import dearpygui.dearpygui as dpg
+            if dpg.does_item_exist(self._block_txt):
+                dpg.set_value(self._block_txt, str(n))
+        except Exception:  # noqa: BLE001
+            pass
+        self.on_block(n)
+
+    def set_block_display(self, n: int) -> None:
+        """Seed/snap the block stepper to the engine's ACTUAL block size (launch value, or after a
+        change). An off-list value still shows the real number; stepping then snaps to the grid."""
+        try:
+            n = int(n)
+            self._block_i = min(range(len(self._block_vals)),
+                                key=lambda j: abs(self._block_vals[j] - n))
+            import dearpygui.dearpygui as dpg
+            if dpg.does_item_exist(self._block_txt):
+                dpg.set_value(self._block_txt, str(n))
         except Exception:  # noqa: BLE001
             pass
 
