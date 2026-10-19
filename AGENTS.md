@@ -141,6 +141,10 @@ keep a local-`C:` copy for MediaPipe), the baked BRIR dir (`docs/baked-brir-setu
 and dry source WAVs (e.g. `caisse_claire_*`). A WSLg Tk window can **preview** a dialog
 from WSL, but the camera + audio always run on the host. (See journal 02; B6.2.)
 
+**Anything visual (alignment, symmetry, text width, clipping, DPI) is checked by screenshot +
+pixel measurement, never by reasoning about the math or by an isolated probe** — load the
+`host-gui-visual-check` skill (`spikes/host_window_shot.ps1` + `spikes/host_shot_measure.py`).
+
 ### Measurements & latency experiments — headless, run them here too
 
 **"Needs host hardware" in the backlog/journals (e.g. B8.5, the latency split, B8.8) means

@@ -107,10 +107,13 @@ class CockpitWindow:
         self._canvas = "cockpit_canvas"
         self._win = "cockpit_win"
         self._host = "canvas_host"  # auto-filling child; its measured size drives the fit-scale
+        self._src_cb = "ck_src"     # the test-source checkbox, so engine state can sync it
+        self._cushion_sl = "ck_cushion"  # the cushion slider, so the live value can seed it
+        self._mono_px = 36          # the mono atlas size (see _load_fonts); text is measured at it
         self._k = 1.0  # live fit-scale: design canvas → current window (set each frame)
         # Test-source state the view owns, so a radar click/drag moves the source live even in the
         # preview (and the live app reads it back). Placed by clicking the radar; dragged to move.
-        self._test_on = True
+        self._test_on = False
         self._test_az = 60.0
         self._solo = False
         self._rotate = False
@@ -163,13 +166,20 @@ class CockpitWindow:
             # client pixels with item sizes otherwise overflows the window on a 150% display).
             with dpg.child_window(tag=self._host, border=False, width=-1, height=-CONTROLS_H):
                 dpg.add_drawlist(width=CANVAS_W, height=CANVAS_H, tag=self._canvas)
-                # DPG 2.x dropped per-call `font=` on draw_text; a drawlist's text follows the font
-                # bound to the drawlist item. Bind the mono face (the data cockpit's primary type).
-                if self._fonts.get("mono"):
-                    try:
-                        dpg.bind_item_font(self._canvas, self._fonts["mono"])
-                    except Exception:  # noqa: BLE001 — a failed bind just leaves the default font
-                        pass
+            # DPG 2.x dropped per-call `font=` on draw_text, and a font bound to the DRAWLIST item
+            # itself is silently ignored (verified on the host, DPG 2.3.1): draw_text renders with
+            # the font of the enclosing *container* (window / child / group), else the global one.
+            # So bind the mono face (the data cockpit's primary type) to the host child, which
+            # holds only the canvas. `_text_size` measures with this same face + atlas, so the
+            # measured box is exactly the rendered box — which is what centred/mirrored labels
+            # rely on. (Binding the drawlist used to leave the canvas in the global sans face while
+            # it was measured in mono: every label's ink sat flush-left in a too-wide box, a uniform
+            # ~4–6 px left lean that read as left↔right asymmetry on the radar.)
+            if self._fonts.get("mono"):
+                try:
+                    dpg.bind_item_font(self._host, self._fonts["mono"])
+                except Exception:  # noqa: BLE001 — a failed bind just leaves the default font
+                    pass
             # Two rows so the controls fit a narrow window instead of running off the right edge.
             with dpg.group(horizontal=True):   # row 1 — the render engine
                 dpg.add_text("method")
@@ -185,8 +195,8 @@ class CockpitWindow:
                 dpg.add_spacer(width=8)
                 dpg.add_text("cushion")
                 dpg.add_slider_int(
-                    default_value=60, min_value=20, max_value=120, width=120, format="%d ms",
-                    callback=lambda s, a: self.on_cushion(float(a)))
+                    tag=self._cushion_sl, default_value=60, min_value=20, max_value=120, width=120,
+                    format="%d ms", callback=lambda s, a: self.on_cushion(float(a)))
             with dpg.group(horizontal=True):   # row 2 — prediction, the test source, actions
                 dpg.add_checkbox(label="predict", default_value=True,
                                  callback=lambda s, a: self._set_predict(bool(a)))
@@ -201,7 +211,7 @@ class CockpitWindow:
                                  "Click the radar to place it; drag to move it continuously.\n"
                                  "source = on/off · solo = hear only it (mute the mix) · "
                                  "orbit = auto-rotate it around you.")
-                dpg.add_checkbox(label="source", default_value=True,
+                dpg.add_checkbox(label="source", tag=self._src_cb,
                                  callback=lambda s, a: self._set_test(bool(a)))
                 dpg.add_checkbox(label="solo", callback=lambda s, a: self._set_solo(bool(a)))
                 dpg.add_checkbox(label="orbit", callback=lambda s, a: self._set_rotate(bool(a)))
@@ -243,6 +253,27 @@ class CockpitWindow:
         self._predict = on
         self.on_predict(on)
 
+    def set_cushion_display(self, ms: float) -> None:
+        """Seed the cushion slider with the engine's actual launch value (it isn't the default)."""
+        try:
+            import dearpygui.dearpygui as dpg
+            if dpg.does_item_exist(self._cushion_sl):
+                dpg.set_value(self._cushion_sl, int(round(ms)))
+        except Exception:  # noqa: BLE001
+            pass
+
+    def set_test_state(self, on: bool, az: float) -> None:
+        """Reflect the live engine's test-source state on the radar + the 'source' checkbox (so a
+        key/other UI change, or the engine's auto-rotation, keeps the view in sync)."""
+        self._test_on = bool(on)
+        self._test_az = float(az)
+        try:
+            import dearpygui.dearpygui as dpg
+            if dpg.does_item_exist(self._src_cb):
+                dpg.set_value(self._src_cb, bool(on))
+        except Exception:  # noqa: BLE001 — the checkbox is a convenience mirror, never critical
+            pass
+
     def _radar_az_at(self, dx, dy):
         """World azimuth (deg) for a DESIGN-space point on the radar, else None (inverse of
         ``azimuth_to_radar_xy``: x = cx − R·sinβ, y = cy − R·cosβ). A little past the ring still
@@ -270,7 +301,7 @@ class CockpitWindow:
         faces = {
             "display": ("Rajdhani-Bold.ttf", 34),
             "display_sm": ("Rajdhani-SemiBold.ttf", 15),
-            "mono": ("IBMPlexMono-Medium.ttf", 36),  # canvas atlas; large → crisp when scaled
+            "mono": ("IBMPlexMono-Medium.ttf", self._mono_px),  # canvas atlas; large → crisp scaled
             "mono_sm": ("IBMPlexMono-Regular.ttf", 12),
             "sans": ("IBMPlexSans-var.ttf", 15),
         }
@@ -375,6 +406,19 @@ class CockpitWindow:
         dpg.draw_line((x1 * k, y1 * k), (x2 * k, y2 * k), color=_c(color),
                       thickness=max(1.0, thickness * k), parent=self._canvas)
 
+    def _dashed(self, dpg, x1, y1, x2, y2, color, *, dash=5.0, gap=4.0, thickness=1.0):
+        """A dashed line in design coords (each segment scaled by self._k via `_line`)."""
+        dist = math.hypot(x2 - x1, y2 - y1)
+        if dist < 1.0:
+            return
+        ux, uy, step = (x2 - x1) / dist, (y2 - y1) / dist, dash + gap
+        s = 0.0
+        while s < dist:
+            e = min(s + dash, dist)
+            self._line(dpg, x1 + ux * s, y1 + uy * s, x1 + ux * e, y1 + uy * e,
+                       color=color, thickness=thickness)
+            s += step
+
     def _poly(self, dpg, pts, *, fill=None, color=None):
         k = self._k
         sp = [(px * k, py * k) for px, py in pts]
@@ -397,6 +441,29 @@ class CockpitWindow:
         dpg.draw_text((x * k, y * k), s, color=_c(color), size=max(6.0, size * k),
                       parent=self._canvas)
 
+    def _text_size(self, dpg, s, size):
+        """Exact (width, height) of `s` in DESIGN coords at design `size`, from Dear PyGui's own
+        glyph metrics (`get_text_size`) for the mono atlas the canvas renders with (see `setup`),
+        scaled linearly from the atlas size to `size` — ImGui scales glyph advances linearly, so
+        this IS the rendered advance box (verified on the host to the pixel; no calibration).
+        Guards to a monospace estimate if measuring fails."""
+        try:
+            f = self._fonts.get("mono")
+            m = dpg.get_text_size(s, font=f) if f else dpg.get_text_size(s)
+            if m and m[0] and m[0] > 0:
+                r = size / self._mono_px
+                return m[0] * r, m[1] * r
+        except Exception:  # noqa: BLE001 — measuring may be unavailable before the atlas is built
+            pass
+        return len(s) * 0.6 * size, size  # fallback estimate
+
+    def _ctext(self, dpg, px, py, s, color, size=11, anchor="c"):
+        """Text aligned on (px, py) using the measured bounding box, so labels are exactly centred
+        and L/R-symmetric. anchor: 'c' centre on px, 'l' left edge at px, 'r' right edge at px."""
+        w, h = self._text_size(dpg, s, size)
+        x = px - w / 2 if anchor == "c" else px - w if anchor == "r" else px
+        self._text(dpg, x, py - h / 2, s, color, size)
+
     # -------------------------------------------------- drawing helpers
     def _panel(self, dpg, x, y, w, h, *, title):
         self._rect(dpg, x, y, w, h, fill=M.PANEL, color=M.LINE, rounding=8)
@@ -405,28 +472,48 @@ class CockpitWindow:
 
     def _radar(self, dpg, world_az, channels, facing_i, head_deg, source_az):
         cx, cy = RAD_X + RAD_W / 2, RAD_Y + RAD_H / 2 + 6
-        R = RAD_W / 2 - 34
+        R = RAD_W / 2 - 50   # leave room OUTSIDE the ring for the per-speaker labels + cardinals
         for f in (1.0, 0.66, 0.33):
             self._circle(dpg, cx, cy, R * f, color=M.LINE)
+        # 0°/180° (vertical) and ±90° (horizontal) azimuth axes — a dashed reference cross, so the
+        # cardinal directions are explicit lines, not just words.
+        self._dashed(dpg, cx, cy - R - 7, cx, cy + R + 7, M.FAINT, dash=4, gap=5)
+        self._dashed(dpg, cx - R - 7, cy, cx + R + 7, cy, M.FAINT, dash=4, gap=5)
         # gaze cone
         poly = [(cx, cy)]
         for d in range(-28, 29, 4):
             poly.append(azimuth_to_radar_xy(head_deg + d, R, cx, cy))
         self._poly(dpg, poly, color=(*M.ACCENT[:3], 0), fill=(*M.ACCENT[:3], 36))
-        for lbl, az in (("FRONT", 0), ("LEFT", 90), ("BACK", 180), ("RIGHT", -90)):
-            x, y = azimuth_to_radar_xy(float(az), R + 16, cx, cy)
-            self._text(dpg, x - 16, y - 7, lbl, M.MUTED, 12, "display_sm")
+        # cardinal words: FRONT/BACK further out on the vertical axis (clear of C's label), LEFT/
+        # RIGHT on the horizontal axis. Centred/edge-aligned from the measured box → symmetric.
+        self._ctext(dpg, cx, cy - R - 30, "FRONT", M.FAINT, 11, "c")
+        self._ctext(dpg, cx, cy + R + 30, "BACK", M.FAINT, 11, "c")
+        self._ctext(dpg, cx - R - 14, cy, "LEFT", M.FAINT, 11, "r")
+        self._ctext(dpg, cx + R + 14, cy, "RIGHT", M.FAINT, 11, "l")
+        # speakers: a dashed spoke from the centre to each dot, and a channel+angle label placed
+        # just OUTSIDE the dot (radially outward) — so left labels sit left of their dot and right
+        # labels right of theirs, a true left↔right mirror, each centred on the measured box.
         for i, ch in enumerate(channels):
             if ch == "LFE":
                 continue  # non-directional (sits at az 0, atop C) — not an azimuth-radar speaker
-            x, y = azimuth_to_radar_xy(float(world_az[i]), R, cx, cy)
+            az = float(world_az[i])
+            x, y = azimuth_to_radar_xy(az, R, cx, cy)
             on = i == facing_i
             col = M.ACTIVE if on else M.ACCENT
+            self._dashed(dpg, cx, cy, x, y, col if on else M.LINE, dash=5, gap=4)
             if on:
                 self._circle(dpg, x, y, 12, color=M.ACTIVE)
             self._circle(dpg, x, y, 7 if on else 5, color=M.PANEL, fill=col)
-            tx, ty = azimuth_to_radar_xy(float(world_az[i]), R - 18, cx, cy)
-            self._text(dpg, tx - 8, ty - 7, ch, M.ACTIVE if on else M.MUTED, 12, "mono_sm")
+            lab = f"{ch} {az:+.0f}°" if abs(az) > 0.5 else f"{ch} 0°"
+            # Label centre pushed outward along the dot's radial by the box's own support distance
+            # in that direction (half-width·|ux| + half-height·|uy|) plus a fixed clearance, so the
+            # box edge NEAREST the dot always clears it by the same amount — a wide label near the
+            # horizontal no longer runs back over its dot (which hid the `°` on the left and the
+            # channel letter on the right). |ux|, |uy| are even in az, so mirror pairs stay exact.
+            w, h = self._text_size(dpg, lab, 11)
+            ux, uy = -math.sin(math.radians(az)), -math.cos(math.radians(az))
+            d = 12 + (w / 2) * abs(ux) + (h / 2) * abs(uy)
+            self._ctext(dpg, x + ux * d, y + uy * d, lab, M.ACTIVE if on else M.MUTED, 11, "c")
         if source_az is not None:
             sx, sy = azimuth_to_radar_xy(float(source_az), R, cx, cy)
             self._line(dpg, cx, cy, sx, sy, color=M.GOOD)
@@ -571,6 +658,7 @@ def run_preview() -> int:
     quit_flag = {"q": False}
     win.on_quit = lambda: quit_flag.__setitem__("q", True)
     win.setup()
+    win.set_test_state(True, 60.0)  # preview: show the test source so the radar marker is visible
 
     t0 = tprev = time.monotonic()
     try:
