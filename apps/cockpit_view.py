@@ -108,6 +108,7 @@ class CockpitWindow:
         self._win = "cockpit_win"
         self._host = "canvas_host"  # auto-filling child; its measured size drives the fit-scale
         self._src_cb = "ck_src"     # the test-source checkbox, so engine state can sync it
+        self._cushion_sl = "ck_cushion"  # the cushion slider, so the live value can seed it
         self._k = 1.0  # live fit-scale: design canvas → current window (set each frame)
         # Test-source state the view owns, so a radar click/drag moves the source live even in the
         # preview (and the live app reads it back). Placed by clicking the radar; dragged to move.
@@ -186,8 +187,8 @@ class CockpitWindow:
                 dpg.add_spacer(width=8)
                 dpg.add_text("cushion")
                 dpg.add_slider_int(
-                    default_value=60, min_value=20, max_value=120, width=120, format="%d ms",
-                    callback=lambda s, a: self.on_cushion(float(a)))
+                    tag=self._cushion_sl, default_value=60, min_value=20, max_value=120, width=120,
+                    format="%d ms", callback=lambda s, a: self.on_cushion(float(a)))
             with dpg.group(horizontal=True):   # row 2 — prediction, the test source, actions
                 dpg.add_checkbox(label="predict", default_value=True,
                                  callback=lambda s, a: self._set_predict(bool(a)))
@@ -243,6 +244,15 @@ class CockpitWindow:
     def _set_predict(self, on: bool) -> None:
         self._predict = on
         self.on_predict(on)
+
+    def set_cushion_display(self, ms: float) -> None:
+        """Seed the cushion slider with the engine's actual launch value (it isn't the default)."""
+        try:
+            import dearpygui.dearpygui as dpg
+            if dpg.does_item_exist(self._cushion_sl):
+                dpg.set_value(self._cushion_sl, int(round(ms)))
+        except Exception:  # noqa: BLE001
+            pass
 
     def set_test_state(self, on: bool, az: float) -> None:
         """Reflect the live engine's test-source state on the radar + the 'source' checkbox (so a

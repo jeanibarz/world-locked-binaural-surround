@@ -226,9 +226,12 @@ def main(argv=None) -> int:
         uses the dense interpolated grid (InterpWorldLocked7p1, B4.4), which needs a bigger
         block for headroom (the diagnostics panel shows if it keeps up). ``backend`` (cpu/rust/gpu)
         overrides the launch flags so the cockpit can switch it live."""
-        use_rust, _ = _resolve_backend(backend)
         if method == "nearest":
             return _nearest_renderer(backend)
+        # Synthesis methods have no GPU kernel (GpuWorldLocked7p1 is nearest-only), so a 'gpu'
+        # request maps to Rust — the fast real-time synthesis path — not the sub-real-time pure-
+        # Python CPU path. Explicit 'cpu' still selects pure Python.
+        use_rust = backend in ("rust", "gpu") if backend else args.rust
         print(f"render: {method} — dense-grid 7.1 ({args.grid_step:.0f}°) "
               f"{'[rust]' if use_rust else '[cpu]'}")
         return InterpWorldLocked7p1(brir, method, block_size=args.block, fade_ms=args.fade_ms,
@@ -371,6 +374,14 @@ def main(argv=None) -> int:
     # light, and the render's jitter is absorbed by the cushion — click-free, no dropouts.
     in_q: deque[np.ndarray] = deque()
     in_q_lock = threading.Lock()
+    # Bound the captured-input backlog: if the render worker falls sub-real-time (e.g. the user
+    # switches to the pure-Python CPU renderer), captured chunks would otherwise pile up unbounded
+    # and the worker would stay stuck rendering an ever-growing buffer with the *old* renderer —
+    # so switching back to a fast backend never seemed to take effect. Dropping the oldest stale
+    # input keeps the backlog small, so a backend switch is picked up within one short cycle (and
+    # the drop shows as an overflow, not silent). Generous (~0.25 s) so it never bites a keeping-up
+    # renderer. See journal 51.
+    in_q_max = max(8, 4 * cushion)
     stop_worker = threading.Event()
     mon = {"t": 0.0}
 
@@ -380,6 +391,9 @@ def main(argv=None) -> int:
             cap = np.frombuffer(in_data, dtype=np.float32).reshape(-1, in_ch).astype(np.float64)
             with in_q_lock:
                 in_q.append(cap)
+                while len(in_q) > in_q_max:  # worker can't keep up → drop oldest stale input
+                    in_q.popleft()
+                    meter["over_ts"].append(time.monotonic())
         except BaseException as exc:  # noqa: BLE001
             cb_error.append(exc)
         return (None, pawp.paContinue)
@@ -599,16 +613,28 @@ def main(argv=None) -> int:
             with lock:
                 test["world_az"], test["on"], test["rotate"] = float(az), True, False
 
+        def _set_cushion(ms) -> None:  # noqa: ANN001  — output FIFO cushion (ms), live
+            nonlocal cushion, max_backlog, in_q_max
+            nc = max(2, round(float(ms) * 1e-3 * brir.samplerate / args.block))
+            with fifo_lock:
+                cushion, max_backlog, in_q_max = nc, nc * 2, max(8, 4 * nc)
+                # grow immediately with a little silence so raising it takes audible effect now;
+                # lowering just lets the worker trim to the smaller max_backlog next cycle.
+                while len(out_fifo) < cushion:
+                    out_fifo.appendleft((np.zeros((args.block, 2)), None, None))
+
         win_ck.on_quit = lambda: q.__setitem__("stop", True)
         win_ck.on_recenter = _recenter
         win_ck.on_method = _set_method
         win_ck.on_backend = _set_backend
+        win_ck.on_cushion = _set_cushion
         win_ck.on_test = _tog("on")
         win_ck.on_solo = _tog("solo")
         win_ck.on_rotate = _tog("rotate")
         win_ck.on_place_test = _place
         win_ck.on_predict = lambda on: cur.__setitem__("predict", bool(on))
         win_ck.setup()
+        win_ck.set_cushion_display(args.latency_ms)  # slider → the real launch cushion, not 60
 
         detect_ms = 0.0
         times_ck: deque[float] = deque(maxlen=60)
