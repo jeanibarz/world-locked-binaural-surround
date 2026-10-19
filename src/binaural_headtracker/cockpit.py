@@ -150,6 +150,66 @@ class Readout:
 
 
 @dataclass(frozen=True)
+class DropoutStrip:
+    """A 60-second history of output glitches for the latency panel's dropout tick strip.
+
+    ``overs``/``unders`` are per-bin event counts across ``window_s`` (oldest bin first, newest
+    last — so the strip reads left→right = past→now, like a timeline). A bin with any overflow
+    draws a red tick; any underrun, an amber tick. ``total_over``/``total_under`` are the counts
+    within the window. Unlike :class:`~binaural_headtracker.diagnostics.Diagnosis`'s 2-second
+    ``recent_*`` counts (which flash and vanish), this keeps the whole window so a slow
+    clock-drift trend is visible instead of a blink.
+    """
+
+    overs: tuple[int, ...]
+    unders: tuple[int, ...]
+    total_over: int
+    total_under: int
+    window_s: float
+
+
+def dropout_strip(
+    over_ts: Iterable[float],
+    under_ts: Iterable[float],
+    *,
+    now: float,
+    window_s: float = 60.0,
+    bins: int = 30,
+) -> DropoutStrip:
+    """Bin overflow/underrun timestamps into a :class:`DropoutStrip` over ``[now-window, now]``.
+
+    ``over_ts``/``under_ts`` are monotonic-clock timestamps (seconds) of recent glitches — the raw
+    ``over_ts``/``under_ts`` deques the live app records. Events older than ``window_s`` or in the
+    future are ignored. Bin 0 is the oldest slice, bin ``bins-1`` the most recent, so drawing the
+    bins left→right yields a past→now timeline.
+    """
+    if bins <= 0:
+        raise ValueError("bins must be positive")
+    if not window_s > 0:
+        raise ValueError("window_s must be positive")
+    overs = [0] * bins
+    unders = [0] * bins
+    step = window_s / bins
+
+    def _accumulate(timestamps: Iterable[float], counts: list[int]) -> int:
+        total = 0
+        for raw in timestamps:
+            age = now - float(raw)
+            if age < 0.0 or age >= window_s:
+                continue
+            # newest (age≈0) → last bin; oldest (age≈window) → first bin
+            idx = bins - 1 - int(age / step)
+            idx = 0 if idx < 0 else bins - 1 if idx >= bins else idx
+            counts[idx] += 1
+            total += 1
+        return total
+
+    total_over = _accumulate(over_ts, overs)
+    total_under = _accumulate(under_ts, unders)
+    return DropoutStrip(tuple(overs), tuple(unders), total_over, total_under, float(window_s))
+
+
+@dataclass(frozen=True)
 class CockpitView:
     """Everything the Dear PyGui cockpit draws for one frame (pure data)."""
 
@@ -176,6 +236,8 @@ class CockpitView:
     # bottom readout chips
     readouts: tuple[Readout, ...]
     reasons: tuple[str, ...] = field(default_factory=tuple)
+    # 60 s overflow/underrun history for the latency panel's tick strip (None → no strip drawn)
+    dropouts: DropoutStrip | None = None
 
 
 def build_view(
@@ -189,6 +251,11 @@ def build_view(
     facing_label: str = "",
     flipped: bool = False,
     hist_bins: int = 24,
+    dropout_over_ts: Iterable[float] = (),
+    dropout_under_ts: Iterable[float] = (),
+    now: float | None = None,
+    dropout_window_s: float = 60.0,
+    dropout_bins: int = 30,
 ) -> CockpitView:
     """Compose a :class:`CockpitView` from a live :class:`Diagnosis` and its latency samples.
 
@@ -198,6 +265,13 @@ def build_view(
     the interpolation method — both shown so the realtime switches reflect the running config.
     """
     samples = tuple(float(s) for s in latency_samples)
+    # 60 s dropout history for the panel tick strip — only when the caller passes a clock (``now``);
+    # the headless unit tests and any caller that doesn't track timestamps simply get ``None``.
+    dropouts = (
+        dropout_strip(dropout_over_ts, dropout_under_ts, now=now,
+                      window_s=dropout_window_s, bins=dropout_bins)
+        if now is not None else None
+    )
     hi = _nice_upper_ms(diag, samples)
     histogram = tuple(latency_histogram(samples, lo_ms=0.0, hi_ms=hi, bins=hist_bins))
 
@@ -278,4 +352,5 @@ def build_view(
         backend=backend,
         readouts=tuple(readouts),
         reasons=diag.reasons[:2],
+        dropouts=dropouts,
     )
