@@ -433,6 +433,14 @@ class CockpitWindow:
         dpg.draw_text((x * k, y * k), s, color=_c(color), size=max(6.0, size * k),
                       parent=self._canvas)
 
+    def _ctext(self, dpg, px, py, s, color, size=11, anchor="c"):
+        """Text aligned on (px, py). The canvas font is IBM Plex Mono (monospace, 0.6 em advance),
+        so the width is exact — used to centre labels on the radar axes and symmetrically L/R.
+        anchor: 'c' centre on px, 'l' left edge at px, 'r' right edge at px."""
+        w = len(s) * 0.6 * size
+        x = px - w / 2 if anchor == "c" else px - w if anchor == "r" else px
+        self._text(dpg, x, py - size * 0.5, s, color, size)
+
     # -------------------------------------------------- drawing helpers
     def _panel(self, dpg, x, y, w, h, *, title):
         self._rect(dpg, x, y, w, h, fill=M.PANEL, color=M.LINE, rounding=8)
@@ -453,11 +461,12 @@ class CockpitWindow:
         for d in range(-28, 29, 4):
             poly.append(azimuth_to_radar_xy(head_deg + d, R, cx, cy))
         self._poly(dpg, poly, color=(*M.ACCENT[:3], 0), fill=(*M.ACCENT[:3], 36))
-        # cardinal words at the axis ends, OUTSIDE the ring (nudged off the axis labels/clip edge)
-        for lbl, az, dx, dy in (("FRONT", 0, 0, -2), ("LEFT", 90, -4, 0),
-                                ("BACK", 180, 0, 8), ("RIGHT", -90, 4, 0)):
-            x, y = azimuth_to_radar_xy(float(az), R + 20, cx, cy)
-            self._text(dpg, x - len(lbl) * 3.0 + dx, y - 5 + dy, lbl, M.FAINT, 11, "display_sm")
+        # cardinal words at the axis ends, OUTSIDE the ring — centred on each axis and symmetric
+        # left↔right: FRONT/BACK centred on the vertical axis, LEFT/RIGHT mirrored either side.
+        self._ctext(dpg, cx, cy - R - 15, "FRONT", M.FAINT, 11, "c")
+        self._ctext(dpg, cx, cy + R + 15, "BACK", M.FAINT, 11, "c")
+        self._ctext(dpg, cx - R - 12, cy, "LEFT", M.FAINT, 11, "r")
+        self._ctext(dpg, cx + R + 12, cy, "RIGHT", M.FAINT, 11, "l")
         # speakers: a dashed spoke from the centre to each, and a channel+angle label placed
         # INSIDE the ring — so the three front speakers (C/FL/FR) don't pile onto the FRONT
         # cardinal and the top edge the way outside labels do.
@@ -472,10 +481,12 @@ class CockpitWindow:
             if on:
                 self._circle(dpg, x, y, 12, color=M.ACTIVE)
             self._circle(dpg, x, y, 7 if on else 5, color=M.PANEL, fill=col)
+            # label inset a fixed distance from the DOT toward the centre (not at a fixed ring
+            # radius) — so the dot-to-label gap is the same at every angle and a near-horizontal
+            # speaker like SL/SR (±110°) no longer has its label sitting on top of its dot.
             lab = f"{ch} {az:+.0f}°" if abs(az) > 0.5 else f"{ch} 0°"
-            tx, ty = azimuth_to_radar_xy(az, R - 22, cx, cy)
-            self._text(dpg, tx - len(lab) * 2.9, ty - 6, lab,
-                       M.ACTIVE if on else M.MUTED, 11, "mono_sm")
+            ux, uy = (cx - x) / R, (cy - y) / R
+            self._ctext(dpg, x + ux * 30, y + uy * 30, lab, M.ACTIVE if on else M.MUTED, 11, "c")
         if source_az is not None:
             sx, sy = azimuth_to_radar_xy(float(source_az), R, cx, cy)
             self._line(dpg, cx, cy, sx, sy, color=M.GOOD)
