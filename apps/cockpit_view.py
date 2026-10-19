@@ -109,6 +109,7 @@ class CockpitWindow:
         self._host = "canvas_host"  # auto-filling child; its measured size drives the fit-scale
         self._src_cb = "ck_src"     # the test-source checkbox, so engine state can sync it
         self._cushion_sl = "ck_cushion"  # the cushion slider, so the live value can seed it
+        self._mono_px = 36          # the mono atlas size (see _load_fonts); text is measured at it
         self._k = 1.0  # live fit-scale: design canvas → current window (set each frame)
         # Test-source state the view owns, so a radar click/drag moves the source live even in the
         # preview (and the live app reads it back). Placed by clicking the radar; dragged to move.
@@ -293,7 +294,7 @@ class CockpitWindow:
         faces = {
             "display": ("Rajdhani-Bold.ttf", 34),
             "display_sm": ("Rajdhani-SemiBold.ttf", 15),
-            "mono": ("IBMPlexMono-Medium.ttf", 36),  # canvas atlas; large → crisp when scaled
+            "mono": ("IBMPlexMono-Medium.ttf", self._mono_px),  # canvas atlas; large → crisp scaled
             "mono_sm": ("IBMPlexMono-Regular.ttf", 12),
             "sans": ("IBMPlexSans-var.ttf", 15),
         }
@@ -433,13 +434,26 @@ class CockpitWindow:
         dpg.draw_text((x * k, y * k), s, color=_c(color), size=max(6.0, size * k),
                       parent=self._canvas)
 
+    def _text_size(self, dpg, s, size):
+        """Exact (width, height) of `s` in DESIGN coords at design `size`, from Dear PyGui's own
+        glyph metrics (`get_text_size`) for the bound mono atlas — scaled from the atlas size to
+        `size`. No hand-tuned widths; guards to a monospace estimate if measuring fails."""
+        try:
+            f = self._fonts.get("mono")
+            m = dpg.get_text_size(s, font=f) if f else dpg.get_text_size(s)
+            if m and m[0] and m[0] > 0:
+                r = size / self._mono_px
+                return m[0] * r, m[1] * r
+        except Exception:  # noqa: BLE001 — measuring may be unavailable before the atlas is built
+            pass
+        return len(s) * 0.6 * size, size  # fallback estimate
+
     def _ctext(self, dpg, px, py, s, color, size=11, anchor="c"):
-        """Text aligned on (px, py). The canvas font is IBM Plex Mono (monospace, 0.6 em advance),
-        so the width is exact — used to centre labels on the radar axes and symmetrically L/R.
-        anchor: 'c' centre on px, 'l' left edge at px, 'r' right edge at px."""
-        w = len(s) * 0.6 * size
+        """Text aligned on (px, py) using the measured bounding box, so labels are exactly centred
+        and L/R-symmetric. anchor: 'c' centre on px, 'l' left edge at px, 'r' right edge at px."""
+        w, h = self._text_size(dpg, s, size)
         x = px - w / 2 if anchor == "c" else px - w if anchor == "r" else px
-        self._text(dpg, x, py - size * 0.5, s, color, size)
+        self._text(dpg, x, py - h / 2, s, color, size)
 
     # -------------------------------------------------- drawing helpers
     def _panel(self, dpg, x, y, w, h, *, title):
