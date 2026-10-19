@@ -108,7 +108,9 @@ class CockpitWindow:
         self._win = "cockpit_win"
         self._host = "canvas_host"  # auto-filling child; its measured size drives the fit-scale
         self._src_cb = "ck_src"     # the test-source checkbox, so engine state can sync it
+        self._backend_rb = "ck_backend"  # the backend radio, so a failed switch can snap it back
         self._cushion_sl = "ck_cushion"  # the cushion slider, so the live value can seed it
+        self._toasts: list[dict] = []    # transient banners (backend-switch errors): text/color/exp
         self._mono_px = 36          # the mono atlas size (see _load_fonts); text is measured at it
         self._k = 1.0  # live fit-scale: design canvas → current window (set each frame)
         # Test-source state the view owns, so a radar click/drag moves the source live even in the
@@ -190,8 +192,8 @@ class CockpitWindow:
                 dpg.add_spacer(width=8)
                 dpg.add_text("backend")
                 dpg.add_radio_button(
-                    ("cpu", "rust", "gpu"), default_value="rust", horizontal=True,
-                    callback=lambda s, a: self.on_backend(a))
+                    ("cpu", "rust", "gpu"), tag=self._backend_rb, default_value="rust",
+                    horizontal=True, callback=lambda s, a: self.on_backend(a))
                 dpg.add_spacer(width=8)
                 dpg.add_text("cushion")
                 dpg.add_slider_int(
@@ -261,6 +263,27 @@ class CockpitWindow:
                 dpg.set_value(self._cushion_sl, int(round(ms)))
         except Exception:  # noqa: BLE001
             pass
+
+    def set_backend_display(self, backend: str) -> None:
+        """Snap the backend radio to the engine that is ACTUALLY running. The live app calls this
+        after a switch so a failed/declined request (e.g. GPU deps missing → CPU fallback, or a
+        'gpu' request mapped to rust for a synthesis method) never leaves the radio advertising a
+        backend the engine isn't on."""
+        try:
+            import dearpygui.dearpygui as dpg
+            if dpg.does_item_exist(self._backend_rb) and dpg.get_value(self._backend_rb) != backend:
+                dpg.set_value(self._backend_rb, backend)
+        except Exception:  # noqa: BLE001 — the radio is a mirror of engine truth, never critical
+            pass
+
+    def toast(self, message: str, kind: str = "error", *, seconds: float = 6.0) -> None:
+        """Queue a transient banner (e.g. a backend-switch error). ``kind`` picks the accent:
+        'error' red, 'info' amber. Auto-dismisses after ``seconds`` (fading the last second)."""
+        import time
+        color = M.ACTIVE if kind == "info" else M.BAD
+        self._toasts.append({"text": str(message), "color": color,
+                             "expiry": time.monotonic() + max(1.0, seconds)})
+        del self._toasts[:-3]  # keep at most the 3 most recent
 
     def set_test_state(self, on: bool, az: float) -> None:
         """Reflect the live engine's test-source state on the radar + the 'source' checkbox (so a
@@ -383,6 +406,7 @@ class CockpitWindow:
             self._radar(dpg, world_az, channels, facing_i, head_deg, src)
         self._lag_strip(dpg, view)
         self._lag_panel(dpg, view)
+        self._draw_toasts(dpg)
 
     # -------------------------------------------------- scaled draw primitives
     # Each takes DESIGN coordinates/sizes and multiplies by self._k before drawing, so the whole
@@ -508,6 +532,28 @@ class CockpitWindow:
                     self._rect(dpg, mid + (tb_w / 2) * frac, ty + 4, -(tb_w / 2) * frac, 3,
                                fill=M.ACCENT, rounding=1)
                 ty += 16
+
+    def _draw_toasts(self, dpg):
+        """Stacked, auto-expiring banners at the top-centre of the canvas (backend-switch errors).
+        Drawn last so they sit above every panel; the last second fades via the colour alpha."""
+        import time
+        now = time.monotonic()
+        self._toasts = [t for t in self._toasts if t["expiry"] > now]
+        if not self._toasts:
+            return
+        y = 12
+        for t in self._toasts:
+            left = t["expiry"] - now
+            a = 255 if left > 1.0 else max(0, int(255 * left))  # fade over the final second
+            msg = t["text"] if len(t["text"]) <= 84 else t["text"][:81] + "…"
+            r, g, b, _ = t["color"]
+            tw, th = self._text_size(dpg, msg, 13)
+            bw, bh = tw + 28, th + 14
+            bx = (CANVAS_W - bw) / 2
+            self._rect(dpg, bx, y, bw, bh, fill=(12, 16, 24, int(a * 0.86)),
+                       color=(r, g, b, a), rounding=6, thickness=1.5)
+            self._text(dpg, bx + 14, y + 6, msg, (r, g, b, a), 13)
+            y += bh + 8
 
     def _dropout_strip(self, dpg, x, y, w, h, strip: M.DropoutStrip):
         """A 60-second overflow/underrun tick strip (Variant A): one red tick per bin with an
@@ -723,6 +769,10 @@ def run_preview() -> int:
     win.on_quit = lambda: quit_flag.__setitem__("q", True)
     win.setup()
     win.set_test_state(True, 60.0)  # preview: show the test source so the radar marker is visible
+    # demo the backend-switch toasts so their look can be judged on the host (real app fires these
+    # from _set_backend when a switch falls back / remaps):
+    win.toast("GPU unavailable — running RUST. CudaError (preview demo)", "error", seconds=8.0)
+    win.toast("GPU maps to RUST for this method", "info", seconds=8.0)
 
     t0 = tprev = time.monotonic()
     try:
