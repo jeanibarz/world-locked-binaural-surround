@@ -614,18 +614,20 @@ def main(argv=None) -> int:
                 return
             if m not in test_renderers:
                 test_renderers[m] = build_test_renderer(m)
-            nm, reason = build_main_renderer(m, cur["backend"])
+            requested = cur["backend"]  # capture BEFORE the snap below, else the note sees no diff
+            nm, reason = build_main_renderer(m, requested)
             actual = _backend_of(nm)
             with lock:
                 main_rend["r"], main_rend["label"] = nm, render_label(nm, m)
                 test["renderer"], test["method"] = test_renderers[m], m
-            # The method's engine may differ from the selected backend (e.g. rust kernel missing);
-            # keep the radio and toast honest about what's actually running.
-            if actual != cur["backend"]:
+            # The method's engine may differ from the selected backend (e.g. rust kernel missing, or
+            # a synthesis method with no GPU kernel); keep the radio and toast honest about what's
+            # actually running.
+            if actual != requested:
                 cur["backend"] = actual
                 win_ck.set_backend_display(actual)
-            note = CM.backend_switch_note(cur["backend"], actual, reason)
-            if reason and note:  # only surface a genuine unavailability here, not UI remaps
+            note = CM.backend_switch_note(requested, actual, reason)
+            if note:  # error on a real unavailability fallback, info on a method-forced remap
                 win_ck.toast(note[0], note[1])
 
         def _set_backend(b: str) -> None:
