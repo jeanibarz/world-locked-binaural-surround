@@ -71,6 +71,25 @@ def health_color(h: Health) -> RGBA:
     return HEALTH_COLOR[h]
 
 
+def backend_switch_note(
+    requested: str, actual: str, reason: str | None = None
+) -> tuple[str, str] | None:
+    """Decide the toast for a backend switch, or ``None`` when the request was honored cleanly.
+
+    ``requested`` is what the user picked (cpu/rust/gpu); ``actual`` is the engine the renderer the
+    app actually built runs on. ``reason`` is the failure detail when a requested accelerator was
+    unavailable (else ``None``). Returns ``(message, kind)`` where kind is ``"error"`` for a genuine
+    unavailability fallback and ``"info"`` for an intentional remap (e.g. a ``gpu`` request maps to
+    rust for synthesis methods, which have no GPU kernel). The caller snaps the selector to
+    ``actual`` regardless; this only governs whether — and how — to surface a banner.
+    """
+    if actual == requested:
+        return None
+    if reason:
+        return (f"{requested.upper()} unavailable — running {actual.upper()}. {reason}", "error")
+    return (f"{requested.upper()} maps to {actual.upper()} for this method", "info")
+
+
 # ---------------------------------------------------------------- latency histogram
 
 def histogram_bin_edges(lo_ms: float, hi_ms: float, bins: int) -> list[float]:

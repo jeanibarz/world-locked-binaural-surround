@@ -225,3 +225,31 @@ def test_build_view_with_now_builds_strip():
     assert v.dropouts is not None
     assert v.dropouts.total_over == 2 and v.dropouts.total_under == 1
     assert len(v.dropouts.overs) == 30
+
+
+# ------------------------------------------------------------------ backend switch note
+
+def test_backend_switch_note_none_when_honored():
+    # the request was met → no banner, whatever it was
+    assert C.backend_switch_note("rust", "rust") is None
+    assert C.backend_switch_note("gpu", "gpu", reason="ignored") is None
+    assert C.backend_switch_note("cpu", "cpu") is None
+
+
+def test_backend_switch_note_error_on_unavailable_fallback():
+    msg, kind = C.backend_switch_note("gpu", "cpu", reason="GPU unavailable (RuntimeError)")
+    assert kind == "error"
+    assert "GPU" in msg and "CPU" in msg and "RuntimeError" in msg
+
+
+def test_backend_switch_note_info_on_intentional_remap():
+    # gpu requested, rust actually runs (synthesis has no GPU kernel), no failure reason → info
+    msg, kind = C.backend_switch_note("gpu", "rust", reason=None)
+    assert kind == "info"
+    assert "GPU" in msg and "RUST" in msg
+
+
+def test_backend_switch_note_error_takes_precedence_over_remap():
+    # a reason present means a genuine fallback → error, not a soft info remap
+    _, kind = C.backend_switch_note("rust", "cpu", reason="Rust kernel unavailable")
+    assert kind == "error"

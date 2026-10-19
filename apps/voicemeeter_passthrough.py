@@ -199,26 +199,36 @@ def main(argv=None) -> int:
         return backend == "rust", backend == "gpu"
 
     def _nearest_renderer(backend: str | None = None):
+        """Build the fast 8-bus nearest renderer for ``backend``. Returns ``(renderer, reason)``
+        where ``reason`` is a short failure string when a requested accelerator (rust/gpu) was
+        unavailable and we fell back to pure-Python CPU, else ``None`` — so the caller can snap the
+        UI to the real engine and surface a toast instead of silently running the wrong backend."""
         use_rust, use_gpu = _resolve_backend(backend)
         if use_rust:
             try:
                 from binaural_headtracker.rust_render import RustWorldLocked7p1
                 print("render: nearest — native Rust kernel (CPU, no GPU)")
                 return RustWorldLocked7p1(brir, block_size=args.block, fade_ms=args.fade_ms,
-                                          lfe_mode=args.lfe_mode)
+                                          lfe_mode=args.lfe_mode), None
             except Exception as exc:  # noqa: BLE001  — fall back to pure-Python CPU
-                print(f"Rust kernel unavailable ({exc!r}); falling back to CPU.")
-        elif use_gpu:
+                reason = f"Rust kernel unavailable ({type(exc).__name__})"
+                print(f"{reason}: {exc!r}; falling back to CPU.")
+                return (WorldLocked7p1(brir, block_size=args.block, fade_ms=args.fade_ms,
+                                       lfe_mode=args.lfe_mode), reason)
+        if use_gpu:
             try:
                 from binaural_headtracker.gpu_render import GpuWorldLocked7p1
                 print("render: nearest — GPU (CuPy)")
                 return GpuWorldLocked7p1(brir, block_size=args.block, fade_ms=args.fade_ms,
-                                         lfe_mode=args.lfe_mode)
+                                         lfe_mode=args.lfe_mode), None
             except Exception as exc:  # noqa: BLE001  — fall back to CPU
-                print(f"GPU render unavailable ({exc!r}); falling back to CPU.")
+                reason = f"GPU unavailable ({type(exc).__name__})"
+                print(f"{reason}: {exc!r}; falling back to CPU.")
+                return (WorldLocked7p1(brir, block_size=args.block, fade_ms=args.fade_ms,
+                                       lfe_mode=args.lfe_mode), reason)
         print("render: nearest — pure-Python CPU (pass --rust or --gpu for real time)")
         return WorldLocked7p1(brir, block_size=args.block, fade_ms=args.fade_ms,
-                              lfe_mode=args.lfe_mode)
+                              lfe_mode=args.lfe_mode), None
 
     def build_main_renderer(method: str, backend: str | None = None):
         """The full 7.1 renderer for ``method`` — the method applies to the WHOLE surround
@@ -234,9 +244,13 @@ def main(argv=None) -> int:
         use_rust = backend in ("rust", "gpu") if backend else args.rust
         print(f"render: {method} — dense-grid 7.1 ({args.grid_step:.0f}°) "
               f"{'[rust]' if use_rust else '[cpu]'}")
-        return InterpWorldLocked7p1(brir, method, block_size=args.block, fade_ms=args.fade_ms,
-                                    grid_step=args.grid_step, lfe_mode=args.lfe_mode,
-                                    use_rust=use_rust)
+        r = InterpWorldLocked7p1(brir, method, block_size=args.block, fade_ms=args.fade_ms,
+                                 grid_step=args.grid_step, lfe_mode=args.lfe_mode,
+                                 use_rust=use_rust)
+        # If rust was asked for but the dense-grid engine fell back to CPU (kernel unbuilt), say so.
+        reason = ("Rust kernel unavailable" if use_rust and getattr(r, "engine", "") == "cpu"
+                  else None)
+        return r, reason
 
     def render_label(renderer, method: str) -> str:
         """A one-line description of what the 7.1 is actually running: engine · method [· grid]."""
@@ -244,11 +258,19 @@ def main(argv=None) -> int:
             return (f"{renderer.engine} · {method} · "
                     f"{renderer.grid_step:.0f}° grid ({renderer.n_bus} bus)")
         # nearest: engine is the renderer's own class (rust/gpu fall back to cpu silently)
-        eng = {"RustWorldLocked7p1": "rust", "GpuWorldLocked7p1": "gpu",
-               "WorldLocked7p1": "cpu"}.get(type(renderer).__name__, "cpu")
-        return f"{eng} · nearest (8-bus)"
+        return f"{_backend_of(renderer)} · nearest (8-bus)"
 
-    main_rend = {"r": build_main_renderer(args.method)}  # the 7.1 renderer, swappable live (M)
+    def _backend_of(renderer) -> str:
+        """The backend ('cpu'/'rust'/'gpu') a built renderer ACTUALLY runs on — used to snap the
+        cockpit's backend radio to engine truth after a switch (a failed accelerator falls back to
+        CPU; a synthesis 'gpu' request runs on rust). Dense-grid carries it on ``.engine``."""
+        if isinstance(renderer, InterpWorldLocked7p1):
+            return "rust" if getattr(renderer, "engine", "cpu") == "rust" else "cpu"
+        return {"RustWorldLocked7p1": "rust", "GpuWorldLocked7p1": "gpu",
+                "WorldLocked7p1": "cpu"}.get(type(renderer).__name__, "cpu")
+
+    _main0, _ = build_main_renderer(args.method)
+    main_rend = {"r": _main0}  # the 7.1 renderer, swappable live (M)
     main_rend["label"] = render_label(main_rend["r"], args.method)
 
     # Global output-bus comp + EQ (B5.3): the bare BRIRs carry room/direction but not the
@@ -592,16 +614,32 @@ def main(argv=None) -> int:
                 return
             if m not in test_renderers:
                 test_renderers[m] = build_test_renderer(m)
-            nm = build_main_renderer(m, cur["backend"])
+            requested = cur["backend"]  # capture BEFORE the snap below, else the note sees no diff
+            nm, reason = build_main_renderer(m, requested)
+            actual = _backend_of(nm)
             with lock:
                 main_rend["r"], main_rend["label"] = nm, render_label(nm, m)
                 test["renderer"], test["method"] = test_renderers[m], m
+            # The method's engine may differ from the selected backend (e.g. rust kernel missing, or
+            # a synthesis method with no GPU kernel); keep the radio and toast honest about what's
+            # actually running.
+            if actual != requested:
+                cur["backend"] = actual
+                win_ck.set_backend_display(actual)
+            note = CM.backend_switch_note(requested, actual, reason)
+            if note:  # error on a real unavailability fallback, info on a method-forced remap
+                win_ck.toast(note[0], note[1])
 
         def _set_backend(b: str) -> None:
-            cur["backend"] = b
-            nm = build_main_renderer(test["method"], b)
+            nm, reason = build_main_renderer(test["method"], b)
+            actual = _backend_of(nm)  # what the renderer ACTUALLY runs on (not the request)
             with lock:
                 main_rend["r"], main_rend["label"] = nm, render_label(nm, test["method"])
+            cur["backend"] = actual                 # engine truth, never the failed request
+            win_ck.set_backend_display(actual)      # snap the radio back if the switch didn't take
+            note = CM.backend_switch_note(b, actual, reason)
+            if note:                                # error on a real fallback, info on a remap
+                win_ck.toast(note[0], note[1])
 
         def _tog(key: str):
             def f(on) -> None:  # noqa: ANN001
@@ -635,6 +673,10 @@ def main(argv=None) -> int:
         win_ck.on_predict = lambda on: cur.__setitem__("predict", bool(on))
         win_ck.setup()
         win_ck.set_cushion_display(args.latency_ms)  # slider → the real launch cushion, not 60
+        cur["backend"] = _backend_of(main_rend["r"])  # the engine that actually built at launch
+        win_ck.set_backend_display(cur["backend"])    # radio → real launch backend (not 'rust'),
+        if args.gpu and cur["backend"] != "gpu":      # and warn if --gpu silently fell back
+            win_ck.toast(f"GPU unavailable at launch — running {cur['backend'].upper()}", "error")
 
         detect_ms = 0.0
         times_ck: deque[float] = deque(maxlen=60)
@@ -903,7 +945,7 @@ def main(argv=None) -> int:
                 cv2.waitKey(1)
                 if nxt not in test_renderers:
                     test_renderers[nxt] = build_test_renderer(nxt)
-                new_main = build_main_renderer(nxt)  # dense-grid 7.1 for a synthesis method
+                new_main, _ = build_main_renderer(nxt)  # dense-grid 7.1 for a synthesis method
                 new_label = render_label(new_main, nxt)
                 with lock:
                     main_rend["r"] = new_main
