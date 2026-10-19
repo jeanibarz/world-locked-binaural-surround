@@ -662,6 +662,7 @@ def main(argv=None) -> int:
                 dms = (time.perf_counter() - td) * 1000.0
                 detect_ms = 0.9 * detect_ms + 0.1 * dms if detect_ms else dms
                 disp = cv2.flip(rgb, 1)  # mirror for display only (cockpit camera panel is RGB)
+                landmarks = result.face_landmarks[0] if result.face_landmarks else None
                 pose = None
                 with lock:
                     cal = state["cal"]
@@ -723,9 +724,12 @@ def main(argv=None) -> int:
                     diag, latency_samples=ear_probe.samples(), rate_hz=rate,
                     method=test["method"], backend=cur["backend"],
                     predict_ms=(predict_ms_used if cur["predict"] else None),
-                    facing_label=brir.channels[nearest_i], flipped=flip_az)
+                    facing_label=brir.channels[nearest_i], flipped=flip_az,
+                    dropout_over_ts=tuple(meter["over_ts"]),
+                    dropout_under_ts=tuple(meter["under_ts"]), now=now)
                 win_ck.set_test_state(t_on, t_world_az)  # reflect engine state on the radar
-                win_ck.update(view, camera_rgb=disp, world_az=world_az, channels=brir.channels,
+                win_ck.update(view, camera_rgb=disp, landmarks=landmarks, pose=pose,
+                              world_az=world_az, channels=brir.channels,
                               facing_i=nearest_i, head_deg=head_deg)
                 win_ck.render_frame()
         finally:

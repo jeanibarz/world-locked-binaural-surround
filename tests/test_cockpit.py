@@ -172,3 +172,56 @@ def test_probe_samples_snapshot():
         probe.add(ms)
     assert probe.samples() == (2.0, 3.0, 4.0)
     assert all(math.isfinite(x) for x in probe.samples())
+
+
+# ------------------------------------------------------------------ dropout strip
+
+def test_dropout_strip_empty_is_all_zero():
+    s = C.dropout_strip([], [], now=1000.0, bins=12)
+    assert s.overs == (0,) * 12 and s.unders == (0,) * 12
+    assert s.total_over == 0 and s.total_under == 0
+    assert s.window_s == 60.0
+
+
+def test_dropout_strip_newest_in_last_bin_oldest_in_first():
+    now = 1000.0
+    # one overflow ~now (newest) and one ~59 s ago (oldest in-window)
+    s = C.dropout_strip([now - 0.1, now - 59.5], [], now=now, window_s=60.0, bins=30)
+    assert s.overs[-1] == 1   # newest → last bin (right = now)
+    assert s.overs[0] == 1    # oldest → first bin (left = past)
+    assert s.total_over == 2
+
+
+def test_dropout_strip_drops_out_of_window_and_future():
+    now = 1000.0
+    s = C.dropout_strip([now - 61.0, now + 5.0, now - 10.0], [], now=now, window_s=60.0, bins=20)
+    assert s.total_over == 1   # only the in-window, non-future event counts
+    assert sum(s.overs) == 1
+
+
+def test_dropout_strip_separates_over_and_under():
+    now = 1000.0
+    s = C.dropout_strip([now - 1.0, now - 2.0], [now - 3.0], now=now, bins=30)
+    assert s.total_over == 2 and s.total_under == 1
+    assert sum(s.overs) == 2 and sum(s.unders) == 1
+
+
+@pytest.mark.parametrize(("bins", "window"), [(0, 60.0), (-1, 60.0), (10, 0.0), (10, -5.0)])
+def test_dropout_strip_rejects_bad_args(bins, window):
+    with pytest.raises(ValueError):
+        C.dropout_strip([], [], now=0.0, bins=bins, window_s=window)
+
+
+def test_build_view_without_now_has_no_strip():
+    # headless callers that don't track timestamps get no strip (None), not a crash
+    assert C.build_view(_diag(), rate_hz=58.0).dropouts is None
+
+
+def test_build_view_with_now_builds_strip():
+    now = 5000.0
+    v = C.build_view(_diag(), rate_hz=58.0, now=now,
+                     dropout_over_ts=[now - 1.0, now - 2.0], dropout_under_ts=[now - 3.0],
+                     dropout_bins=30)
+    assert v.dropouts is not None
+    assert v.dropouts.total_over == 2 and v.dropouts.total_under == 1
+    assert len(v.dropouts.overs) == 30

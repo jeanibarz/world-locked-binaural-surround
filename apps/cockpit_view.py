@@ -341,9 +341,14 @@ class CockpitWindow:
         import dearpygui.dearpygui as dpg
         dpg.destroy_context()
 
-    def update(self, view: M.CockpitView, *, camera_rgb=None,
+    def update(self, view: M.CockpitView, *, camera_rgb=None, landmarks=None, pose=None,
                world_az=None, channels=None, facing_i=0, head_deg=0.0, source_az=None) -> None:
-        """Repaint the whole canvas from ``view``, scaled to the current window size."""
+        """Repaint the whole canvas from ``view``, scaled to the current window size.
+
+        ``landmarks`` are the MediaPipe normalised face landmarks for the current frame (from the
+        *un-mirrored* capture, so x is flipped here to match the mirrored display) and ``pose`` the
+        filtered :class:`~binaural_headtracker.head_pose.HeadPose`; both are drawn as a feedback
+        overlay on the camera panel (dots + a yaw/pitch/roll HUD), mirroring the OpenCV console."""
         import dearpygui.dearpygui as dpg
 
         if camera_rgb is not None:
@@ -371,6 +376,7 @@ class CockpitWindow:
         dpg.delete_item(self._canvas, children_only=True)
         self._panel(dpg, CAM_X, CAM_Y, CAM_W, CAM_H, title=None)
         self._img(dpg, self._tex, CAM_X, CAM_Y, CAM_W, CAM_H)
+        self._camera_overlay(dpg, landmarks, pose)
         self._panel(dpg, RAD_X, RAD_Y, RAD_W, RAD_H, title="WORLD-LOCKED RING")
         if world_az is not None and channels is not None:
             src = self._test_az if self._test_on else source_az  # radar marker follows the test src
@@ -469,6 +475,53 @@ class CockpitWindow:
         self._rect(dpg, x, y, w, h, fill=M.PANEL, color=M.LINE, rounding=8)
         if title:
             self._text(dpg, x + 10, y + 7, title, M.ACCENT, 13, "display_sm")
+
+    def _camera_overlay(self, dpg, landmarks, pose):
+        """Draw the MediaPipe face dots + a yaw/pitch/roll HUD over the camera panel (the feedback
+        the OpenCV console shows and the cockpit was missing). ``landmarks`` come from the
+        un-mirrored frame, so x is flipped to line up with the mirrored display."""
+        if landmarks is not None:
+            # A dot per landmark (face mesh ≈ 478 pts); tiny so the mesh reads without hiding the
+            # face. Clipped to the panel defensively in case a landmark lands just off-frame.
+            for lm in landmarks:
+                dx = CAM_X + (1.0 - float(lm.x)) * CAM_W
+                dy = CAM_Y + float(lm.y) * CAM_H
+                if CAM_X <= dx <= CAM_X + CAM_W and CAM_Y <= dy <= CAM_Y + CAM_H:
+                    self._circle(dpg, dx, dy, 0.8, fill=M.ACCENT, color=M.ACCENT)
+        if pose is not None:
+            # yaw/pitch/roll block, bottom-left of the camera panel (mirrors _console._hud): each
+            # row is label · signed degrees · a centre-origin bar (±range → ±half width).
+            bx, bw, bh = CAM_X + 6, 118, 56
+            by = CAM_Y + CAM_H - bh - 6
+            self._rect(dpg, bx, by, bw, bh, fill=(10, 13, 18, 170), rounding=4)
+            ty = by + 7
+            for label, val, rng in (("yaw", pose.yaw, 60.0), ("pitch", pose.pitch, 45.0),
+                                    ("roll", pose.roll, 45.0)):
+                self._text(dpg, bx + 6, ty, label, M.MUTED, 11, "mono_sm")
+                self._text(dpg, bx + 42, ty, f"{val:+.0f}\xb0", M.FG, 11, "mono_sm")
+                tb_x, tb_w, mid = bx + 74, 38, bx + 74 + 19
+                self._rect(dpg, tb_x, ty + 4, tb_w, 3, fill=M.LINE, rounding=1)
+                frac = max(-1.0, min(1.0, float(val) / rng))
+                if frac >= 0:
+                    self._rect(dpg, mid, ty + 4, (tb_w / 2) * frac, 3, fill=M.ACCENT, rounding=1)
+                else:
+                    self._rect(dpg, mid + (tb_w / 2) * frac, ty + 4, -(tb_w / 2) * frac, 3,
+                               fill=M.ACCENT, rounding=1)
+                ty += 16
+
+    def _dropout_strip(self, dpg, x, y, w, h, strip: M.DropoutStrip):
+        """A 60-second overflow/underrun tick strip (Variant A): one red tick per bin with an
+        overflow, amber per bin with an underrun, drawn left→right as past→now over a panel track.
+        Makes slow clock drift visible as a cluster instead of the 2-second count's blink."""
+        self._rect(dpg, x, y, w, h, fill=M.PANEL2, rounding=3)
+        n = max(1, len(strip.overs))
+        bw = w / n
+        tw = max(1.0, bw - 1.0)
+        for i in range(n):
+            if strip.overs[i] > 0:  # overflow (clock drift) — full-height red tick
+                self._rect(dpg, x + i * bw, y + 1, tw, h - 2, fill=M.BAD, color=M.BAD)
+            elif strip.unders[i] > 0:  # underrun (starved) — amber; over wins the bin if both
+                self._rect(dpg, x + i * bw, y + 1, tw, h - 2, fill=M.ACTIVE, color=M.ACTIVE)
 
     def _radar(self, dpg, world_az, channels, facing_i, head_deg, source_az):
         cx, cy = RAD_X + RAD_W / 2, RAD_Y + RAD_H / 2 + 6
@@ -588,6 +641,16 @@ class CockpitWindow:
             self._meter(dpg, bx + 90, by + 1, 180, 10, bar.frac, bar.color, peak=bar.peak)
             self._text(dpg, bx, by + 16, bar.text, M.FG, 12, "mono_sm")
             by += 42
+        # dropout tick strip (Variant A): a 60 s overflow/underrun timeline under the engine bars,
+        # so slow clock drift (overflows creeping in) is visible instead of the 2 s count's blink.
+        if view.dropouts is not None:
+            d = view.dropouts
+            self._text(dpg, bx, by, "dropouts 60s", M.MUTED, 12, "mono_sm")
+            self._dropout_strip(dpg, bx + 90, by + 1, 180, 10, d)
+            hit = d.total_over or d.total_under
+            self._text(dpg, bx, by + 16,
+                       f"{d.total_over} over · {d.total_under} under" if hit else "no drops",
+                       M.BAD if hit else M.GOOD, 12, "mono_sm")
         # readout chips along the bottom of the panel (inside it, padded off the border)
         rx = x + 14
         ry = y + h - 20
@@ -649,6 +712,7 @@ def run_preview() -> int:
 
     from binaural_headtracker.diagnostics import classify
     from binaural_headtracker.radar import nearest_front_channel
+    from binaural_headtracker.tracking import HeadPose
 
     channels = ["FL", "FR", "C", "LFE", "SL", "SR", "RL", "RR"]
     world_az = [30.0, -30.0, 0.0, 0.0, 110.0, -110.0, 150.0, -150.0]
@@ -689,13 +753,21 @@ def run_preview() -> int:
                 measured_stale_ms=stale, measured_queue_ms=13.0, measured_device_ms=13.0,
                 detect_ms=11.0, camera_fps=30.0, cam_w=640, cam_h=480,
                 render_label="rust · nearest (8-bus)")
+            # synthetic dropouts: a slow clock-drift burst of overflows ~4 s ago so the 60 s tick
+            # strip has something to show on the host (plus one lone underrun), and a moving pose +
+            # face-dot cloud so the camera overlay is exercised without a real camera.
+            over_ts = [now - a for a in (4.2, 4.0, 3.7, 3.4, 3.1, 12.0)]
+            under_ts = [now - 7.5]
             view = M.build_view(diag, latency_samples=samples, rate_hz=58.0, method="nearest",
                                 backend="rust", predict_ms=(p50 if win._predict else None),
-                                facing_label=channels[facing_i])
+                                facing_label=channels[facing_i],
+                                dropout_over_ts=over_ts, dropout_under_ts=under_ts, now=now)
+            pose = HeadPose(yaw, 8.0 * math.sin(t * 0.6), 4.0 * math.sin(t * 0.9), now)
+            landmarks = _synthetic_landmarks(t, yaw)
             # a synthetic camera frame (a drifting gradient + a face-ish blob)
             cam = _synthetic_frame(t)
-            win.update(view, camera_rgb=cam, world_az=world_az, channels=channels,
-                       facing_i=facing_i, head_deg=head_deg)  # test src from the view (click radar)
+            win.update(view, camera_rgb=cam, landmarks=landmarks, pose=pose, world_az=world_az,
+                       channels=channels, facing_i=facing_i, head_deg=head_deg)
             win.render_frame()
     finally:
         win.teardown()
@@ -713,6 +785,24 @@ def _synthetic_frame(t: float):
     cx = int(w / 2 - 50 * math.sin(t * 0.4))
     frame[h // 2 - 40:h // 2 + 40, cx - 30:cx + 30] = (60, 120, 130)
     return frame
+
+
+def _synthetic_landmarks(t: float, yaw: float):
+    """An oval cloud of ~160 fake normalised landmarks over the preview's face blob, so the camera
+    overlay is exercised on the host. x is placed so that the overlay's mirror flip lands the dots
+    on the blob; a tiny yaw-driven rotation makes them feel attached to the head."""
+    from types import SimpleNamespace
+    w = 320
+    cxn = 1.0 - (0.5 - 50.0 / w * math.sin(t * 0.4))  # overlay flips x → place to meet the blob
+    rot = math.radians(yaw * 0.3)
+    cr, sr = math.cos(rot), math.sin(rot)
+    pts = []
+    for i in range(160):
+        ang = i / 160 * 2 * math.pi * 7.0
+        rad = 0.10 + 0.045 * ((i * 37) % 100) / 100.0
+        ox, oy = math.cos(ang) * rad * 0.7, math.sin(ang) * rad
+        pts.append(SimpleNamespace(x=cxn + ox * cr - oy * sr, y=0.5 + ox * sr + oy * cr))
+    return pts
 
 
 def main(argv=None) -> int:  # noqa: ARG001 — entry point for `py -3.12 apps/cockpit_view.py`
