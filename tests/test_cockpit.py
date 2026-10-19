@@ -139,6 +139,16 @@ def test_build_view_readouts_and_verdict():
     assert v.verdict_color == C.health_color(diag.health)
 
 
+def test_verdict_labels_are_the_expected_literals():
+    # pin the literal verdict text so a renamed label is caught (not re-derived via the map)
+    assert C._VERDICT_LABEL[Health.OK] == "GOOD"
+    assert C._VERDICT_LABEL[Health.TIGHT] == "TIGHT"
+    assert C._VERDICT_LABEL[Health.RISK] == "AT RISK"
+    assert C._VERDICT_LABEL[Health.FAILING] == "FAILING"
+    # and that a known-healthy diagnosis surfaces the "GOOD" pill end to end
+    assert C.build_view(_diag(), rate_hz=58.0).verdict == "GOOD"
+
+
 def test_build_view_bars_and_dropouts():
     healthy = C.build_view(_diag(), rate_hz=58.0)
     assert [b.label for b in healthy.bars] == ["render load", "out buffer"]
