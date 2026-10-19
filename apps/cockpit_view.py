@@ -398,6 +398,19 @@ class CockpitWindow:
         dpg.draw_line((x1 * k, y1 * k), (x2 * k, y2 * k), color=_c(color),
                       thickness=max(1.0, thickness * k), parent=self._canvas)
 
+    def _dashed(self, dpg, x1, y1, x2, y2, color, *, dash=5.0, gap=4.0, thickness=1.0):
+        """A dashed line in design coords (each segment scaled by self._k via `_line`)."""
+        dist = math.hypot(x2 - x1, y2 - y1)
+        if dist < 1.0:
+            return
+        ux, uy, step = (x2 - x1) / dist, (y2 - y1) / dist, dash + gap
+        s = 0.0
+        while s < dist:
+            e = min(s + dash, dist)
+            self._line(dpg, x1 + ux * s, y1 + uy * s, x1 + ux * e, y1 + uy * e,
+                       color=color, thickness=thickness)
+            s += step
+
     def _poly(self, dpg, pts, *, fill=None, color=None):
         k = self._k
         sp = [(px * k, py * k) for px, py in pts]
@@ -431,25 +444,38 @@ class CockpitWindow:
         R = RAD_W / 2 - 34
         for f in (1.0, 0.66, 0.33):
             self._circle(dpg, cx, cy, R * f, color=M.LINE)
+        # 0°/180° (vertical) and ±90° (horizontal) azimuth axes — a dashed reference cross, so the
+        # cardinal directions are explicit lines, not just words.
+        self._dashed(dpg, cx, cy - R - 7, cx, cy + R + 7, M.FAINT, dash=4, gap=5)
+        self._dashed(dpg, cx - R - 7, cy, cx + R + 7, cy, M.FAINT, dash=4, gap=5)
         # gaze cone
         poly = [(cx, cy)]
         for d in range(-28, 29, 4):
             poly.append(azimuth_to_radar_xy(head_deg + d, R, cx, cy))
         self._poly(dpg, poly, color=(*M.ACCENT[:3], 0), fill=(*M.ACCENT[:3], 36))
-        for lbl, az in (("FRONT", 0), ("LEFT", 90), ("BACK", 180), ("RIGHT", -90)):
-            x, y = azimuth_to_radar_xy(float(az), R + 16, cx, cy)
-            self._text(dpg, x - 16, y - 7, lbl, M.MUTED, 12, "display_sm")
+        # cardinal words at the axis ends, OUTSIDE the ring (nudged off the axis labels/clip edge)
+        for lbl, az, dx, dy in (("FRONT", 0, 0, -2), ("LEFT", 90, -4, 0),
+                                ("BACK", 180, 0, 8), ("RIGHT", -90, 4, 0)):
+            x, y = azimuth_to_radar_xy(float(az), R + 20, cx, cy)
+            self._text(dpg, x - len(lbl) * 3.0 + dx, y - 5 + dy, lbl, M.FAINT, 11, "display_sm")
+        # speakers: a dashed spoke from the centre to each, and a channel+angle label placed
+        # INSIDE the ring — so the three front speakers (C/FL/FR) don't pile onto the FRONT
+        # cardinal and the top edge the way outside labels do.
         for i, ch in enumerate(channels):
             if ch == "LFE":
                 continue  # non-directional (sits at az 0, atop C) — not an azimuth-radar speaker
-            x, y = azimuth_to_radar_xy(float(world_az[i]), R, cx, cy)
+            az = float(world_az[i])
+            x, y = azimuth_to_radar_xy(az, R, cx, cy)
             on = i == facing_i
             col = M.ACTIVE if on else M.ACCENT
+            self._dashed(dpg, cx, cy, x, y, col if on else M.LINE, dash=5, gap=4)
             if on:
                 self._circle(dpg, x, y, 12, color=M.ACTIVE)
             self._circle(dpg, x, y, 7 if on else 5, color=M.PANEL, fill=col)
-            tx, ty = azimuth_to_radar_xy(float(world_az[i]), R - 18, cx, cy)
-            self._text(dpg, tx - 8, ty - 7, ch, M.ACTIVE if on else M.MUTED, 12, "mono_sm")
+            lab = f"{ch} {az:+.0f}°" if abs(az) > 0.5 else f"{ch} 0°"
+            tx, ty = azimuth_to_radar_xy(az, R - 22, cx, cy)
+            self._text(dpg, tx - len(lab) * 2.9, ty - 6, lab,
+                       M.ACTIVE if on else M.MUTED, 11, "mono_sm")
         if source_az is not None:
             sx, sy = azimuth_to_radar_xy(float(source_az), R, cx, cy)
             self._line(dpg, cx, cy, sx, sy, color=M.GOOD)
