@@ -91,15 +91,28 @@ def load_dense_grid_sofa(
 
 @dataclass(frozen=True)
 class HrirSet:
-    """A switchable HRIR set: ``path is None`` means the owner's own measured set
-    (rendered from the sparse 8 via the normal interpolation path)."""
+    """A switchable HRIR set. ``path`` is the CTF (tonally-faithful) dense grid and
+    ``df_path`` the diffuse-field variant; either may be None. Both None ⇒ the owner's
+    own measured set (rendered from the sparse 8 via the normal interpolation path)."""
 
     name: str
-    path: Path | None
+    path: Path | None            # ctf (tonally-faithful) variant
+    df_path: Path | None = None  # diffuse-field variant
 
     @property
     def is_owner(self) -> bool:
-        return self.path is None
+        return self.path is None and self.df_path is None
+
+    @property
+    def has_df(self) -> bool:
+        return self.df_path is not None
+
+    def path_for(self, comp: str) -> Path | None:
+        """The SOFA for a compensation choice ('ctf'/'df'), falling back to whichever
+        variant exists (so a set with only one variant still loads)."""
+        if comp == "df":
+            return self.df_path or self.path
+        return self.path or self.df_path
 
 
 @dataclass
@@ -282,16 +295,23 @@ class LocalizationTest:
 
 def discover_sets(directory, *, pattern: str = "dense_*.sofa",
                   owner_label: str = OWNER_LABEL) -> list[HrirSet]:
-    """List switchable HRIR sets: the owner's own set first, then every dense-grid
-    SOFA in ``directory`` (named by its file stem, ``dense_`` prefix stripped),
-    sorted by name. A missing directory yields just the owner's set."""
-    sets: list[HrirSet] = [HrirSet(owner_label, None)]
+    """List switchable HRIR sets: the owner's own set first, then one entry per
+    subject, each pairing its CTF grid (``dense_<s>.sofa``) with its diffuse-field
+    grid (``dense_<s>_df.sofa``) if present — so the UI shows subjects, and a
+    compensation toggle picks the variant. A missing directory yields just the owner."""
+    bases: dict[str, dict[str, Path]] = {}
     if directory is not None:
         d = Path(directory)
         if d.is_dir():
             for p in sorted(d.glob(pattern)):
-                name = p.stem
-                if name.startswith("dense_"):
-                    name = name[len("dense_"):]
-                sets.append(HrirSet(name, p))
+                stem = p.stem[len("dense_"):] if p.stem.startswith("dense_") else p.stem
+                if stem.endswith("_df"):
+                    base, comp = stem[:-3], "df"
+                else:
+                    base, comp = stem, "ctf"
+                bases.setdefault(base, {})[comp] = p
+    sets: list[HrirSet] = [HrirSet(owner_label, None, None)]
+    for base in sorted(bases):
+        v = bases[base]
+        sets.append(HrirSet(base, v.get("ctf"), v.get("df")))
     return sets

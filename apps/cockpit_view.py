@@ -147,6 +147,10 @@ class CockpitWindow:
         self._hrir_names: list[str] = ["mine"]
         self._hrir_current = "mine"
         self._hrir_chip_tags: dict[str, str] = {}
+        # compensation variant toggle (ctf = tonally faithful, df = diffuse-field)
+        self.on_comp = lambda comp: None
+        self._comp = "ctf"
+        self._comp_btns: dict[str, str] = {}
         self._blind = None
         self._blind_txt = "ck_blind_tally"
         # Localization test (RFC 0003 decider): a source at a random azimuth through a
@@ -283,6 +287,8 @@ class CockpitWindow:
                                          "database subjects recoloured to your timbre.")
                         for nm in self._hrir_names:
                             self._hrir_chip(dpg, nm)
+                        dpg.add_text("comp", color=_c(M.MUTED))
+                        self._seg_comp(dpg)
                 with dpg.child_window(auto_resize_x=True, auto_resize_y=True, border=True) as s:
                     dpg.bind_item_theme(s, self._th["section"])
                     with dpg.group(horizontal=True):
@@ -625,6 +631,28 @@ class CockpitWindow:
         try:
             self._retheme_hrir(name)
         except Exception:  # noqa: BLE001 — the pills are a mirror, never critical
+            pass
+
+    def _seg_comp(self, dpg) -> None:
+        """Segmented ctf|df compensation selector (active one accent-filled), same
+        pattern as the backend segment (user_data carries the choice)."""
+        with dpg.group(horizontal=True, horizontal_spacing=0):
+            for c in ("ctf", "df"):
+                tag = f"ck_comp_{c}"
+                self._comp_btns[c] = tag
+                dpg.add_button(label=c, tag=tag, width=46, user_data=c,
+                               callback=lambda s, a, u: self.on_comp(u))
+                dpg.bind_item_theme(tag, self._th["seg_on" if c == self._comp else "seg_off"])
+
+    def set_comp_display(self, comp) -> None:
+        """Light the compensation segment the engine is ACTUALLY using."""
+        self._comp = comp
+        try:
+            import dearpygui.dearpygui as dpg
+            for c, tag in self._comp_btns.items():
+                if dpg.does_item_exist(tag):
+                    dpg.bind_item_theme(tag, self._th["seg_on" if c == comp else "seg_off"])
+        except Exception:  # noqa: BLE001
             pass
 
     # ----------------------------------------------------- blind A/B

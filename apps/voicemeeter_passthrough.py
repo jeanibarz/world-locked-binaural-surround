@@ -735,7 +735,7 @@ def main(argv=None) -> int:
         win_ck = CK.CockpitWindow(title=f"world-lock passthrough — webcam {cam_index}")
         q = {"stop": False, "restart": False}
         cur = {"backend": ("rust" if args.rust else "gpu" if args.gpu else "cpu"),
-               "predict": args.predict}
+               "predict": args.predict, "comp": "ctf"}
         predictor_ck = PosePredictor()
 
         def _recenter() -> None:
@@ -833,7 +833,8 @@ def main(argv=None) -> int:
             if hs.is_owner:
                 nm, reason = build_main_renderer(test["method"], cur["backend"])
                 return nm, build_test_renderer(test["method"]), reason
-            dense, azmap = load_dense_grid_sofa(hs.path, target_rate=brir.samplerate)
+            dense, azmap = load_dense_grid_sofa(hs.path_for(cur["comp"]),
+                                                target_rate=brir.samplerate)
             use_gpu = cur["backend"] == "gpu"
             use_rust = cur["backend"] in ("rust", "gpu")
             nm = InterpWorldLocked7p1(brir, block_size=blk["n"], fade_ms=args.fade_ms,
@@ -858,7 +859,7 @@ def main(argv=None) -> int:
                 win_ck.set_hrir_display(cur_set["name"])  # snap the pills back to what's playing
                 return
             label = (render_label(nm, test["method"]) if hs.is_owner
-                     else f"{getattr(nm, 'engine', 'cpu')} · {name} · dense ({nm.n_bus} pts)")
+                     else f"{getattr(nm, 'engine', 'cpu')} · {name} [{cur['comp']}] · dense ({nm.n_bus} pts)")
             with lock:
                 main_rend["r"], main_rend["label"] = nm, label
                 test_renderers.clear()
@@ -867,16 +868,25 @@ def main(argv=None) -> int:
                 cur_set["name"] = name
             win_ck.set_hrir_display(name)
             if not hs.is_owner:
-                win_ck.toast(f"HRIR: {name}", "info", seconds=3)
+                tag = cur["comp"] + ("" if hs.has_df or cur["comp"] == "ctf" else "→ctf")
+                win_ck.toast(f"HRIR: {name} [{tag}]", "info", seconds=3)
+
+        def _set_comp(m) -> None:  # noqa: ANN001  — compensation variant (ctf | df)
+            if m not in ("ctf", "df"):
+                return
+            cur["comp"] = m
+            win_ck.set_comp_display(m)
+            _set_hrir(cur_set["name"])   # reload the current subject under the new comp
 
         # --- blind localization test (RFC 0003 decider) -------------------------------
         loc = {"test": None, "t0": None, "cache": {}}
 
         def _loc_renderer(hs):
-            """Cached test-source renderer for a set (solo'd during the loc test)."""
-            if hs.name not in loc["cache"]:
-                loc["cache"][hs.name] = _build_for_set(hs)[1]
-            return loc["cache"][hs.name]
+            """Cached test-source renderer for a set + current comp (solo'd in the loc test)."""
+            key = (hs.name, cur["comp"])
+            if key not in loc["cache"]:
+                loc["cache"][key] = _build_for_set(hs)[1]
+            return loc["cache"][key]
 
         def _loc_apply() -> None:
             """Render the current trial: solo the source at its truth azimuth through the
@@ -952,6 +962,7 @@ def main(argv=None) -> int:
         win_ck.on_place_test = _place
         win_ck.on_predict = lambda on: cur.__setitem__("predict", bool(on))
         win_ck.on_hrir = _set_hrir
+        win_ck.on_comp = _set_comp
         win_ck.on_loc_start = _loc_start
         win_ck.on_loc_answer = _loc_answer
         win_ck.on_loc_stop = _loc_stop
@@ -960,6 +971,7 @@ def main(argv=None) -> int:
         win_ck.set_cushion_display(args.latency_ms)  # slider → the real launch cushion, not 60
         win_ck.set_block_display(blk["n"])           # stepper → the real launch block size
         win_ck.set_hrir_display(cur_set["name"])     # pills → the set actually loaded at launch
+        win_ck.set_comp_display(cur["comp"])         # comp segment → the launch compensation
         cur["backend"] = _backend_of(main_rend["r"])  # the engine that actually built at launch
         win_ck.set_backend_display(cur["backend"])    # radio → real launch backend (not 'rust'),
         if args.gpu and cur["backend"] != "gpu":      # and warn if --gpu silently fell back

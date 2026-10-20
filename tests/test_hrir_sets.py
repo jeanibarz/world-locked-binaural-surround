@@ -214,3 +214,18 @@ def test_scoreboard_and_ranking():
     assert sb["bad"]["fbc"] == pytest.approx(1.0)      # every bad trial flipped
     assert sb["good"]["rt"] == pytest.approx(1.0)
     assert t.ranking()[0] == "good"                    # lower error ranks first
+
+
+def test_discover_groups_ctf_and_df(tmp_path):
+    """ctf + df SOFAs for one subject group into a single HrirSet with both paths."""
+    _write_sofa(tmp_path / "dense_SubjX.sofa", [0, 180])
+    _write_sofa(tmp_path / "dense_SubjX_df.sofa", [0, 180])
+    _write_sofa(tmp_path / "dense_OnlyCtf.sofa", [0, 180])
+    sets = discover_sets(tmp_path)
+    assert [s.name for s in sets] == ["mine", "OnlyCtf", "SubjX"]
+    by = {s.name: s for s in sets}
+    assert by["SubjX"].has_df
+    assert by["SubjX"].path_for("df").stem.endswith("_df")
+    assert by["SubjX"].path_for("ctf").stem == "dense_SubjX"
+    assert not by["OnlyCtf"].has_df
+    assert by["OnlyCtf"].path_for("df") == by["OnlyCtf"].path   # falls back to ctf
