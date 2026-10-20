@@ -56,6 +56,7 @@ from binaural_headtracker.devices import (
 )
 from binaural_headtracker.diagnostics import classify
 from binaural_headtracker.head_pose import head_pose_from_matrix
+from binaural_headtracker.hrir_sets import discover_sets, load_dense_grid_sofa
 from binaural_headtracker.latency import LatencyProbe
 from binaural_headtracker.live_render import (
     InterpWorldLocked7p1,
@@ -166,6 +167,10 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--model", type=Path, required=True, help="FaceLandmarker .task path")
     p.add_argument("--brir-dir", type=Path, required=True, help="baked 7.1 BRIR WAV directory")
+    p.add_argument("--hrir-sets-dir", type=Path, default=None,
+                   help="directory of dense-grid SOFA candidates (dense_*.sofa, from "
+                        "binaural-localization RFC 0003) to switch between live in the cockpit; "
+                        "'mine' (--brir-dir) is always the first option")
     p.add_argument("--camera", type=int, default=0)
     p.add_argument("--input-device", default=None,
                    help="7.1 capture device index or name substring (e.g. 'VoiceMeeter Output')")
@@ -337,6 +342,17 @@ def main(argv=None) -> int:
     _main0, _ = build_main_renderer(args.method)
     main_rend = {"r": _main0}  # the 7.1 renderer, swappable live (M)
     main_rend["label"] = render_label(main_rend["r"], args.method)
+
+    # HRIR-set switcher (RFC 0003): the owner's own set ('mine', from --brir-dir) plus any
+    # dense-grid SOFA candidates in --hrir-sets-dir, switchable live in the cockpit. The owner
+    # set renders from the sparse 8 as usual; a candidate renders its dense real ring via
+    # InterpWorldLocked7p1(dense_override=...) steered by nearest.
+    hrir_sets = discover_sets(args.hrir_sets_dir)
+    sets_by_name = {s.name: s for s in hrir_sets}
+    cur_set = {"name": hrir_sets[0].name}
+    if len(hrir_sets) > 1:
+        print(f"HRIR sets ({len(hrir_sets)}): " + ", ".join(s.name for s in hrir_sets)
+              + " — switch live in the cockpit")
 
     # Global output-bus comp + EQ (B5.3): the bare BRIRs carry room/direction but not the
     # headphone comp or subjective EQ, which EqualizerAPO applies once to the stereo mix. Apply
@@ -807,6 +823,50 @@ def main(argv=None) -> int:
                         out_fifo.appendleft((np.zeros((n, 2)), None, None))
             win_ck.set_block_display(n)
 
+        def _build_for_set(hs):
+            """``(main_renderer, test_renderer, reason)`` for an HRIR set, at the current block
+            size + backend. The owner's own set renders from the sparse 8 via the normal path; a
+            dense-grid candidate renders its real ring via ``InterpWorldLocked7p1(dense_override)``
+            steered by nearest (``brir`` is used only for 7.1 input routing + LFE)."""
+            if hs.is_owner:
+                nm, reason = build_main_renderer(test["method"], cur["backend"])
+                return nm, build_test_renderer(test["method"]), reason
+            dense, azmap = load_dense_grid_sofa(hs.path, target_rate=brir.samplerate)
+            use_gpu = cur["backend"] == "gpu"
+            use_rust = cur["backend"] in ("rust", "gpu")
+            nm = InterpWorldLocked7p1(brir, block_size=blk["n"], fade_ms=args.fade_ms,
+                                      lfe_mode=args.lfe_mode, dense_override=(dense, azmap),
+                                      use_rust=use_rust, use_gpu=use_gpu)
+            tr = WorldLockedSource(dense, block_size=blk["n"], fade_ms=args.fade_ms,
+                                   max_tail_ms=args.max_tail_ms, azimuths=azmap)
+            return nm, tr, None
+
+        def _set_hrir(name) -> None:  # noqa: ANN001  — live HRIR-set swap (RFC 0003)
+            """Swap the live HRIR set under ``lock``, modelled on :func:`_set_block`: rebuild the
+            7.1 renderer + the test voice from the new set, leaving block size / cushion / output EQ
+            untouched. A bad or missing SOFA toasts and leaves the current set playing."""
+            hs = sets_by_name.get(name)
+            if hs is None:
+                win_ck.toast(f"no HRIR set '{name}'", "error")
+                return
+            try:
+                nm, tr, _reason = _build_for_set(hs)
+            except Exception as exc:  # noqa: BLE001 — a bad SOFA must not kill the audio engine
+                win_ck.toast(f"HRIR '{name}' load failed: {exc}", "error")
+                win_ck.set_hrir_display(cur_set["name"])  # snap the pills back to what's playing
+                return
+            label = (render_label(nm, test["method"]) if hs.is_owner
+                     else f"{getattr(nm, 'engine', 'cpu')} · {name} · dense ({nm.n_bus} pts)")
+            with lock:
+                main_rend["r"], main_rend["label"] = nm, label
+                test_renderers.clear()
+                test_renderers[test["method"]] = tr
+                test["renderer"] = tr
+                cur_set["name"] = name
+            win_ck.set_hrir_display(name)
+            if not hs.is_owner:
+                win_ck.toast(f"HRIR: {name}", "info", seconds=3)
+
         win_ck.on_quit = lambda: q.__setitem__("stop", True)
         win_ck.on_recenter = _recenter
         win_ck.on_method = _set_method
@@ -818,9 +878,12 @@ def main(argv=None) -> int:
         win_ck.on_rotate = _tog("rotate")
         win_ck.on_place_test = _place
         win_ck.on_predict = lambda on: cur.__setitem__("predict", bool(on))
+        win_ck.on_hrir = _set_hrir
+        win_ck.set_hrir_sets([s.name for s in hrir_sets])   # seed the pills BEFORE setup()
         win_ck.setup()
         win_ck.set_cushion_display(args.latency_ms)  # slider → the real launch cushion, not 60
         win_ck.set_block_display(blk["n"])           # stepper → the real launch block size
+        win_ck.set_hrir_display(cur_set["name"])     # pills → the set actually loaded at launch
         cur["backend"] = _backend_of(main_rend["r"])  # the engine that actually built at launch
         win_ck.set_backend_display(cur["backend"])    # radio → real launch backend (not 'rust'),
         if args.gpu and cur["backend"] != "gpu":      # and warn if --gpu silently fell back

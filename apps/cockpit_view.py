@@ -40,7 +40,7 @@ CAM_X, CAM_Y, CAM_W, CAM_H = 12, 12, 470, 300   # a touch narrower → more room
 RAD_X, RAD_Y, RAD_W, RAD_H = 496, 12, 300, 300
 LAG_X, LAG_Y, LAG_W, LAG_H = 810, 12, 190, 300  # wider STATUS box so its readouts fit on one line
 PANEL_Y = 324  # the wide latency panel under the camera/radar
-CONTROLS_H = 120  # height reserved below the scaled canvas for the two native controls rows
+CONTROLS_H = 172  # height reserved below the scaled canvas for the two native controls rows
 MARGIN = 10       # window padding kept around the scaled canvas
 CTRL_FONT_PX = 25  # the native-widget font size (≈1.7× the old 15) — the strip was tiny vs panels
 CUSHION_MIN, CUSHION_MAX, CUSHION_STEP = 20, 120, 10  # output-cushion ± stepper range (ms)
@@ -140,6 +140,15 @@ class CockpitWindow:
         self.on_place_test = lambda az: None  # placed/dragged on the radar → world azimuth (deg)
         self.on_recenter = lambda: None
         self.on_quit = lambda: None
+        self.on_hrir = lambda name: None      # switch the live HRIR set (RFC 0003 dense-grid swap)
+        # HRIR switcher + blind-A/B state. Set names are seeded by the live app via
+        # ``set_hrir_sets`` BEFORE ``setup`` (the pills are built then). ``_blind`` is a
+        # ``hrir_sets.BlindAB`` created lazily when blind mode is first used.
+        self._hrir_names: list[str] = ["mine"]
+        self._hrir_current = "mine"
+        self._hrir_chip_tags: dict[str, str] = {}
+        self._blind = None
+        self._blind_txt = "ck_blind_tally"
 
     # -------------------------------------------------- build
     def setup(self) -> None:
@@ -255,6 +264,34 @@ class CockpitWindow:
                         self._chip(dpg, "source", "source", self._set_test)
                         self._chip(dpg, "solo", "solo", self._set_solo)
                         self._chip(dpg, "orbit", "orbit", self._set_rotate, amber=True)
+            with dpg.group(horizontal=True):   # row 3 — HRIR set switcher + blind A/B
+                with dpg.child_window(auto_resize_x=True, auto_resize_y=True, border=True) as s:
+                    dpg.bind_item_theme(s, self._th["section"])
+                    with dpg.group(horizontal=True):
+                        hl = dpg.add_text("HRIR", color=_c(M.ACCENT))
+                        with dpg.tooltip(hl):
+                            dpg.add_text("Switch the live HRIR set (dense-grid, RFC 0003).\n"
+                                         "'mine' = your own 8-point set; the others are matched\n"
+                                         "database subjects recoloured to your timbre.")
+                        for nm in self._hrir_names:
+                            self._hrir_chip(dpg, nm)
+                with dpg.child_window(auto_resize_x=True, auto_resize_y=True, border=True) as s:
+                    dpg.bind_item_theme(s, self._th["section"])
+                    with dpg.group(horizontal=True):
+                        bl = dpg.add_text("BLIND", color=_c(M.ACCENT))
+                        with dpg.tooltip(bl):
+                            dpg.add_text("Blind A/B of two HRIR sets with hidden labels.\n"
+                                         "A/B = hear each (identity hidden) · shuffle = re-hide\n"
+                                         "& swap · prefer = score what's playing · reveal = show.")
+                        for lbl, cb in (("A", lambda: self._blind_play("A")),
+                                        ("B", lambda: self._blind_play("B")),
+                                        ("shuffle", lambda: self._blind_shuffle()),
+                                        ("prefer", lambda: self._blind_prefer()),
+                                        ("reveal", lambda: self._blind_reveal())):
+                            btn = dpg.add_button(label=lbl, width=(46 if len(lbl) == 1 else 0),
+                                                 callback=lambda s, a, f=cb: f())
+                            dpg.bind_item_theme(btn, self._th["step"])
+                        dpg.add_text("idle", tag=self._blind_txt, color=_c(M.MUTED))
         dpg.set_primary_window(self._win, True)
 
         # Height leaves room below the canvas for the controls row + titlebar, with a margin so a
@@ -263,8 +300,8 @@ class CockpitWindow:
         # Wider + taller default than the old 1040×668: the enlarged settings row needs the width,
         # and the taller CONTROLS_H needs the height. The canvas is width-limited here, so the extra
         # width barely grows it (~1.17× fit) while the controls grow ~1.7× — exactly the ratio fix.
-        dpg.create_viewport(title=self.title, width=1620, height=CANVAS_H + 250,
-                            min_width=1280, min_height=600, clear_color=_c(M.BG))
+        dpg.create_viewport(title=self.title, width=1620, height=CANVAS_H + 305,
+                            min_width=1280, min_height=655, clear_color=_c(M.BG))
         # Click / drag the radar to place and move the test source (the console's click-to-place).
         with dpg.handler_registry():
             dpg.add_mouse_click_handler(button=dpg.mvMouseButton_Left,
@@ -522,6 +559,93 @@ class CockpitWindow:
         if tag and dpg.does_item_exist(tag):
             key = ("chip_on_amber" if amber else "chip_on") if on else "chip_off"
             dpg.bind_item_theme(tag, self._th[key])
+
+    # ----------------------------------------------------- HRIR set switcher
+    def set_hrir_sets(self, names) -> None:
+        """Seed the switchable HRIR-set names. Call BEFORE :meth:`setup` — the pills
+        are built there. The owner's own set should be first (e.g. ``"mine"``)."""
+        self._hrir_names = list(names) or ["mine"]
+        if self._hrir_current not in self._hrir_names:
+            self._hrir_current = self._hrir_names[0]
+
+    def _hrir_chip(self, dpg, name) -> None:
+        """A radio pill for one HRIR set (selecting one lights it, dims the rest)."""
+        tag = f"ck_hrir_{name}"
+        self._hrir_chip_tags[name] = tag
+        dpg.add_button(label=name, tag=tag, callback=lambda *_: self._select_hrir(name))
+        on = name == self._hrir_current
+        dpg.bind_item_theme(tag, self._th["chip_on" if on else "chip_off"])
+
+    def _select_hrir(self, name) -> None:
+        self._hrir_current = name
+        self._retheme_hrir(name)
+        self.on_hrir(name)
+
+    def _retheme_hrir(self, name) -> None:
+        import dearpygui.dearpygui as dpg
+        for nm, tag in self._hrir_chip_tags.items():
+            if dpg.does_item_exist(tag):
+                dpg.bind_item_theme(tag, self._th["chip_on" if nm == name else "chip_off"])
+
+    def set_hrir_display(self, name) -> None:
+        """Snap the pills to the set the engine ACTUALLY loaded (after a swap or a load
+        failure), so the UI never advertises a set that isn't playing."""
+        self._hrir_current = name
+        try:
+            self._retheme_hrir(name)
+        except Exception:  # noqa: BLE001 — the pills are a mirror, never critical
+            pass
+
+    # ----------------------------------------------------- blind A/B
+    def _blind_ensure(self):
+        if self._blind is None:
+            others = [n for n in self._hrir_names if n != self._hrir_current]
+            if not others:
+                self.toast("blind A/B needs two HRIR sets", "info")
+                return None
+            from binaural_headtracker.hrir_sets import BlindAB
+            self._blind = BlindAB(self._hrir_current, others[0])
+            self._blind.shuffle()
+        return self._blind
+
+    def _blind_play(self, slot) -> None:
+        ab = self._blind_ensure()
+        if ab is None:
+            return
+        # Switch the renderer to the sealed set WITHOUT lighting its pill — lighting it
+        # would reveal the identity and defeat the blind.
+        self.on_hrir(ab.play(slot))
+        self._blind_update()
+
+    def _blind_shuffle(self) -> None:
+        ab = self._blind_ensure()
+        if ab is None:
+            return
+        ab.shuffle()
+        self._blind_update()
+
+    def _blind_prefer(self) -> None:
+        if self._blind is not None:
+            self._blind.prefer_current()
+            self._blind_update()
+
+    def _blind_reveal(self) -> None:
+        if self._blind is not None:
+            self._blind.reveal()
+            self._blind_update()
+
+    def _blind_update(self) -> None:
+        import dearpygui.dearpygui as dpg
+        ab = self._blind
+        if ab is None or not dpg.does_item_exist(self._blind_txt):
+            return
+        if ab.revealed:
+            mp = dict(ab.reveal())
+            txt = (f"A={mp['A']} B={mp['B']}  "
+                   f"score {ab.tally.get(mp['A'], 0)}/{ab.tally.get(mp['B'], 0)}  n={ab.trials}")
+        else:
+            txt = f"playing {ab.current or '-'} (hidden)  n={ab.trials}"
+        dpg.set_value(self._blind_txt, txt)
 
     def _step_cushion(self, delta: int) -> None:
         """± button on the cushion stepper: move CUSHION_STEP ms and fire ``on_cushion`` live."""
