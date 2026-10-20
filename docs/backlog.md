@@ -495,8 +495,11 @@ _(the chain appends here as it learns)_
       host carrying a full admin token (`ssh -i ~/.ssh/kookr_host_admin ibarz@<wsl-gateway>`). So the
       WDK install + Hyper-V VM creation are now **autonomous**, not owner-gated. Safety contract +
       connect details in AGENTS.md; setup/revert in `spikes/host_admin_sshd_{setup,revert}.ps1`.
-    - [ ] **Install WDK + create/provision the Hyper-V VM** (autonomous, over the channel): SDK 26100 +
-      WDK **26100.6584** for VS2022 (journal 53); VM with test-signing (in-guest only).
+    - [x] **WDK + VM provisioned autonomously** (journal 55, scripts in `spikes/bpre-vm/`): SDK 26100
+      + WDK **26100.6584** installed on the host (km headers verified → can build drivers); VM
+      `kookr-bpre` (Gen2, vTPM+SecureBoot) created via unattended Win11 install (admin `kookr`,
+      reached by PowerShell Direct). Microsoft retired the prebuilt dev VHDX → built from a Win11
+      ISO (Fido).
     - [ ] **B-pre:** pseudo-K11 drives the SYSVAD-fork pull-driven position; a 48 kHz app renders 7.1
       in; confirm audiodg tolerates it (no silence/disconnect, monotonic `IAudioClock`). Make-or-break.
 - [x] **B8.8** **Reduce the `queue` term — measured: no cheap win, it trades off against audible
