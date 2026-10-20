@@ -40,8 +40,10 @@ CAM_X, CAM_Y, CAM_W, CAM_H = 12, 12, 470, 300   # a touch narrower → more room
 RAD_X, RAD_Y, RAD_W, RAD_H = 496, 12, 300, 300
 LAG_X, LAG_Y, LAG_W, LAG_H = 810, 12, 190, 300  # wider STATUS box so its readouts fit on one line
 PANEL_Y = 324  # the wide latency panel under the camera/radar
-CONTROLS_H = 74  # height reserved below the scaled canvas for the two native controls rows
-MARGIN = 10      # window padding kept around the scaled canvas
+CONTROLS_H = 120  # height reserved below the scaled canvas for the two native controls rows
+MARGIN = 10       # window padding kept around the scaled canvas
+CTRL_FONT_PX = 25  # the native-widget font size (≈1.7× the old 15) — the strip was tiny vs panels
+CUSHION_MIN, CUSHION_MAX, CUSHION_STEP = 20, 120, 10  # output-cushion ± stepper range (ms)
 
 
 def available() -> bool:
@@ -107,12 +109,14 @@ class CockpitWindow:
         self._canvas = "cockpit_canvas"
         self._win = "cockpit_win"
         self._host = "canvas_host"  # auto-filling child; its measured size drives the fit-scale
-        self._src_cb = "ck_src"     # the test-source checkbox, so engine state can sync it
-        self._backend_rb = "ck_backend"  # the backend radio, so a failed switch can snap it back
-        self._cushion_sl = "ck_cushion"  # the cushion slider, so the live value can seed it
         self._block_txt = "ck_block"     # the block ± stepper's value text
         self._block_vals = (256, 512, 1024, 2048)  # power-of-two block sizes the stepper cycles
         self._block_i = 1                # index into _block_vals (default 512)
+        self._cushion_txt = "ck_cushion_v"  # the cushion ± stepper's value text
+        self._cushion_val = 60           # current cushion (ms); stepped in CUSHION_STEP
+        self._backend_btns: dict[str, str] = {}  # backend → its segmented-button tag (re-theming)
+        self._chip_tags: dict[str, tuple] = {}   # test chip name → (tag, amber) for re-theming
+        self._th: dict[str, int] = {}    # named control themes (section/seg/chip/step), built later
         self._toasts: list[dict] = []    # transient banners (backend-switch errors): text/color/exp
         self._mono_px = 36          # the mono atlas size (see _load_fonts); text is measured at it
         self._k = 1.0  # live fit-scale: design canvas → current window (set each frame)
@@ -186,64 +190,81 @@ class CockpitWindow:
                     dpg.bind_item_font(self._host, self._fonts["mono"])
                 except Exception:  # noqa: BLE001 — a failed bind just leaves the default font
                     pass
-            # Row 1 = every SETTING (engine · output · tracking); row 2 = the test group + actions.
-            # Section labels in accent, thin dividers between, so the strip reads as grouped cells
-            # instead of one undifferentiated run of widgets.
-            def _sec(txt):
+            # Built to the chosen mockup: boxed sections (ENGINE/OUTPUT/TRACK/TEST), a segmented
+            # backend, ± steppers for block and cushion, and chip toggles for the test source —
+            # row 1 the settings + actions, row 2 the test group on its own.
+            self._build_ctrl_themes(dpg)
+
+            def _label(txt):
                 dpg.add_text(txt, color=_c(M.ACCENT))
 
-            def _div():
-                dpg.add_spacer(width=9)
-                dpg.add_text("|", color=_c(M.LINE))
-                dpg.add_spacer(width=6)
+            def _stepper(value_tag, value_str, on_minus, on_plus):
+                with dpg.group(horizontal=True, horizontal_spacing=2):
+                    m = dpg.add_button(label="-", width=40, callback=on_minus)
+                    dpg.bind_item_theme(m, self._th["step"])
+                    dpg.add_text(value_str, tag=value_tag)
+                    p = dpg.add_button(label="+", width=40, callback=on_plus)
+                    dpg.bind_item_theme(p, self._th["step"])
 
-            with dpg.group(horizontal=True):   # row 1 — settings
-                _sec("ENGINE")
-                dpg.add_combo(("nearest", "timealign", "minphase", "notchwarp"),
-                              default_value="nearest", width=106,
-                              callback=lambda s, a: self.on_method(a))
-                dpg.add_radio_button(("cpu", "rust", "gpu"), tag=self._backend_rb,
-                                     default_value="rust", horizontal=True,
-                                     callback=lambda s, a: self.on_backend(a))
-                dpg.add_text("block", color=_c(M.MUTED))
-                dpg.add_button(label="-", width=26, callback=lambda: self._step_block(-1))
-                dpg.add_text("512", tag=self._block_txt)
-                dpg.add_button(label="+", width=26, callback=lambda: self._step_block(+1))
-                _div()
-                _sec("OUTPUT")
-                dpg.add_text("cushion", color=_c(M.MUTED))
-                dpg.add_slider_int(tag=self._cushion_sl, default_value=60, min_value=20,
-                                   max_value=120, width=116, format="%d ms",
-                                   callback=lambda s, a: self.on_cushion(float(a)))
-                _div()
-                _sec("TRACK")
-                dpg.add_checkbox(label="predict", default_value=True,
-                                 callback=lambda s, a: self._set_predict(bool(a)))
-                dpg.add_checkbox(label="exclusive",
-                                 callback=lambda s, a: self.on_exclusive(bool(a)))
-                _div()
-                dpg.add_button(label="Recenter", callback=lambda: self.on_recenter())
-                dpg.add_button(label="Quit", callback=lambda: self.on_quit())
+            with dpg.group(horizontal=True):   # row 1 — settings (boxed) + actions
+                with dpg.child_window(auto_resize_x=True, auto_resize_y=True, border=True) as s:
+                    dpg.bind_item_theme(s, self._th["section"])
+                    with dpg.group(horizontal=True):
+                        _label("ENGINE")
+                        dpg.add_combo(("nearest", "timealign", "minphase", "notchwarp"),
+                                      default_value="nearest", width=172,
+                                      callback=lambda s, a: self.on_method(a))
+                        self._seg_backend(dpg)
+                        dpg.add_text("block", color=_c(M.MUTED))
+                        _stepper(self._block_txt, "512",
+                                 lambda: self._step_block(-1), lambda: self._step_block(+1))
+                with dpg.child_window(auto_resize_x=True, auto_resize_y=True, border=True) as s:
+                    dpg.bind_item_theme(s, self._th["section"])
+                    with dpg.group(horizontal=True):
+                        _label("OUTPUT")
+                        dpg.add_text("cushion", color=_c(M.MUTED))
+                        _stepper(self._cushion_txt, f"{self._cushion_val} ms",
+                                 lambda: self._step_cushion(-1), lambda: self._step_cushion(+1))
+                with dpg.child_window(auto_resize_x=True, auto_resize_y=True, border=True) as s:
+                    dpg.bind_item_theme(s, self._th["section"])
+                    with dpg.group(horizontal=True):
+                        _label("TRACK")
+                        dpg.add_checkbox(label="predict", default_value=True,
+                                         callback=lambda s, a: self._set_predict(bool(a)))
+                        dpg.add_checkbox(label="exclusive",
+                                         callback=lambda s, a: self.on_exclusive(bool(a)))
+                dpg.add_spacer(width=6)
+                rc = dpg.add_button(label="Recenter", width=120, height=40,
+                                    callback=lambda: self.on_recenter())
+                dpg.bind_item_theme(rc, self._th["btn_recenter"])
+                qt = dpg.add_button(label="Quit", width=90, height=40,
+                                    callback=lambda: self.on_quit())
+                dpg.bind_item_theme(qt, self._th["btn_quit"])
             with dpg.group(horizontal=True):   # row 2 — the test group only
-                # Test-source experiment layer (the console's T/O/R): a movable virtual sound for
-                # A/B-ing localization. Click the radar to place it, drag to move it continuously.
-                tst = dpg.add_text("TEST", color=_c(M.ACCENT))
-                with dpg.tooltip(tst):
-                    dpg.add_text("A movable virtual test sound for A/B-ing localization.\n"
-                                 "Click the radar to place it; drag to move it continuously.\n"
-                                 "source = on/off · solo = hear only it (mute the mix) · "
-                                 "orbit = auto-rotate it around you.")
-                dpg.add_checkbox(label="source", tag=self._src_cb,
-                                 callback=lambda s, a: self._set_test(bool(a)))
-                dpg.add_checkbox(label="solo", callback=lambda s, a: self._set_solo(bool(a)))
-                dpg.add_checkbox(label="orbit", callback=lambda s, a: self._set_rotate(bool(a)))
+                with dpg.child_window(auto_resize_x=True, auto_resize_y=True, border=True) as s:
+                    dpg.bind_item_theme(s, self._th["section"])
+                    with dpg.group(horizontal=True):
+                        # Test-source experiment layer (the console's T/O/R): a movable virtual
+                        # sound for A/B-ing localization. Click the radar to place/move it.
+                        tst = dpg.add_text("TEST", color=_c(M.ACCENT))
+                        with dpg.tooltip(tst):
+                            dpg.add_text("A movable virtual test sound for A/B-ing localization.\n"
+                                         "Click the radar to place it; drag to move it.\n"
+                                         "source = on/off · solo = hear only it (mute the mix) · "
+                                         "orbit = auto-rotate it around you.")
+                        self._chip(dpg, "source", "source", self._set_test)
+                        self._chip(dpg, "solo", "solo", self._set_solo)
+                        self._chip(dpg, "orbit", "orbit", self._set_rotate, amber=True)
         dpg.set_primary_window(self._win, True)
 
         # Height leaves room below the canvas for the controls row + titlebar, with a margin so a
         # high-DPI host (where the OS window is smaller in content px) doesn't clip the controls.
         # min size keeps the two controls rows on screen; the content scales to whatever is left.
-        dpg.create_viewport(title=self.title, width=CANVAS_W + 28, height=CANVAS_H + 160,
-                            min_width=720, min_height=520, clear_color=_c(M.BG))
+        # Wider + taller default than the old 1040×668: the enlarged settings row needs the width,
+        # and the taller CONTROLS_H needs the height. The canvas is width-limited here, so the extra
+        # width barely grows it (~1.17× fit) while the controls grow ~1.7× — exactly the ratio fix.
+        dpg.create_viewport(title=self.title, width=1620, height=CANVAS_H + 250,
+                            min_width=1280, min_height=600, clear_color=_c(M.BG))
         # Click / drag the radar to place and move the test source (the console's click-to-place).
         with dpg.handler_registry():
             dpg.add_mouse_click_handler(button=dpg.mvMouseButton_Left,
@@ -273,11 +294,13 @@ class CockpitWindow:
         self.on_predict(on)
 
     def set_cushion_display(self, ms: float) -> None:
-        """Seed the cushion slider with the engine's actual launch value (it isn't the default)."""
+        """Seed the cushion stepper with the engine's actual launch value (it isn't the default)."""
         try:
+            v = int(round(ms))
+            self._cushion_val = max(CUSHION_MIN, min(CUSHION_MAX, v))
             import dearpygui.dearpygui as dpg
-            if dpg.does_item_exist(self._cushion_sl):
-                dpg.set_value(self._cushion_sl, int(round(ms)))
+            if dpg.does_item_exist(self._cushion_txt):
+                dpg.set_value(self._cushion_txt, f"{v} ms")
         except Exception:  # noqa: BLE001
             pass
 
@@ -310,15 +333,16 @@ class CockpitWindow:
             pass
 
     def set_backend_display(self, backend: str) -> None:
-        """Snap the backend radio to the engine that is ACTUALLY running. The live app calls this
-        after a switch so a failed/declined request (e.g. GPU deps missing → CPU fallback, or a
-        'gpu' request mapped to rust for a synthesis method) never leaves the radio advertising a
-        backend the engine isn't on."""
+        """Light the segmented backend button for the engine that is ACTUALLY running. The live app
+        calls this after a switch so a failed/declined request (GPU deps missing → CPU fallback, or
+        'gpu' mapped to rust for a synthesis method) never leaves a segment advertising a backend
+        the engine isn't on."""
         try:
             import dearpygui.dearpygui as dpg
-            if dpg.does_item_exist(self._backend_rb) and dpg.get_value(self._backend_rb) != backend:
-                dpg.set_value(self._backend_rb, backend)
-        except Exception:  # noqa: BLE001 — the radio is a mirror of engine truth, never critical
+            for b, tag in self._backend_btns.items():
+                if dpg.does_item_exist(tag):
+                    dpg.bind_item_theme(tag, self._th["seg_on" if b == backend else "seg_off"])
+        except Exception:  # noqa: BLE001 — the segment is a mirror of engine truth, never critical
             pass
 
     def toast(self, message: str, kind: str = "error", *, seconds: float = 6.0) -> None:
@@ -331,15 +355,14 @@ class CockpitWindow:
         del self._toasts[:-3]  # keep at most the 3 most recent
 
     def set_test_state(self, on: bool, az: float) -> None:
-        """Reflect the live engine's test-source state on the radar + the 'source' checkbox (so a
+        """Reflect the live engine's test-source state on the radar + the 'source' chip (so a
         key/other UI change, or the engine's auto-rotation, keeps the view in sync)."""
         self._test_on = bool(on)
         self._test_az = float(az)
         try:
             import dearpygui.dearpygui as dpg
-            if dpg.does_item_exist(self._src_cb):
-                dpg.set_value(self._src_cb, bool(on))
-        except Exception:  # noqa: BLE001 — the checkbox is a convenience mirror, never critical
+            self._theme_chip(dpg, "source", bool(on))
+        except Exception:  # noqa: BLE001 — the chip is a convenience mirror, never critical
             pass
 
     def _radar_az_at(self, dx, dy):
@@ -371,7 +394,7 @@ class CockpitWindow:
             "display_sm": ("Rajdhani-SemiBold.ttf", 15),
             "mono": ("IBMPlexMono-Medium.ttf", self._mono_px),  # canvas atlas; large → crisp scaled
             "mono_sm": ("IBMPlexMono-Regular.ttf", 12),
-            "sans": ("IBMPlexSans-var.ttf", 15),
+            "sans": ("IBMPlexSans-var.ttf", CTRL_FONT_PX),
         }
         with dpg.font_registry():
             for key, (fname, size) in faces.items():
@@ -395,6 +418,87 @@ class CockpitWindow:
                 dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 5)
                 dpg.add_theme_style(dpg.mvStyleVar_WindowPadding, 10, 8)
         dpg.bind_theme(theme)
+
+    def _build_ctrl_themes(self, dpg) -> None:
+        """Themes that make the native strip look like the chosen mockup: boxed sections, a
+        segmented backend, chip toggles (rounded pills), and stepper buttons. Stored on ``self._th``
+        and bound per widget. Tints approximate the mockup's 16%-accent-over-panel2 fills."""
+        tint_accent = (32, 63, 75, 255)   # ~accent @16% over panel2
+        tint_amber = (62, 57, 52, 255)    # ~active @16% over panel2
+
+        def _btn(bg, fg, border, rounding):
+            with dpg.theme() as t:
+                with dpg.theme_component(dpg.mvButton):
+                    dpg.add_theme_color(dpg.mvThemeCol_Button, _c(bg))
+                    dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, _c(bg))
+                    dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, _c(bg))
+                    dpg.add_theme_color(dpg.mvThemeCol_Text, _c(fg))
+                    dpg.add_theme_color(dpg.mvThemeCol_Border, _c(border))
+                    dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, rounding)
+                    dpg.add_theme_style(dpg.mvStyleVar_FrameBorderSize, 1)
+            return t
+
+        with dpg.theme() as sec:   # boxed section (child window): panel bg, line border, rounded
+            with dpg.theme_component(dpg.mvChildWindow):
+                dpg.add_theme_color(dpg.mvThemeCol_ChildBg, _c(M.PANEL))
+                dpg.add_theme_color(dpg.mvThemeCol_Border, _c(M.LINE))
+                dpg.add_theme_style(dpg.mvStyleVar_ChildRounding, 8)
+                dpg.add_theme_style(dpg.mvStyleVar_ChildBorderSize, 1)
+                dpg.add_theme_style(dpg.mvStyleVar_WindowPadding, 11, 7)
+                dpg.add_theme_style(dpg.mvStyleVar_ItemSpacing, 8, 4)
+        self._th.update(
+            section=sec,
+            seg_on=_btn(M.ACCENT, M.BG, M.ACCENT, 5), seg_off=_btn(M.PANEL2, M.MUTED, M.LINE, 5),
+            chip_on=_btn(tint_accent, M.ACCENT, M.ACCENT, 13),
+            chip_on_amber=_btn(tint_amber, M.ACTIVE, M.ACTIVE, 13),
+            chip_off=_btn(M.PANEL2, M.MUTED, M.LINE, 13),
+            step=_btn(M.PANEL2, M.ACCENT, M.LINE, 5),
+            btn_recenter=_btn(M.PANEL2, M.ACTIVE, M.ACTIVE, 6),  # amber-outlined action
+            btn_quit=_btn(M.PANEL2, M.BAD, M.BAD, 6),            # red-outlined quit
+        )
+
+    def _seg_backend(self, dpg) -> None:
+        """A segmented cpu|rust|gpu control (touching buttons, active one accent-filled)."""
+        with dpg.group(horizontal=True, horizontal_spacing=0):
+            for b in ("cpu", "rust", "gpu"):
+                tag = f"ck_seg_{b}"
+                self._backend_btns[b] = tag
+                dpg.add_button(label=b, tag=tag, width=52,
+                               callback=lambda s, a, u=b: self.on_backend(u))
+                dpg.bind_item_theme(tag, self._th["seg_on" if b == "rust" else "seg_off"])
+
+    def _chip(self, dpg, name, label, setter, *, amber=False) -> None:
+        """A pill toggle button (off=muted, on=accent/amber) that mirrors a boolean engine state."""
+        tag = f"ck_chip_{name}"
+        self._chip_tags[name] = (tag, amber)
+
+        def _toggle(s, a, u=name):
+            on = not getattr(self, {"source": "_test_on", "solo": "_solo",
+                                    "orbit": "_rotate"}[u])
+            setter(on)
+            self._theme_chip(dpg, u, on)
+        dpg.add_button(label=label, tag=tag, callback=_toggle)
+        dpg.bind_item_theme(tag, self._th["chip_off"])
+
+    def _theme_chip(self, dpg, name, on) -> None:
+        tag, amber = self._chip_tags.get(name, (None, False))
+        if tag and dpg.does_item_exist(tag):
+            key = ("chip_on_amber" if amber else "chip_on") if on else "chip_off"
+            dpg.bind_item_theme(tag, self._th[key])
+
+    def _step_cushion(self, delta: int) -> None:
+        """± button on the cushion stepper: move CUSHION_STEP ms and fire ``on_cushion`` live."""
+        v = max(CUSHION_MIN, min(CUSHION_MAX, self._cushion_val + delta * CUSHION_STEP))
+        if v == self._cushion_val:
+            return
+        self._cushion_val = v
+        try:
+            import dearpygui.dearpygui as dpg
+            if dpg.does_item_exist(self._cushion_txt):
+                dpg.set_value(self._cushion_txt, f"{v} ms")
+        except Exception:  # noqa: BLE001
+            pass
+        self.on_cushion(float(v))
 
     # -------------------------------------------------- per-frame
     def running(self) -> bool:
