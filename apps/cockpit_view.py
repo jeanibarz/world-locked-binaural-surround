@@ -288,8 +288,11 @@ class CockpitWindow:
                                         ("shuffle", lambda: self._blind_shuffle()),
                                         ("prefer", lambda: self._blind_prefer()),
                                         ("reveal", lambda: self._blind_reveal())):
+                            # Pass the handler via user_data: Dear PyGui always calls a callback
+                            # with (sender, app_data, user_data), so a ``f=cb`` default would be
+                            # clobbered by the None user_data (the _seg_backend gotcha) → f=None.
                             btn = dpg.add_button(label=lbl, width=(46 if len(lbl) == 1 else 0),
-                                                 callback=lambda s, a, f=cb: f())
+                                                 user_data=cb, callback=lambda s, a, u: u())
                             dpg.bind_item_theme(btn, self._th["step"])
                         dpg.add_text("idle", tag=self._blind_txt, color=_c(M.MUTED))
         dpg.set_primary_window(self._win, True)
