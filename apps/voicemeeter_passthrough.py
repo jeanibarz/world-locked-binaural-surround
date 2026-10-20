@@ -69,6 +69,47 @@ from binaural_headtracker.surround import load_baked_brir
 from binaural_headtracker.tracking import HeadPose, PoseFilter
 from binaural_headtracker.world import layout_7p1
 
+_MMCSS_HANDLES: list = []  # keep MMCSS task handles alive for the process (dropping one reverts it)
+
+
+def _elevate_to_pro_audio() -> str:
+    """Register the CURRENT thread (the render worker) for pro-audio scheduling so the OS doesn't
+    preempt it for background work — the main cause of the render-deadline spikes that drop blocks.
+
+    Windows: MMCSS ``"Pro Audio"`` via ``avrt.dll`` (what DAWs use), then bump its MMCSS priority;
+    falls back to a time-critical thread priority if MMCSS is unavailable. No-op (and harmless) on
+    other platforms. Returns a short status for the startup log. The handle is kept alive for the
+    process — releasing it drops the thread back to normal scheduling."""
+    import sys
+    if not sys.platform.startswith("win"):
+        return "normal (non-Windows)"
+    import ctypes
+    from ctypes import wintypes
+    try:
+        avrt = ctypes.WinDLL("avrt")
+        avrt.AvSetMmThreadCharacteristicsW.restype = wintypes.HANDLE
+        avrt.AvSetMmThreadCharacteristicsW.argtypes = [wintypes.LPCWSTR,
+                                                       ctypes.POINTER(wintypes.DWORD)]
+        idx = wintypes.DWORD(0)
+        h = avrt.AvSetMmThreadCharacteristicsW("Pro Audio", ctypes.byref(idx))
+        if h:
+            try:  # AVRT_PRIORITY_HIGH = 1 — schedule above the MMCSS default
+                avrt.AvSetMmThreadPriority.argtypes = [wintypes.HANDLE, ctypes.c_int]
+                avrt.AvSetMmThreadPriority(h, 1)
+            except Exception:  # noqa: BLE001 — the characteristic alone is the main win
+                pass
+            _MMCSS_HANDLES.append(h)
+            return "MMCSS 'Pro Audio'"
+    except Exception:  # noqa: BLE001 — avrt missing/blocked → fall back to a plain priority bump
+        pass
+    try:
+        k32 = ctypes.WinDLL("kernel32")
+        k32.SetThreadPriority(k32.GetCurrentThread(), 15)  # THREAD_PRIORITY_TIME_CRITICAL
+        return "time-critical"
+    except Exception:  # noqa: BLE001
+        return "normal (elevation unavailable)"
+
+
 FG = (245, 237, 232)
 MUTED = (171, 151, 139)
 ACCENT = (214, 214, 56)
@@ -440,6 +481,8 @@ def main(argv=None) -> int:
 
     def render_worker() -> None:
         """Drain captured 7.1 → world-lock render → output FIFO, off the audio threads."""
+        prio = _elevate_to_pro_audio()  # pro-audio scheduling so the OS doesn't preempt the render
+        print(f"render thread: {prio} scheduling")
         while not stop_worker.is_set():
             with in_q_lock:
                 chunks = list(in_q)
