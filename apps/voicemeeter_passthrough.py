@@ -883,7 +883,37 @@ def main(argv=None) -> int:
             _set_hrir(cur_set["name"])   # reload the current subject under the new comp
 
         # --- blind localization test (RFC 0003 decider) -------------------------------
-        loc = {"test": None, "t0": None, "cache": {}}
+        from pathlib import Path as _Path
+        results_dir = (_Path(args.hrir_sets_dir).parent / "test_results"
+                       if args.hrir_sets_dir else _Path("test_results"))
+        try:
+            results_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:  # noqa: BLE001
+            pass
+        loc = {"test": None, "t0": None, "cache": {}, "comp": "ctf"}
+
+        def _write_loc_results(t):
+            """Persist a localization test: a per-trial CSV + a scoreboard JSON. Returns the JSON path."""
+            import csv as _csv
+            import datetime as _datetime
+            import json as _json
+            ts = _datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            base = results_dir / f"loc_{ts}"
+            with open(base.with_suffix(".csv"), "w", newline="") as f:
+                w = _csv.writer(f)
+                w.writerow(["trial", "set", "comp", "truth_az", "guess_az",
+                            "abs_err_deg", "fb_confusion", "rt_s"])
+                for i, tr in enumerate(t.trials):
+                    w.writerow([i, tr.set_name, loc["comp"], round(tr.truth_az, 1),
+                                "" if tr.guess_az is None else round(tr.guess_az, 1),
+                                "" if tr.abs_err_deg is None else round(tr.abs_err_deg, 1),
+                                int(tr.fb_confusion),
+                                "" if tr.rt_s is None else round(tr.rt_s, 2)])
+            base.with_suffix(".json").write_text(_json.dumps(
+                {"timestamp": ts, "comp": loc["comp"], "method": test["method"],
+                 "n_per_set": t.n_per_set, "total": t.total,
+                 "scoreboard": t.scoreboard(), "ranking": t.ranking()}, indent=2))
+            return base.with_suffix(".json")
 
         def _loc_renderer(hs):
             """Cached test-source renderer for a set + current comp (solo'd in the loc test)."""
@@ -909,13 +939,10 @@ def main(argv=None) -> int:
 
         def _loc_finish() -> None:
             t = loc["test"]
-            sb, rank = t.scoreboard(), t.ranking()
-            parts = []
-            for name in rank:
-                m = sb[name]
-                rt = f"{m['rt']:.1f}s" if m["rt"] is not None else "-"
-                parts.append(f"{name}: mae {m['mae']:.0f} fbc {m['fbc']:.0%} rt {rt} n{m['n']}")
-            win_ck.set_loc_status("  |  ".join(parts) + (f"   -> best: {rank[0]}" if rank else ""))
+            path = _write_loc_results(t)
+            rank = t.ranking()
+            win_ck.set_loc_status(f"done · best: {rank[0] if rank else '-'} · saved {path.name}")
+            win_ck.toast(f"loc results saved → {path}", "info", seconds=8)
             loc["test"] = None
             win_ck.set_loc_active(False)
             with lock:
@@ -931,6 +958,7 @@ def main(argv=None) -> int:
                 win_ck.toast(f"loc test prep failed: {exc}", "error")
                 return
             import random as _random
+            loc["comp"] = cur["comp"]     # pin the compensation for the whole session (for the log)
             loc["test"] = LocalizationTest.build([s.name for s in hrir_sets],
                                                  n_per_set=int(n), rng=_random.Random())
             win_ck.set_loc_active(True)
@@ -947,12 +975,31 @@ def main(argv=None) -> int:
         def _loc_stop() -> None:
             if loc["test"] is None:
                 return
+            t = loc["test"]
+            if any(tr.answered for tr in t.trials):
+                path = _write_loc_results(t)
+                win_ck.set_loc_status(f"stopped · partial saved {path.name}")
+                win_ck.toast(f"partial loc results saved → {path}", "info", seconds=8)
+            else:
+                win_ck.set_loc_status("stopped")
             loc["test"] = None
             win_ck.set_loc_active(False)
             with lock:
                 test["on"], test["solo"] = False, False
             _set_hrir(cur_set["name"])
-            win_ck.set_loc_status("stopped")
+
+        def _blind_result(mapping, tally) -> None:  # noqa: ANN001 — A/B reveal → log the result
+            import datetime as _datetime
+            import json as _json
+            ts = _datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            path = results_dir / f"ab_{ts}.json"
+            try:
+                path.write_text(_json.dumps(
+                    {"timestamp": ts, "comp": cur["comp"],
+                     "mapping": dict(mapping), "tally": dict(tally)}, indent=2))
+                win_ck.toast(f"A/B saved → {path}", "info", seconds=6)
+            except Exception as exc:  # noqa: BLE001
+                win_ck.toast(f"A/B save failed: {exc}", "error")
 
         win_ck.on_quit = lambda: q.__setitem__("stop", True)
         win_ck.on_recenter = _recenter
@@ -971,6 +1018,7 @@ def main(argv=None) -> int:
         win_ck.on_loc_start = _loc_start
         win_ck.on_loc_answer = _loc_answer
         win_ck.on_loc_stop = _loc_stop
+        win_ck.on_blind_result = _blind_result
         win_ck.set_hrir_sets([s.name for s in hrir_sets])   # seed the pills BEFORE setup()
         win_ck.setup()
         win_ck.set_cushion_display(args.latency_ms)  # slider → the real launch cushion, not 60

@@ -40,7 +40,7 @@ CAM_X, CAM_Y, CAM_W, CAM_H = 12, 12, 470, 300   # a touch narrower → more room
 RAD_X, RAD_Y, RAD_W, RAD_H = 496, 12, 300, 300
 LAG_X, LAG_Y, LAG_W, LAG_H = 810, 12, 190, 300  # wider STATUS box so its readouts fit on one line
 PANEL_Y = 324  # the wide latency panel under the camera/radar
-CONTROLS_H = 172  # height reserved below the scaled canvas for the two native controls rows
+CONTROLS_H = 234  # height reserved below the scaled canvas for the four native controls rows
 MARGIN = 10       # window padding kept around the scaled canvas
 CTRL_FONT_PX = 25  # the native-widget font size (≈1.7× the old 15) — the strip was tiny vs panels
 CUSHION_MIN, CUSHION_MAX, CUSHION_STEP = 20, 120, 10  # output-cushion ± stepper range (ms)
@@ -154,6 +154,7 @@ class CockpitWindow:
         self._comp_btns: dict[str, str] = {}
         self._blind = None
         self._blind_txt = "ck_blind_tally"
+        self.on_blind_result = lambda mapping, tally: None   # A/B reveal → log the result
         # Localization test (RFC 0003 decider): a source at a random azimuth through a
         # hidden set; a radar click is the answer while a test is active.
         self.on_loc_start = lambda n: None
@@ -277,7 +278,7 @@ class CockpitWindow:
                         self._chip(dpg, "source", "source", self._set_test)
                         self._chip(dpg, "solo", "solo", self._set_solo)
                         self._chip(dpg, "orbit", "orbit", self._set_rotate, amber=True)
-            with dpg.group(horizontal=True):   # row 3 — HRIR set switcher + blind A/B
+            with dpg.group(horizontal=True):   # row 3 — HRIR set + compensation
                 with dpg.child_window(auto_resize_x=True, auto_resize_y=True, border=True) as s:
                     dpg.bind_item_theme(s, self._th["section"])
                     with dpg.group(horizontal=True):
@@ -290,6 +291,7 @@ class CockpitWindow:
                             self._hrir_chip(dpg, nm)
                         dpg.add_text("comp", color=_c(M.MUTED))
                         self._seg_comp(dpg)
+            with dpg.group(horizontal=True):   # row 4 — blind A/B + localization test
                 with dpg.child_window(auto_resize_x=True, auto_resize_y=True, border=True) as s:
                     dpg.bind_item_theme(s, self._th["section"])
                     with dpg.group(horizontal=True):
@@ -333,8 +335,8 @@ class CockpitWindow:
         # Wider + taller default than the old 1040×668: the enlarged settings row needs the width,
         # and the taller CONTROLS_H needs the height. The canvas is width-limited here, so the extra
         # width barely grows it (~1.17× fit) while the controls grow ~1.7× — exactly the ratio fix.
-        dpg.create_viewport(title=self.title, width=1620, height=CANVAS_H + 305,
-                            min_width=1280, min_height=655, clear_color=_c(M.BG))
+        dpg.create_viewport(title=self.title, width=1620, height=CANVAS_H + 370,
+                            min_width=1280, min_height=720, clear_color=_c(M.BG))
         # Click / drag the radar to place and move the test source (the console's click-to-place).
         with dpg.handler_registry():
             dpg.add_mouse_click_handler(button=dpg.mvMouseButton_Left,
@@ -691,7 +693,8 @@ class CockpitWindow:
 
     def _blind_reveal(self) -> None:
         if self._blind is not None:
-            self._blind.reveal()
+            mp = self._blind.reveal()
+            self.on_blind_result(dict(mp), dict(self._blind.tally))
             self._blind_update()
 
     def _blind_update(self) -> None:
