@@ -296,11 +296,11 @@ class CockpitWindow:
     def set_cushion_display(self, ms: float) -> None:
         """Seed the cushion stepper with the engine's actual launch value (it isn't the default)."""
         try:
-            v = int(round(ms))
-            self._cushion_val = max(CUSHION_MIN, min(CUSHION_MAX, v))
+            self._cushion_val = max(CUSHION_MIN, min(CUSHION_MAX, int(round(ms))))
             import dearpygui.dearpygui as dpg
             if dpg.does_item_exist(self._cushion_txt):
-                dpg.set_value(self._cushion_txt, f"{v} ms")
+                # show the clamped value the stepper will actually step from, not the raw launch ms
+                dpg.set_value(self._cushion_txt, f"{self._cushion_val} ms")
         except Exception:  # noqa: BLE001
             pass
 
