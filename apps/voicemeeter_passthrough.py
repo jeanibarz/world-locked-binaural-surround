@@ -859,7 +859,8 @@ def main(argv=None) -> int:
                 win_ck.set_hrir_display(cur_set["name"])  # snap the pills back to what's playing
                 return
             label = (render_label(nm, test["method"]) if hs.is_owner
-                     else f"{getattr(nm, 'engine', 'cpu')} · {name} [{cur['comp']}] · dense ({nm.n_bus} pts)")
+                     else f"{getattr(nm, 'engine', 'cpu')} · {name} [{cur['comp']}] · "
+                          f"dense ({nm.n_bus} pts)")
             with lock:
                 main_rend["r"], main_rend["label"] = nm, label
                 test_renderers.clear()

@@ -512,9 +512,13 @@ _(the chain appends here as it learns)_
       timer*, NOT the device `GetPosition`** — so a pull-driven *position* alone does not perturb
       audiodg (one less risk). Verified rigorously (no-op check + driver-hash: caught that early
       PASSes ran a cached baseline; Windows caches by `DriverVer` — must bump it each build).
-    - [ ] **B-pre finish:** make the **notification timer** bursty/pull-driven + re-measure; and read
-      **`IAudioClock`** directly for A-V-sync monotonicity under a bursty position. Rig in
-      `spikes/bpre-vm/`. _(RFC Track B)_
+    - [~] **Notification cadence tested (journal 58):** drove the real pacing seam (`TimerNotifyRT`).
+      The **representative** pull-driven cadence (notifications rate-matched but jittered, 1-in-4
+      delay) is **CLEAN app-side** — encouraging. Also found audiodg **decouples the app from the
+      device** via its shared buffer, so the app-side probe can't see device-output faults.
+    - [ ] **B-pre definitive:** device-level measurement under the 1:1-jittered cadence (SYSVAD
+      `SaveData` output-continuity, or ETW glitch count) + a direct `IAudioClock` A-V-sync read.
+      Then proceed to the real pull-driven device. Rig in `spikes/bpre-vm/`. _(RFC Track B)_
 - [x] **B8.8** **Reduce the `queue` term — measured: no cheap win, it trades off against audible
   glitches; folds into B8.7.** _(**Measured** on the host via interop, journal 48:
   `scratchpad/queue_probe.py` reproduces the passthrough's loopback-capture → burst-drain worker →
