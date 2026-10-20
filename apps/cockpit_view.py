@@ -268,9 +268,9 @@ class CockpitWindow:
         # Click / drag the radar to place and move the test source (the console's click-to-place).
         with dpg.handler_registry():
             dpg.add_mouse_click_handler(button=dpg.mvMouseButton_Left,
-                                        callback=lambda s, a: self._place_from_mouse(dpg))
+                                        callback=lambda s, a: self._click_radar(dpg))
             dpg.add_mouse_drag_handler(button=dpg.mvMouseButton_Left,
-                                       callback=lambda s, a: self._place_from_mouse(dpg))
+                                       callback=lambda s, a: self._drag_radar(dpg))
 
         dpg.setup_dearpygui()
         dpg.show_viewport()
@@ -375,18 +375,49 @@ class CockpitWindow:
             return None
         return math.degrees(math.atan2(cx - dx, cy - dy))
 
-    def _place_from_mouse(self, dpg) -> None:
+    def _radar_az(self, dpg):
+        """World azimuth (deg) under the mouse when it's over the radar, else None.
+
+        Gated on the canvas child actually being hovered: the mouse handlers are GLOBAL (fire on
+        any click), and ``get_drawing_mouse_pos`` returns drawlist-relative coords even when the
+        click was on a control below the canvas — without this gate, clicking a button (e.g. the
+        'source' chip) would also run the radar toggle and cancel the button's own action."""
         try:
+            if not dpg.is_item_hovered(self._host):
+                return None
             mx, my = dpg.get_drawing_mouse_pos()  # drawlist-local coords (0..canvas)
         except Exception:  # noqa: BLE001 — not over the drawlist
-            return
+            return None
         k = self._k or 1.0
-        az = self._radar_az_at(mx / k, my / k)  # back to design space
-        if az is not None:
+        return self._radar_az_at(mx / k, my / k)  # back to design space
+
+    def _click_radar(self, dpg) -> None:
+        """A click on the radar TOGGLES the test source: off → on (placed at the clicked azimuth),
+        on → off. Drag still moves it (``_drag_radar``). The 'source' chip follows either way, so
+        placing a source lights the button and clicking again turns both off together."""
+        az = self._radar_az(dpg)
+        if az is None:
+            return  # the click wasn't on the radar — leave the source as it is
+        if self._test_on:
+            self._test_on = False
+            self.on_test(False)
+        else:
             self._test_on = True
             self._test_az = float(az)
             self.on_test(True)
             self.on_place_test(float(az))
+        self._theme_chip(dpg, "source", self._test_on)
+
+    def _drag_radar(self, dpg) -> None:
+        """A drag on the radar places/moves the test source (always on); keeps the chip lit."""
+        az = self._radar_az(dpg)
+        if az is None:
+            return
+        self._test_on = True
+        self._test_az = float(az)
+        self.on_test(True)
+        self.on_place_test(float(az))
+        self._theme_chip(dpg, "source", True)
 
     def _load_fonts(self, dpg) -> None:
         faces = {
@@ -458,25 +489,31 @@ class CockpitWindow:
         )
 
     def _seg_backend(self, dpg) -> None:
-        """A segmented cpu|rust|gpu control (touching buttons, active one accent-filled)."""
+        """A segmented cpu|rust|gpu control (touching buttons, active one accent-filled).
+
+        The backend is passed through ``user_data`` and read as the callback's 3rd arg — Dear PyGui
+        always calls a callback with (sender, app_data, user_data), so a ``u=b`` default would be
+        clobbered by the None user_data and every segment would fire ``on_backend(None)``."""
         with dpg.group(horizontal=True, horizontal_spacing=0):
             for b in ("cpu", "rust", "gpu"):
                 tag = f"ck_seg_{b}"
                 self._backend_btns[b] = tag
-                dpg.add_button(label=b, tag=tag, width=52,
-                               callback=lambda s, a, u=b: self.on_backend(u))
+                dpg.add_button(label=b, tag=tag, width=52, user_data=b,
+                               callback=lambda s, a, u: self.on_backend(u))
                 dpg.bind_item_theme(tag, self._th["seg_on" if b == "rust" else "seg_off"])
 
     def _chip(self, dpg, name, label, setter, *, amber=False) -> None:
         """A pill toggle button (off=muted, on=accent/amber) that mirrors a boolean engine state."""
         tag = f"ck_chip_{name}"
         self._chip_tags[name] = (tag, amber)
+        attr = {"source": "_test_on", "solo": "_solo", "orbit": "_rotate"}[name]
 
-        def _toggle(s, a, u=name):
-            on = not getattr(self, {"source": "_test_on", "solo": "_solo",
-                                    "orbit": "_rotate"}[u])
+        # ``*_`` swallows Dear PyGui's (sender, app_data, user_data); ``name``/``attr``/``setter``
+        # are closed over (this runs once per chip, not in a loop, so late-binding isn't a risk).
+        def _toggle(*_):
+            on = not getattr(self, attr)
             setter(on)
-            self._theme_chip(dpg, u, on)
+            self._theme_chip(dpg, name, on)
         dpg.add_button(label=label, tag=tag, callback=_toggle)
         dpg.bind_item_theme(tag, self._th["chip_off"])
 
@@ -916,6 +953,7 @@ def run_preview() -> int:
     win = CockpitWindow()
     quit_flag = {"q": False}
     win.on_quit = lambda: quit_flag.__setitem__("q", True)
+    win.on_backend = win.set_backend_display  # preview: clicking a segment lights it (as the app)
     win.setup()
     win.set_test_state(True, 60.0)  # preview: show the test source so the radar marker is visible
     # demo the backend-switch toasts so their look can be judged on the host (real app fires these
