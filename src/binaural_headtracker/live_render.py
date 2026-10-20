@@ -528,7 +528,7 @@ class InterpWorldLocked7p1:
 
     def __init__(self, brir: BakedBRIRSet, method: str = "timealign", *, block_size: int = 256,
                  fade_ms: float = 20.0, grid_step: float = 10.0, lfe_mode: str = "brir",
-                 use_rust: bool = False) -> None:
+                 use_rust: bool = False, use_gpu: bool = False) -> None:
         if lfe_mode not in ("brir", "flat"):
             raise ValueError("lfe_mode must be 'brir' or 'flat'")
         self._brir = brir
@@ -544,15 +544,30 @@ class InterpWorldLocked7p1:
         fade_samples = max(1, round(fade_ms * 1e-3 * brir.samplerate))
         self._mixer = BusMixer(len(self._dir_idx), self._dense.n_channels,
                                fade_samples=fade_samples)
-        if use_rust:
-            import binaural_kernel
-            self._conv = binaural_kernel.BusConvolver(
-                np.ascontiguousarray(self._dense.left, dtype=np.float64),
-                np.ascontiguousarray(self._dense.right, dtype=np.float64), self._block)
-            self._rust = True
-        else:
-            self._conv = StereoConvolver(self._dense.left, self._dense.right, self._block)
-            self._rust = False
+        # Convolution backend over the dense grid. The GPU (CuPy) convolver and the Rust kernel
+        # share the ``.process((n_grid, block)) -> (block, 2)`` interface (``self._direct``); the
+        # pure-Python StereoConvolver takes the transpose. ``use_gpu`` tries the GPU first — it is
+        # just GpuBusConvolver over the grid instead of the 8 speakers (same op, more buses) — and
+        # falls back to rust (if ``use_rust``) or CPU when CuPy is missing, so a 'gpu' request never
+        # silently drops to the sub-real-time pure-Python path on a host that also has the kernel.
+        self._engine = "cpu"
+        self._direct = False
+        if use_gpu:
+            try:
+                from binaural_headtracker.gpu_render import GpuBusConvolver
+                self._conv = GpuBusConvolver(self._dense, self._block)
+                self._engine, self._direct = "gpu", True
+            except Exception:  # noqa: BLE001 — no CuPy/CUDA → fall through to rust or CPU
+                pass
+        if self._engine == "cpu":
+            if use_rust:
+                import binaural_kernel
+                self._conv = binaural_kernel.BusConvolver(
+                    np.ascontiguousarray(self._dense.left, dtype=np.float64),
+                    np.ascontiguousarray(self._dense.right, dtype=np.float64), self._block)
+                self._engine, self._direct = "rust", True
+            else:
+                self._conv = StereoConvolver(self._dense.left, self._dense.right, self._block)
         self._lfe_idx = brir.channels.index("LFE") if "LFE" in brir.channels else None
         self._lfe = None
         self._lfe_gain = (0.0, 0.0)
@@ -575,8 +590,8 @@ class InterpWorldLocked7p1:
 
     @property
     def engine(self) -> str:
-        """Which convolution backend this renderer actually built — ``'rust'`` or ``'cpu'``."""
-        return "rust" if self._rust else "cpu"
+        """Which convolution backend actually built — ``'gpu'`` / ``'rust'`` / ``'cpu'``."""
+        return self._engine
 
     @property
     def method(self) -> str:
@@ -604,9 +619,9 @@ class InterpWorldLocked7p1:
         az = np.asarray(azimuths, dtype=np.float64).reshape(-1)
         targets = np.array([self._nearest_grid(float(az[i])) for i in self._dir_idx], dtype=np.intp)
         bus_in = self._mixer.mix(pcm[:, self._dir_idx], targets)  # (n_grid, block)
-        if self._rust:
+        if self._direct:  # GPU / Rust: (n_grid, block) → (block, 2)
             out = np.asarray(self._conv.process(np.ascontiguousarray(bus_in)))
-        else:
+        else:  # pure-Python StereoConvolver takes the transpose
             out = self._conv.process_block(np.ascontiguousarray(bus_in.T))
         if self._lfe_idx is not None:
             lfe = pcm[:, self._lfe_idx]
