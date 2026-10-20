@@ -506,8 +506,15 @@ _(the chain appends here as it learns)_
     - [ ] **Driver toolchain via EWDK** (journal 56): host VS2022 is 17.0.6 — too old for WDK 26100
       (MSB8020, no driver toolset). Using the isolated Win11 25H2 EWDK (VS BuildTools 17.14) so the
       owner's VS is untouched; downloading. Then baseline-build `sysvad.sln`.
-    - [ ] **B-pre:** pseudo-K11 drives the SYSVAD-fork pull-driven position; a 48 kHz app renders 7.1
-      in; confirm audiodg tolerates it (no silence/disconnect, monotonic `IAudioClock`). Make-or-break.
+    - [~] **B-pre (journal 57): the whole rig works + a key finding.** Built→signed→loaded the SYSVAD
+      driver in the VM, modified its position to bursty/pull-driven, measured via a Python/WASAPI
+      probe in the VM. **Finding: audiodg's shared-mode pacing is driven by the WaveRT *notification
+      timer*, NOT the device `GetPosition`** — so a pull-driven *position* alone does not perturb
+      audiodg (one less risk). Verified rigorously (no-op check + driver-hash: caught that early
+      PASSes ran a cached baseline; Windows caches by `DriverVer` — must bump it each build).
+    - [ ] **B-pre finish:** make the **notification timer** bursty/pull-driven + re-measure; and read
+      **`IAudioClock`** directly for A-V-sync monotonicity under a bursty position. Rig in
+      `spikes/bpre-vm/`. _(RFC Track B)_
 - [x] **B8.8** **Reduce the `queue` term — measured: no cheap win, it trades off against audible
   glitches; folds into B8.7.** _(**Measured** on the host via interop, journal 48:
   `scratchpad/queue_probe.py` reproduces the passthrough's loopback-capture → burst-drain worker →

@@ -900,7 +900,7 @@ def main(argv=None) -> int:
             for name in rank:
                 m = sb[name]
                 rt = f"{m['rt']:.1f}s" if m["rt"] is not None else "-"
-                parts.append(f"{name}: err {m['mae']:.0f}deg fbc {m['fbc']*100:.0f}% rt {rt} (n={m['n']})")
+                parts.append(f"{name}: mae {m['mae']:.0f} fbc {m['fbc']:.0%} rt {rt} n{m['n']}")
             win_ck.set_loc_status("  |  ".join(parts) + (f"   -> best: {rank[0]}" if rank else ""))
             loc["test"] = None
             win_ck.set_loc_active(False)

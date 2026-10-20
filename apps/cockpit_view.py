@@ -309,10 +309,11 @@ class CockpitWindow:
                         ll = dpg.add_text("LOC TEST", color=_c(M.ACCENT))
                         with dpg.tooltip(ll):
                             dpg.add_text("Blind localization test: a source plays at a random\n"
-                                         "azimuth through a hidden set — click the radar where you\n"
+                                         "azimuth through a hidden set — click the radar where\n"
                                          "hear it (move your head if unsure). Scored per set on\n"
                                          "accuracy + response time; best set wins.")
-                        st = dpg.add_button(label="start", callback=lambda: self.on_loc_start(self._loc_n))
+                        st = dpg.add_button(label="start",
+                                            callback=lambda: self.on_loc_start(self._loc_n))
                         dpg.bind_item_theme(st, self._th["step"])
                         sp = dpg.add_button(label="stop", callback=lambda: self.on_loc_stop())
                         dpg.bind_item_theme(sp, self._th["step"])
