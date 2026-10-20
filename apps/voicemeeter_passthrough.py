@@ -623,6 +623,14 @@ def main(argv=None) -> int:
     in_stream = pya.open(format=pawp.paFloat32, channels=in_ch, rate=brir.samplerate,
                          input=True, input_device_index=lb["index"],
                          frames_per_buffer=args.block, stream_callback=pa_in_cb)
+    # Move the big, long-lived graph (BRIRs, dense grids, renderers, FFT plans) out of the GC's
+    # generational scanning: a routine collection landing mid-block is a render-deadline spike, and
+    # after setup that graph is static. freeze() keeps it out of every future sweep (so sweeps stay
+    # cheap) without disabling GC — transient per-block allocations and live-rebuilt renderers are
+    # still collected normally. See AGENTS.md perf notes.
+    import gc
+    gc.collect()
+    gc.freeze()
     worker = threading.Thread(target=render_worker, name="render", daemon=True)
     worker.start()
     in_stream.start_stream()
