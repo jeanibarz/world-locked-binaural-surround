@@ -528,15 +528,24 @@ class InterpWorldLocked7p1:
 
     def __init__(self, brir: BakedBRIRSet, method: str = "timealign", *, block_size: int = 256,
                  fade_ms: float = 20.0, grid_step: float = 10.0, lfe_mode: str = "brir",
+                 dense_override: "tuple[BakedBRIRSet, dict[int, float]] | None" = None,
                  use_rust: bool = False, use_gpu: bool = False) -> None:
         if lfe_mode not in ("brir", "flat"):
             raise ValueError("lfe_mode must be 'brir' or 'flat'")
         self._brir = brir
         self._block = int(block_size)
         self._lfe_mode = lfe_mode
-        self._method = str(method)
         self._grid_step = float(grid_step)
-        self._dense, az = interpolated_ring(brir, method, step_deg=grid_step)
+        if dense_override is not None:
+            # A pre-built **dense grid of REAL measured directions** (e.g. a
+            # transplanted database subject, RFC 0003) — steered by nearest lookup,
+            # no synthesis. ``brir`` is used only for the 7.1 input routing + LFE;
+            # the directional field comes entirely from this grid.
+            self._dense, az = dense_override
+            self._method = "nearest"
+        else:
+            self._method = str(method)
+            self._dense, az = interpolated_ring(brir, method, step_deg=grid_step)
         self._grid_az = np.array([az[i] for i in range(self._dense.n_channels)], dtype=np.float64)
         self._dir_idx = [brir.channels.index(c) for c in RING_CHANNELS if c in brir.channels]
         if not self._dir_idx:
