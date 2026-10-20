@@ -173,6 +173,11 @@ def main(argv=None) -> int:
     p.add_argument("--exclusive", action="store_true",
                    help="open the output in WASAPI exclusive mode (smallest device buffer, ~13 vs "
                         "~22 ms shared); falls back to shared if the device refuses it")
+    p.add_argument("--out-latency-ms", type=float, default=None,
+                   help="requested output DEVICE buffer (ms). Default picks the host-native 'low' "
+                        "latency (smallest). In exclusive mode that minimum has no slack and can "
+                        "underrun — raise this (e.g. 8–12) to add buffer periods back while still "
+                        "beating shared mode's ~22 ms.")
     p.add_argument("--no-dialog", action="store_true", help="skip the picker, use the flags")
     p.add_argument("--block", type=int, default=512, help="render block size (bigger = steadier)")
     p.add_argument("--fade-ms", type=float, default=20.0)
@@ -635,10 +640,14 @@ def main(argv=None) -> int:
     worker.start()
     in_stream.start_stream()
 
+    # Requested output buffer: ``--out-latency-ms`` in seconds, else 'low' (host-native minimum).
+    # Raising it in exclusive mode trades a little latency for the slack the minimum buffer lacks.
+    out_lat_req = (args.out_latency_ms / 1000.0) if args.out_latency_ms else "low"
+
     def _open_output(exclusive: bool):
         extra = sd.WasapiSettings(exclusive=True) if exclusive else None
         ctx = sd.OutputStream(samplerate=brir.samplerate, channels=2, device=out_index,
-                              blocksize=0, dtype="float32", latency="low", callback=out_cb,
+                              blocksize=0, dtype="float32", latency=out_lat_req, callback=out_cb,
                               extra_settings=extra)
         ctx.start()
         return ctx
@@ -648,13 +657,14 @@ def main(argv=None) -> int:
     # in use), so fall back to shared and say so rather than failing to start.
     try:
         out_ctx = _open_output(args.exclusive)
-        if args.exclusive:
-            print(f"output: WASAPI exclusive ({out_ctx.latency * 1000:.0f} ms device buffer)")
+        mode = "exclusive" if args.exclusive else "shared"
+        print(f"output: WASAPI {mode} ({out_ctx.latency * 1000:.0f} ms device buffer)")
     except Exception as exc:  # noqa: BLE001
         if not args.exclusive:
             raise
         print(f"WASAPI exclusive unavailable ({exc!r}); using shared mode.")
         out_ctx = _open_output(False)
+        print(f"output: WASAPI shared ({out_ctx.latency * 1000:.0f} ms device buffer)")
     def _run_cockpit() -> bool:
         """Drive the live engine through the Dear PyGui cockpit (B6.12 slice 2).
 
