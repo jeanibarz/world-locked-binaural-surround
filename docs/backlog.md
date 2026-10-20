@@ -459,16 +459,27 @@ _(the chain appends here as it learns)_
   gained opt-in `--exclusive` (falls back to shared) and the launcher uses it. This — plus the
   MME→WASAPI resolver fix (B8.5c) — took **head-move→ear to p50 35–46 ms, under the ~50 ms
   threshold**, with no DSP change. Measured via the component-split bench, B8.5b.)_
-- [ ] **B8.7** (RFC) **Eliminate VoiceMeeter via an EqualizerAPO VST.** The capture-side
-  virtual-cable buffer (~128 ms, a VoiceMeeter/VB setting) delays *audio content* / A-V sync but
-  **not** head-tracking (pose is applied fresh at render — journal 44). To remove it entirely, run
-  the binaural render as a **VST inside EqualizerAPO** on a 7.1-configured FiiO endpoint (single
-  engine clock, no loopback, no second app), with the camera tracker feeding pose over shared
-  memory and the Rust kernel wrapped as the plugin. Lowest-latency architecture. **Now also the only
-  clean way to cut the `queue` term** (B8.8/journal 48): a single engine clock removes the two-clock
-  drift, so the output cushion can be small without glitching — the two-clock loopback can't (its FIFO
-  is both the latency and the drift-absorber). So B8.7 is no longer just A-V sync; it's the head-latency
-  floor below ~70 ms too. _(owner question, journal 44; promoted by B8.8, journal 48)_
+- [x] **B8.7** (RFC) ~~**Eliminate VoiceMeeter via an EqualizerAPO VST.**~~ **SUPERSEDED — premise
+  invalid.** The EqualizerAPO-VST-on-a-"7.1 FiiO endpoint" plan is physically impossible: the K11 is a
+  **stereo** USB DAC, so Windows can expose only 2 channels on it (an 8-channel virtual render endpoint
+  is *mandatory* to receive 7.1), and an APO is in-pipeline DSP on **one** endpoint — it cannot route
+  audio between devices. The "7.1-configured FiiO endpoint" was an aspiration that was never possible,
+  not a tested config. Two further corrections from the review: (1) the real live baseline is **~70 ms**
+  (the 35–46 ms in B0.5 was the *synthetic* bench; its 35 ms was WASAPI **exclusive**, reverted as
+  glitchy in journal 45); (2) a custom device does **not** give "one clock end-to-end" and does **not**
+  improve head-move→ear — apps keep their own content clock, so the resampler is relocated, not removed.
+  Replaced by **RFC `docs/rfc/rfc-single-clock-virtual-driver.md`** (journal 51), which splits the work
+  into two latency levers: **Track A** — async drift-compensating resampler/servo in the existing bridge
+  (user-mode, cuts the live `queue` term; the B8.8 alternative, now the primary first step); **Track B**
+  — a custom virtual 7.1 capture surface replacing VoiceMeeter (cuts the ~128 ms content/A-V buffer; the
+  only lever Track A can't reach), gated on a VM `audiodg`-tolerance pre-test. Owner decision
+  (2026-10-20): latency is the goal, VoiceMeeter-removal a means; mixed video/game/music playback so
+  content/A-V latency counts → both tracks justified, Track A first. _(owner question journal 44;
+  promoted by B8.8 journal 48; superseded by the RFC + journal 51)_
+  - [ ] **B8.7a** Track A — async resampler/servo (A0 diagnose skew-vs-jitter on host → A1 servo behind
+    a `FrameSource` seam; host + K11 verification is the owner's). _(RFC Track A)_
+  - [ ] **B8.7b** Track B — custom virtual 7.1 driver, gated on B-pre (VM: does `audiodg` tolerate a
+    pull-driven WaveRT position?). _(RFC Track B)_
 - [x] **B8.8** **Reduce the `queue` term — measured: no cheap win, it trades off against audible
   glitches; folds into B8.7.** _(**Measured** on the host via interop, journal 48:
   `scratchpad/queue_probe.py` reproduces the passthrough's loopback-capture → burst-drain worker →
@@ -482,8 +493,10 @@ _(the chain appends here as it learns)_
   two-clock loopback the FIFO depth is both the latency and the drift-absorber (512@40 = 0 drops
   proves more cushion = clean), so you can't shrink `queue` without raising the glitch rate. WASAPI
   shared's resampling (journal 45) puts 512@20 near the clean floor for this architecture. **The only
-  clean way lower is to remove the two-clock drift: B8.7** (EqualizerAPO VST, single engine clock, no
-  loopback) or an async drift-compensating resampler — so B8.8 folds into B8.7, not a flag change.
+  clean way lower is to remove the two-clock drift** via an async drift-compensating resampler
+  (**RFC Track A / B8.7a**) — so B8.8 folds into Track A, not a flag change. _(The sibling note that an
+  EqualizerAPO-VST single-clock endpoint was the other route is void — see the superseded B8.7 above;
+  that endpoint is physically impossible on the stereo K11.)_
   _(journals 46/47/48; the queue lever journal 46 named, B8.6 skipped, and the measurement closed.)_
 - [x] **B0.6** Complete the **measured** virtual round-trip latency: once a
   loopback route exists — VoiceMeeter VAIO strip → bus **B1**, or a dedicated
