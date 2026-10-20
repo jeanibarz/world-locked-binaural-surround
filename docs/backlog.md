@@ -516,9 +516,16 @@ _(the chain appends here as it learns)_
       The **representative** pull-driven cadence (notifications rate-matched but jittered, 1-in-4
       delay) is **CLEAN app-side** — encouraging. Also found audiodg **decouples the app from the
       device** via its shared buffer, so the app-side probe can't see device-output faults.
-    - [ ] **B-pre definitive:** device-level measurement under the 1:1-jittered cadence (SYSVAD
-      `SaveData` output-continuity, or ETW glitch count) + a direct `IAudioClock` A-V-sync read.
-      Then proceed to the real pull-driven device. Rig in `spikes/bpre-vm/`. _(RFC Track B)_
+    - [x] **B-pre PASSED (journal 59).** Device-level measurement (SYSVAD `SaveData` → analyse the
+      consumed WAV): under the representative bursty pull-driven cadence the **device output is CLEAN**
+      (0 gaps, 0 discontinuities), baseline is CLEAN, and a deliberately-injected defect is caught (6
+      jumps) → the measurement is sensitive, so the PASS is trustworthy. audiodg tolerates driving the
+      device from an external consumer via bursty notifications. The RFC's core Track-B risk is retired.
+    - [ ] **Build the real pull-driven device (B1→B3):** replace the timer with consumption+notification
+      driven by a user-mode consumer (software pseudo-K11 → real K11) over the SPSC ring + `advance()`
+      seam; Rust DSP behind `FrameSource`/`ClockSink`; 7.1@48k; stall-watchdog + engine-absent safety;
+      VM first, then host + K11. Optional: confirm `IAudioClock` A-V monotonicity. Rig in
+      `spikes/bpre-vm/`. _(RFC Track B)_
 - [x] **B8.8** **Reduce the `queue` term — measured: no cheap win, it trades off against audible
   glitches; folds into B8.7.** _(**Measured** on the host via interop, journal 48:
   `scratchpad/queue_probe.py` reproduces the passthrough's loopback-capture → burst-drain worker →
