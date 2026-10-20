@@ -223,7 +223,7 @@ class LocalizationTest:
 
     @classmethod
     def build(cls, sets, n_per_set: int = 25, *, rng: random.Random | None = None,
-              azimuths: list[float] | None = None) -> "LocalizationTest":
+              azimuths: list[float] | None = None) -> LocalizationTest:
         """Build a shuffled, set-interleaved trial list. ``azimuths`` is an optional pool
         of candidate truth angles (else uniform random over the full circle)."""
         r = rng or random
