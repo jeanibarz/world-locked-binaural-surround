@@ -486,8 +486,16 @@ _(the chain appends here as it learns)_
       essentially none → it would not cut the queue term. Not built.
     - [ ] **A0-followup (cheap, do first): lower the VoiceMeeter / VB-CABLE buffering** (the burst
       size A0 pinned as the cause; owner previously declined — revisit). _(RFC Alternatives §5)_ _(RFC Track A)_
-  - [ ] **B8.7b** Track B — custom virtual 7.1 driver, gated on B-pre (VM: does `audiodg` tolerate a
-    pull-driven WaveRT position?). _(RFC Track B)_
+  - [ ] **B8.7b** Track B — custom virtual 7.1 driver (owner committed, 2026-10-20). _(RFC Track B)_
+    - [x] **Pre-M1 study (journal 53):** host is Win10 Pro 22H2 → SYSVAD/WaveRT (not ACX). SYSVAD's
+      `UpdatePosition()` is the single position seam; stock `GetPosition` already QPC-samples on
+      demand, so a **pull-driven** position is a surgical change and audiodg intolerance looks less
+      likely than feared (still the B-pre question). Feasible + localized.
+    - [ ] **BLOCKER — owner setup (admin):** install the **WDK** (no km headers present) + create a
+      **Hyper-V VM** with test-signing (kept off the host). Runbook in journal 53. B-pre can't start
+      until both exist.
+    - [ ] **B-pre:** pseudo-K11 drives the SYSVAD-fork pull-driven position; a 48 kHz app renders 7.1
+      in; confirm audiodg tolerates it (no silence/disconnect, monotonic `IAudioClock`). Make-or-break.
 - [x] **B8.8** **Reduce the `queue` term — measured: no cheap win, it trades off against audible
   glitches; folds into B8.7.** _(**Measured** on the host via interop, journal 48:
   `scratchpad/queue_probe.py` reproduces the passthrough's loopback-capture → burst-drain worker →
