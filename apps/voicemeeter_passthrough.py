@@ -890,6 +890,20 @@ def main(argv=None) -> int:
             results_dir.mkdir(parents=True, exist_ok=True)
         except Exception:  # noqa: BLE001
             pass
+
+        # Session telemetry (B*): sample the live health + current settings to a JSONL every few
+        # seconds, so issues (underruns/overruns, latency creep, render overload) and the settings
+        # tried over time are recoverable after the fact for diagnosis. Line-buffered so a crash
+        # keeps the data; failures here never touch the audio path.
+        import datetime as _dt_tel
+        import json as _json_tel
+        _sess_ts = _dt_tel.datetime.now().strftime("%Y%m%d_%H%M%S")
+        telem = {"last": 0.0, "every": 3.0, "t0": time.monotonic(), "fh": None}
+        try:
+            telem["fh"] = open(results_dir / f"session_{_sess_ts}.jsonl", "a", buffering=1)
+        except Exception:  # noqa: BLE001
+            telem["fh"] = None
+
         loc = {"test": None, "t0": None, "cache": {}, "comp": "ctf"}
 
         def _write_loc_results(t):
@@ -1114,6 +1128,36 @@ def main(argv=None) -> int:
                     measured_pose_age_n=ear.n, measured_stale_ms=stale_probe.stats().p50,
                     measured_queue_ms=queue_probe.stats().p50, measured_device_ms=out_lat_ms,
                     detect_ms=detect_ms, camera_fps=cam_fps, cam_w=cam_w, cam_h=cam_h)
+                if telem["fh"] is not None and now - telem["last"] >= telem["every"]:
+                    telem["last"] = now
+                    try:
+                        telem["fh"].write(_json_tel.dumps({
+                            "t": _dt_tel.datetime.now().isoformat(timespec="seconds"),
+                            "uptime_s": round(now - telem["t0"], 1),
+                            "settings": {
+                                "block": blk["n"], "cushion_blocks": cushion,
+                                "method": test["method"], "backend": cur["backend"],
+                                "comp": cur["comp"], "hrir_set": cur_set["name"],
+                                "predict": cur["predict"], "exclusive": bool(args.exclusive),
+                                "grid_step": args.grid_step, "render": rlabel},
+                            "stats": {
+                                "lat_p50_ms": round(ear.p50, 1) if ear.n else None,
+                                "lat_p95_ms": round(ear.p95, 1) if ear.n else None,
+                                "lat_p99_ms": round(ear.p99, 1) if ear.n else None, "lat_n": ear.n,
+                                "stale_ms": round(stale_probe.stats().p50, 1),
+                                "queue_ms": round(queue_probe.stats().p50, 1),
+                                "device_ms": round(out_lat_ms, 1),
+                                "render_ms": round(meter["ms"], 2),
+                                "render_peak_ms": round(meter["peak"], 2),
+                                "render_budget_ms": round(1000.0 * blk["n"] / brir.samplerate, 2),
+                                "fifo_fill_blocks": fifo_fill,
+                                "underruns_2s": recent_under, "overruns_2s": recent_over,
+                                "underruns_buf": len(meter["under_ts"]),
+                                "overruns_buf": len(meter["over_ts"]),
+                                "health": str(getattr(diag, "health", "") or ""),
+                                "tracker_hz": round(rate, 1)}}) + "\n")
+                    except Exception:  # noqa: BLE001 — telemetry must never crash the app
+                        pass
                 view = CM.build_view(
                     diag, latency_samples=ear_probe.samples(), rate_hz=rate,
                     method=test["method"], backend=cur["backend"],
@@ -1128,6 +1172,11 @@ def main(argv=None) -> int:
                 win_ck.render_frame()
         finally:
             win_ck.teardown()
+            if telem["fh"] is not None:
+                try:
+                    telem["fh"].close()
+                except Exception:  # noqa: BLE001
+                    pass
         return q["restart"]
 
     restart = False  # Reload key (Enter): tear down cleanly, then the launcher relaunches us
