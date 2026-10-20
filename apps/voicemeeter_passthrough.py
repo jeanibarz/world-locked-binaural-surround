@@ -844,7 +844,7 @@ def main(argv=None) -> int:
                                    max_tail_ms=args.max_tail_ms, azimuths=azmap)
             return nm, tr, None
 
-        def _set_hrir(name) -> None:  # noqa: ANN001  — live HRIR-set swap (RFC 0003)
+        def _set_hrir(name, announce: bool = True) -> None:  # noqa: ANN001 — live HRIR-set swap
             """Swap the live HRIR set under ``lock``, modelled on :func:`_set_block`: rebuild the
             7.1 renderer + the test voice from the new set, leaving block size / cushion / output EQ
             untouched. A bad or missing SOFA toasts and leaves the current set playing."""
@@ -861,16 +861,19 @@ def main(argv=None) -> int:
             label = (render_label(nm, test["method"]) if hs.is_owner
                      else f"{getattr(nm, 'engine', 'cpu')} · {name} [{cur['comp']}] · "
                           f"dense ({nm.n_bus} pts)")
+            if not announce:   # blind A/B: mask the status label too (it names the set)
+                label = "— blind A/B (hidden) —"
             with lock:
                 main_rend["r"], main_rend["label"] = nm, label
                 test_renderers.clear()
                 test_renderers[test["method"]] = tr
                 test["renderer"] = tr
                 cur_set["name"] = name
-            win_ck.set_hrir_display(name)
-            if not hs.is_owner:
-                tag = cur["comp"] + ("" if hs.has_df or cur["comp"] == "ctf" else "→ctf")
-                win_ck.toast(f"HRIR: {name} [{tag}]", "info", seconds=3)
+            if announce:   # blind A/B swaps silently so the toast/pill don't reveal the set
+                win_ck.set_hrir_display(name)
+                if not hs.is_owner:
+                    tag = cur["comp"] + ("" if hs.has_df or cur["comp"] == "ctf" else "→ctf")
+                    win_ck.toast(f"HRIR: {name} [{tag}]", "info", seconds=3)
 
         def _set_comp(m) -> None:  # noqa: ANN001  — compensation variant (ctf | df)
             if m not in ("ctf", "df"):
@@ -963,6 +966,7 @@ def main(argv=None) -> int:
         win_ck.on_place_test = _place
         win_ck.on_predict = lambda on: cur.__setitem__("predict", bool(on))
         win_ck.on_hrir = _set_hrir
+        win_ck.on_hrir_blind = lambda n: _set_hrir(n, announce=False)
         win_ck.on_comp = _set_comp
         win_ck.on_loc_start = _loc_start
         win_ck.on_loc_answer = _loc_answer

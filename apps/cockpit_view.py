@@ -141,6 +141,7 @@ class CockpitWindow:
         self.on_recenter = lambda: None
         self.on_quit = lambda: None
         self.on_hrir = lambda name: None      # switch the live HRIR set (RFC 0003 dense-grid swap)
+        self.on_hrir_blind = lambda name: None  # silent swap for blind A/B (no toast / no pill)
         # HRIR switcher + blind-A/B state. Set names are seeded by the live app via
         # ``set_hrir_sets`` BEFORE ``setup`` (the pills are built then). ``_blind`` is a
         # ``hrir_sets.BlindAB`` created lazily when blind mode is first used.
@@ -671,9 +672,9 @@ class CockpitWindow:
         ab = self._blind_ensure()
         if ab is None:
             return
-        # Switch the renderer to the sealed set WITHOUT lighting its pill — lighting it
-        # would reveal the identity and defeat the blind.
-        self.on_hrir(ab.play(slot))
+        # Switch the renderer to the sealed set via the SILENT path — the normal swap
+        # toasts the set name and lights its pill, which would reveal the identity.
+        self.on_hrir_blind(ab.play(slot))
         self._blind_update()
 
     def _blind_shuffle(self) -> None:
@@ -996,7 +997,9 @@ class CockpitWindow:
             ux, uy = -math.sin(math.radians(az)), -math.cos(math.radians(az))
             d = 12 + (w / 2) * abs(ux) + (h / 2) * abs(uy)
             self._ctext(dpg, x + ux * d, y + uy * d, lab, M.ACTIVE if on else M.MUTED, 11, "c")
-        if source_az is not None:
+        # Hide the source marker during a localization test — it sits at the trial's
+        # truth azimuth and would reveal the answer before the listener responds.
+        if source_az is not None and not self._loc_active:
             sx, sy = azimuth_to_radar_xy(float(source_az), R, cx, cy)
             self._line(dpg, cx, cy, sx, sy, color=M.GOOD)
             self._circle(dpg, sx, sy, 6, fill=M.GOOD, color=M.GOOD)
