@@ -37,6 +37,7 @@ Keys: **C** recenter, **F** flip L/R (if the feed is mirrored), **Q** quit.
 from __future__ import annotations
 
 import argparse
+import atexit
 import threading
 import time
 from collections import deque
@@ -233,6 +234,11 @@ def main(argv=None) -> int:
                    help="front-end: 'console' = the OpenCV window (default); 'cockpit' = the "
                         "native Dear PyGui cockpit (B6.12) — same engine, resizable, with live "
                         "method/backend/predict/test controls. Needs the 'gui' extra (dearpygui).")
+    p.add_argument("--log-fifo-fill", type=Path, default=None,
+                   help="A0 diagnostic (RFC Track A): log output-FIFO fill vs time to this CSV, "
+                        "then run `python -m binaural_headtracker.fifo_drift <csv>` to classify "
+                        "the queue term as clock skew (A1 resampler) vs jitter/burst (Track B). "
+                        "Off by default; measure at a fixed --block/--latency-ms.")
     args = p.parse_args(argv)
 
     brir = load_baked_brir(args.brir_dir)
@@ -437,6 +443,35 @@ def main(argv=None) -> int:
     cb_error: list[BaseException] = []
     max_backlog = cushion * 2  # cap latency growth from drift at ~2x the target cushion
 
+    # A0 diagnostic (RFC Track A, `--log-fifo-fill`): record output-FIFO fill vs time so the
+    # standing `queue` term can be classified as clock skew (a sustained slope → the A1 async
+    # resampler fixes it in user mode) vs jitter/burst pacing (bounce around a level → the lever
+    # is the capture path, i.e. Track B). Off by default (``fifo_log`` is None), so the proven
+    # path is byte-for-byte unchanged. When on, the output callback appends one cheap (t, frames)
+    # row per call under the FIFO lock; the buffer is flushed to CSV at process exit. Host-only
+    # measurement: the skew only exists between the real VoiceMeeter-capture and K11 clocks, so
+    # this is the owner's to run (analyse with ``binaural_headtracker.fifo_drift``). Measure at a
+    # fixed block size — ``n`` is captured once here, not re-read if the block is changed live.
+    fifo_log: dict | None = None
+    if args.log_fifo_fill is not None:
+        fifo_log = {"rows": [], "t0": time.monotonic(), "n": blk["n"],
+                    "path": Path(args.log_fifo_fill)}
+
+        def _dump_fifo_log() -> None:
+            rows = fifo_log["rows"]
+            if not rows:
+                return
+            try:
+                with open(fifo_log["path"], "w", encoding="utf-8") as fh:
+                    fh.write("time_s,fill_frames\n")
+                    for t_s, frames in rows:
+                        fh.write(f"{t_s:.6f},{frames}\n")
+                print(f"A0: wrote {len(rows)} FIFO-fill rows to {fifo_log['path']}")
+            except OSError as exc:  # noqa: BLE001  — diagnostics only, never crash the app
+                print(f"A0: failed to write {fifo_log['path']}: {exc!r}")
+
+        atexit.register(_dump_fifo_log)
+
     # Live diagnostics the GUI panel reads (B6.3): render time per block (EWMA mean + a decaying
     # peak), and the timestamps of recent output underruns (dropouts). Updated off the GUI thread
     # — the worker writes render times, the output callback records underruns (one cheap append).
@@ -560,6 +595,8 @@ def main(argv=None) -> int:
             dev = out_lat["ms"]
             buf = out_carry["buf"]
             with fifo_lock:
+                if fifo_log is not None:  # A0: standing FIFO depth (frames) at this callback
+                    fifo_log["rows"].append((now - fifo_log["t0"], len(out_fifo) * fifo_log["n"]))
                 while buf.shape[0] < frames and out_fifo:
                     block, pose_t, render_t = out_fifo.popleft()
                     # Measure pose-age-at-ear at the moment the block is handed to the device:

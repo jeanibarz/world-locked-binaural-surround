@@ -476,8 +476,15 @@ _(the chain appends here as it learns)_
   (2026-10-20): latency is the goal, VoiceMeeter-removal a means; mixed video/game/music playback so
   content/A-V latency counts → both tracks justified, Track A first. _(owner question journal 44;
   promoted by B8.8 journal 48; superseded by the RFC + journal 51)_
-  - [ ] **B8.7a** Track A — async resampler/servo (A0 diagnose skew-vs-jitter on host → A1 servo behind
-    a `FrameSource` seam; host + K11 verification is the owner's). _(RFC Track A)_
+  - [ ] **B8.7a** Track A — async resampler/servo.
+    - [x] **A0 diagnostic shipped** (`binaural_headtracker.fifo_drift` + `voicemeeter_passthrough
+      --log-fifo-fill`): classifies the output-FIFO fill series as clock **skew** (slope → A1
+      resampler fixes it in user mode) vs **jitter/burst** (bounce → the Track-B case). Pure
+      analyzer unit-tested headless (16 tests); the fill-vs-time capture is additive + off by
+      default. **Owner runs it on the host** (steady playback, fixed block/latency) and reports
+      the verdict — that gates the A1 servo design.
+    - [ ] **A1** servo behind a `FrameSource` seam — designed once A0's host verdict is in (skew
+      magnitude sets the servo; host + K11 measurement of ear-latency/glitches is the owner's). _(RFC Track A)_
   - [ ] **B8.7b** Track B — custom virtual 7.1 driver, gated on B-pre (VM: does `audiodg` tolerate a
     pull-driven WaveRT position?). _(RFC Track B)_
 - [x] **B8.8** **Reduce the `queue` term — measured: no cheap win, it trades off against audible
