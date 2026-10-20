@@ -56,7 +56,7 @@ from binaural_headtracker.devices import (
 )
 from binaural_headtracker.diagnostics import classify
 from binaural_headtracker.head_pose import head_pose_from_matrix
-from binaural_headtracker.hrir_sets import discover_sets, load_dense_grid_sofa
+from binaural_headtracker.hrir_sets import LocalizationTest, discover_sets, load_dense_grid_sofa
 from binaural_headtracker.latency import LatencyProbe
 from binaural_headtracker.live_render import (
     InterpWorldLocked7p1,
@@ -869,6 +869,77 @@ def main(argv=None) -> int:
             if not hs.is_owner:
                 win_ck.toast(f"HRIR: {name}", "info", seconds=3)
 
+        # --- blind localization test (RFC 0003 decider) -------------------------------
+        loc = {"test": None, "t0": None, "cache": {}}
+
+        def _loc_renderer(hs):
+            """Cached test-source renderer for a set (solo'd during the loc test)."""
+            if hs.name not in loc["cache"]:
+                loc["cache"][hs.name] = _build_for_set(hs)[1]
+            return loc["cache"][hs.name]
+
+        def _loc_apply() -> None:
+            """Render the current trial: solo the source at its truth azimuth through the
+            (hidden) set, start the response timer, prompt for a radar click."""
+            t = loc["test"]
+            tr = t.current
+            if tr is None:
+                return
+            renderer = _loc_renderer(sets_by_name[tr.set_name])
+            with lock:
+                test["renderer"] = renderer
+                test["world_az"], test["on"], test["solo"], test["rotate"] = \
+                    float(tr.truth_az), True, True, False
+            loc["t0"] = time.monotonic()
+            win_ck.set_loc_status(f"trial {t.i + 1}/{t.total} — click where you hear it")
+
+        def _loc_finish() -> None:
+            t = loc["test"]
+            sb, rank = t.scoreboard(), t.ranking()
+            parts = []
+            for name in rank:
+                m = sb[name]
+                rt = f"{m['rt']:.1f}s" if m["rt"] is not None else "-"
+                parts.append(f"{name}: err {m['mae']:.0f}deg fbc {m['fbc']*100:.0f}% rt {rt} (n={m['n']})")
+            win_ck.set_loc_status("  |  ".join(parts) + (f"   -> best: {rank[0]}" if rank else ""))
+            loc["test"] = None
+            win_ck.set_loc_active(False)
+            with lock:
+                test["on"], test["solo"] = False, False
+            _set_hrir(cur_set["name"])
+
+        def _loc_start(n) -> None:  # noqa: ANN001
+            win_ck.toast("preparing localization test…", "info", seconds=3)
+            try:
+                for hs in hrir_sets:          # preload each set's renderer once (one-off)
+                    _loc_renderer(hs)
+            except Exception as exc:          # noqa: BLE001
+                win_ck.toast(f"loc test prep failed: {exc}", "error")
+                return
+            import random as _random
+            loc["test"] = LocalizationTest.build([s.name for s in hrir_sets],
+                                                 n_per_set=int(n), rng=_random.Random())
+            win_ck.set_loc_active(True)
+            _loc_apply()
+
+        def _loc_answer(guess_az) -> None:  # noqa: ANN001
+            t = loc["test"]
+            if t is None:
+                return
+            rt = None if loc["t0"] is None else (time.monotonic() - loc["t0"])
+            t.answer(float(guess_az), rt_s=rt)
+            _loc_finish() if t.done else _loc_apply()
+
+        def _loc_stop() -> None:
+            if loc["test"] is None:
+                return
+            loc["test"] = None
+            win_ck.set_loc_active(False)
+            with lock:
+                test["on"], test["solo"] = False, False
+            _set_hrir(cur_set["name"])
+            win_ck.set_loc_status("stopped")
+
         win_ck.on_quit = lambda: q.__setitem__("stop", True)
         win_ck.on_recenter = _recenter
         win_ck.on_method = _set_method
@@ -881,6 +952,9 @@ def main(argv=None) -> int:
         win_ck.on_place_test = _place
         win_ck.on_predict = lambda on: cur.__setitem__("predict", bool(on))
         win_ck.on_hrir = _set_hrir
+        win_ck.on_loc_start = _loc_start
+        win_ck.on_loc_answer = _loc_answer
+        win_ck.on_loc_stop = _loc_stop
         win_ck.set_hrir_sets([s.name for s in hrir_sets])   # seed the pills BEFORE setup()
         win_ck.setup()
         win_ck.set_cushion_display(args.latency_ms)  # slider → the real launch cushion, not 60

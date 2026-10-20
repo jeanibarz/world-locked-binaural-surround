@@ -166,6 +166,120 @@ class BlindAB:
         return self._map[slot] if self.revealed else slot
 
 
+def _ang_err_deg(a: float, b: float) -> float:
+    """Absolute wrapped angular distance between two azimuths, in [0, 180]."""
+    return abs((float(a) - float(b) + 180.0) % 360.0 - 180.0)
+
+
+def _fb_mirror_deg(az: float) -> float:
+    """Front/back mirror of an azimuth — reflect across the interaural (L–R) axis."""
+    return (180.0 - float(az)) % 360.0
+
+
+def _is_fb_confusion(truth: float, guess: float) -> bool:
+    """True when the guess is nearer the front/back *mirror* of the truth than the
+    truth itself — heard on the right side but flipped front↔back (the back-gap error)."""
+    return _ang_err_deg(guess, _fb_mirror_deg(truth)) < _ang_err_deg(guess, truth)
+
+
+@dataclass
+class LocTrial:
+    set_name: str
+    truth_az: float
+    guess_az: float | None = None
+    rt_s: float | None = None
+
+    @property
+    def answered(self) -> bool:
+        return self.guess_az is not None
+
+    @property
+    def abs_err_deg(self) -> float | None:
+        return None if self.guess_az is None else _ang_err_deg(self.truth_az, self.guess_az)
+
+    @property
+    def fb_confusion(self) -> bool:
+        return self.guess_az is not None and _is_fb_confusion(self.truth_az, self.guess_az)
+
+
+@dataclass
+class LocalizationTest:
+    """Blind absolute-localization (azimuth-pointing) test over several HRIR sets.
+
+    Each trial renders a source at a random azimuth through a (hidden) set; the
+    listener points where they hear it and the error is scored against truth. Faster
+    + more accurate ⇒ better set. Objective, so it can't be gamed by expectation —
+    the per-set scoreboard is the placebo-proof decider the blind A/B only hints at.
+
+    Pure state + scoring (no audio/UI): the app renders the current trial's set at
+    its ``truth_az``, feeds back the pointed azimuth + response time via
+    :meth:`answer`, and shows :meth:`scoreboard` when :attr:`done`.
+    """
+
+    sets: list[str]
+    n_per_set: int = 25
+    trials: list[LocTrial] = field(default_factory=list)
+    i: int = 0
+
+    @classmethod
+    def build(cls, sets, n_per_set: int = 25, *, rng: random.Random | None = None,
+              azimuths: list[float] | None = None) -> "LocalizationTest":
+        """Build a shuffled, set-interleaved trial list. ``azimuths`` is an optional pool
+        of candidate truth angles (else uniform random over the full circle)."""
+        r = rng or random
+        trials: list[LocTrial] = []
+        for s in sets:
+            for _ in range(int(n_per_set)):
+                az = float(r.choice(azimuths)) if azimuths else r.uniform(0.0, 360.0)
+                trials.append(LocTrial(s, az))
+        r.shuffle(trials)
+        return cls(list(sets), int(n_per_set), trials, 0)
+
+    @property
+    def done(self) -> bool:
+        return self.i >= len(self.trials)
+
+    @property
+    def total(self) -> int:
+        return len(self.trials)
+
+    @property
+    def current(self) -> LocTrial | None:
+        return None if self.done else self.trials[self.i]
+
+    def answer(self, guess_az: float, rt_s: float | None = None) -> None:
+        """Record the pointed azimuth (+ optional response time) for the current trial
+        and advance. No-op once done."""
+        t = self.current
+        if t is None:
+            return
+        t.guess_az = float(guess_az)
+        t.rt_s = None if rt_s is None else float(rt_s)
+        self.i += 1
+
+    def scoreboard(self) -> dict[str, dict]:
+        """Per-set metrics over answered trials: ``n``, ``mae`` (mean abs azimuth error,
+        deg), ``fbc`` (front/back confusion rate), ``rt`` (median response time, s)."""
+        out: dict[str, dict] = {}
+        for s in self.sets:
+            ts = [t for t in self.trials if t.set_name == s and t.answered]
+            if not ts:
+                continue
+            rts = [t.rt_s for t in ts if t.rt_s is not None]
+            out[s] = {
+                "n": len(ts),
+                "mae": float(np.mean([t.abs_err_deg for t in ts])),
+                "fbc": float(np.mean([1.0 if t.fb_confusion else 0.0 for t in ts])),
+                "rt": float(np.median(rts)) if rts else None,
+            }
+        return out
+
+    def ranking(self) -> list[str]:
+        """Sets ordered best→worst by mean error, then median response time."""
+        sb = self.scoreboard()
+        return sorted(sb, key=lambda s: (sb[s]["mae"], sb[s]["rt"] if sb[s]["rt"] else 0.0))
+
+
 def discover_sets(directory, *, pattern: str = "dense_*.sofa",
                   owner_label: str = OWNER_LABEL) -> list[HrirSet]:
     """List switchable HRIR sets: the owner's own set first, then every dense-grid
