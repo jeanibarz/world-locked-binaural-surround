@@ -500,6 +500,12 @@ _(the chain appends here as it learns)_
       `kookr-bpre` (Gen2, vTPM+SecureBoot) created via unattended Win11 install (admin `kookr`,
       reached by PowerShell Direct). Microsoft retired the prebuilt dev VHDX → built from a Win11
       ISO (Fido).
+    - [x] **VM installed + test-signing + checkpoint** (journal 56): unattended Win11 Pro 26300
+      (remastered ISO: autounattend at root + no-prompt boot); Secure Boot disabled in-VM so
+      test-signing is ON; `clean-testsigning` checkpoint taken. SYSVAD sample cloned.
+    - [ ] **Driver toolchain via EWDK** (journal 56): host VS2022 is 17.0.6 — too old for WDK 26100
+      (MSB8020, no driver toolset). Using the isolated Win11 25H2 EWDK (VS BuildTools 17.14) so the
+      owner's VS is untouched; downloading. Then baseline-build `sysvad.sln`.
     - [ ] **B-pre:** pseudo-K11 drives the SYSVAD-fork pull-driven position; a 48 kHz app renders 7.1
       in; confirm audiodg tolerates it (no silence/disconnect, monotonic `IAudioClock`). Make-or-break.
 - [x] **B8.8** **Reduce the `queue` term — measured: no cheap win, it trades off against audible

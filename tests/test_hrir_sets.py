@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from binaural_headtracker.hrir_sets import BlindAB, discover_sets, load_dense_grid_sofa
 from binaural_headtracker.live_render import InterpWorldLocked7p1
@@ -85,8 +84,8 @@ def test_interp_dense_override_renders_and_uses_grid(tmp_path):
     assert rend.method == "nearest"      # a real dense grid uses nearest lookup
     assert rend.n_bus == 36              # directional field is the 36-point grid, not 8
     pcm = np.random.default_rng(2).normal(0, 0.1, (block, len(CHANNELS_7P1)))
-    out = rend.process_block(pcm, [dict(zip(CHANNELS_7P1, [30, -30, 0, 0, 150, -150, 110, -110]))[c]
-                                    for c in CHANNELS_7P1])
+    az = dict(zip(CHANNELS_7P1, [30, -30, 0, 0, 150, -150, 110, -110], strict=True))
+    out = rend.process_block(pcm, [az[c] for c in CHANNELS_7P1])
     assert out.shape == (block, 2)
     assert np.isfinite(out).all()
 
@@ -117,7 +116,8 @@ def test_blind_tally_is_per_set_and_survives_shuffle():
     ab = BlindAB("mine", "ARI_nh102")
     ab.shuffle(rng)
     a_set = ab.set_name_for("A")
-    ab.play("A"); ab.prefer_current()      # +1 to whatever set A is
+    ab.play("A")
+    ab.prefer_current()      # +1 to whatever set A is
     assert ab.tally[a_set] == 1
     assert ab.trials == 1
     ab.shuffle(rng)                        # re-hide/reassign; tally persists per set

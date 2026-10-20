@@ -75,6 +75,7 @@ def load_dense_grid_sofa(
 
     if target_rate is not None and target_rate != fs:
         from math import gcd
+
         from scipy.signal import resample_poly
         g = gcd(int(fs), int(target_rate))
         up, down = int(target_rate) // g, int(fs) // g
