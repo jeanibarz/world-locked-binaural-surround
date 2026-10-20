@@ -491,9 +491,12 @@ _(the chain appends here as it learns)_
       `UpdatePosition()` is the single position seam; stock `GetPosition` already QPC-samples on
       demand, so a **pull-driven** position is a surgical change and audiodg intolerance looks less
       likely than feared (still the B-pre question). Feasible + localized.
-    - [ ] **BLOCKER — owner setup (admin):** install the **WDK** (no km headers present) + create a
-      **Hyper-V VM** with test-signing (kept off the host). Runbook in journal 53. B-pre can't start
-      until both exist.
+    - [x] **Elevated host-control channel established (journal 54):** key-only SSH from WSL into the
+      host carrying a full admin token (`ssh -i ~/.ssh/kookr_host_admin ibarz@<wsl-gateway>`). So the
+      WDK install + Hyper-V VM creation are now **autonomous**, not owner-gated. Safety contract +
+      connect details in AGENTS.md; setup/revert in `spikes/host_admin_sshd_{setup,revert}.ps1`.
+    - [ ] **Install WDK + create/provision the Hyper-V VM** (autonomous, over the channel): SDK 26100 +
+      WDK **26100.6584** for VS2022 (journal 53); VM with test-signing (in-guest only).
     - [ ] **B-pre:** pseudo-K11 drives the SYSVAD-fork pull-driven position; a 48 kHz app renders 7.1
       in; confirm audiodg tolerates it (no silence/disconnect, monotonic `IAudioClock`). Make-or-break.
 - [x] **B8.8** **Reduce the `queue` term — measured: no cheap win, it trades off against audible
