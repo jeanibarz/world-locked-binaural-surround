@@ -186,7 +186,7 @@ def main(argv=None) -> int:
                         "beating shared mode's ~22 ms.")
     p.add_argument("--no-dialog", action="store_true", help="skip the picker, use the flags")
     p.add_argument("--block", type=int, default=2048,
-                   help="render block size (bigger = steadier; 2048 gives the dense-grid 7.1 render "
+                   help="render block size (bigger = steadier; 2048 gives dense-grid 7.1 render "
                         "ample headroom)")
     p.add_argument("--fade-ms", type=float, default=20.0)
     p.add_argument("--gain", type=float, default=1.0)

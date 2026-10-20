@@ -528,7 +528,7 @@ class InterpWorldLocked7p1:
 
     def __init__(self, brir: BakedBRIRSet, method: str = "timealign", *, block_size: int = 256,
                  fade_ms: float = 20.0, grid_step: float = 10.0, lfe_mode: str = "brir",
-                 dense_override: "tuple[BakedBRIRSet, dict[int, float]] | None" = None,
+                 dense_override: tuple[BakedBRIRSet, dict[int, float]] | None = None,
                  use_rust: bool = False, use_gpu: bool = False) -> None:
         if lfe_mode not in ("brir", "flat"):
             raise ValueError("lfe_mode must be 'brir' or 'flat'")
