@@ -185,7 +185,9 @@ def main(argv=None) -> int:
                         "underrun — raise this (e.g. 8–12) to add buffer periods back while still "
                         "beating shared mode's ~22 ms.")
     p.add_argument("--no-dialog", action="store_true", help="skip the picker, use the flags")
-    p.add_argument("--block", type=int, default=512, help="render block size (bigger = steadier)")
+    p.add_argument("--block", type=int, default=2048,
+                   help="render block size (bigger = steadier; 2048 gives the dense-grid 7.1 render "
+                        "ample headroom)")
     p.add_argument("--fade-ms", type=float, default=20.0)
     p.add_argument("--gain", type=float, default=1.0)
     p.add_argument("--latency-ms", type=float, default=60.0,
