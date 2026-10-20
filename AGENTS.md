@@ -101,6 +101,39 @@ camera) are runnable **from here**, not blocked:
 - Do **not** record an audio/camera block as "blocked on WSL" — drive the
   Windows Python. (See journal 02.)
 
+### Elevated host control — the SSH admin channel (for driver/VM work)
+
+WSL interop runs **non-elevated** (it inherits the WSL process token; it cannot be elevated
+without relaunching the session). Track B (the custom audio driver, B8.7b) needs **admin**:
+installing the WDK, creating/managing a **Hyper-V VM**, and loading/test-signing drivers. So a
+one-time elevated setup established a **key-only SSH channel into the host that carries a full
+admin token** — this is how an unprivileged WSL session gets elevated host control without a
+restart. (Owner granted "max autonomy", journal 54.)
+
+- **Connect:** `ssh -i ~/.ssh/kookr_host_admin ibarz@$(ip route | awk '/default/{print $3}')`
+  — the host is the WSL **default-gateway** IP (≈`172.23.208.1`, but **rediscover it** each
+  session; it changes across WSL restarts). User **`ibarz`** (a local admin). The session lands
+  **elevated** (`IsInRole(Administrator)` → True, because `LocalAccountTokenFilterPolicy=1`).
+- **Remote shell is `cmd.exe`** by default; wrap PowerShell as
+  `ssh … ibarz@HOST "powershell -NoProfile -Command \"<expr>\""`.
+- **Keys/config:** private key `~/.ssh/kookr_host_admin` (WSL only, **never committed**); the
+  public half is authorized in `C:\ProgramData\ssh\administrators_authorized_keys`. sshd is
+  **key-only** (passwords off) and firewalled to the **WSL subnet** (`172.16.0.0/12`).
+- **Setup / revert:** `spikes/host_admin_sshd_setup.ps1` (run once, elevated) /
+  `spikes/host_admin_sshd_revert.ps1` (removes the channel + the policy). `sshd` can be stopped
+  anytime to cut access instantly.
+
+**Safety contract for this channel (NON-NEGOTIABLE — it holds real admin):**
+- **Kernel drivers load ONLY inside the Hyper-V VM, never on the host.** The host keeps Secure
+  Boot on and test-signing off, so host audio and anti-cheat games are never disturbed.
+- **Take a Hyper-V checkpoint before every driver install/load** in the VM (one-command rollback
+  of a BSOD/bad driver).
+- **Never touch host boot config** (`bcdedit`, test-signing, Secure Boot) or the host's default
+  audio device / VoiceMeeter routing.
+- **Confirm with the owner before anything irreversible or outward-facing** on the host (deleting
+  a VM, uninstalling tools, network-exposing changes). Installs, VM creation, checkpoints, and
+  in-VM work are fine to do autonomously.
+
 ### Running the host GUI apps (camera + audio + a window) — ON WINDOWS, not WSL
 
 The interactive apps in `apps/` (`calibration_gui.py`, `live_tracker_audio.py`) and
