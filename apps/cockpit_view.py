@@ -149,6 +149,14 @@ class CockpitWindow:
         self._hrir_chip_tags: dict[str, str] = {}
         self._blind = None
         self._blind_txt = "ck_blind_tally"
+        # Localization test (RFC 0003 decider): a source at a random azimuth through a
+        # hidden set; a radar click is the answer while a test is active.
+        self.on_loc_start = lambda n: None
+        self.on_loc_answer = lambda az: None
+        self.on_loc_stop = lambda: None
+        self._loc_active = False
+        self._loc_status = "ck_loc_status"
+        self._loc_n = 25
 
     # -------------------------------------------------- build
     def setup(self) -> None:
@@ -295,6 +303,20 @@ class CockpitWindow:
                                                  user_data=cb, callback=lambda s, a, u: u())
                             dpg.bind_item_theme(btn, self._th["step"])
                         dpg.add_text("idle", tag=self._blind_txt, color=_c(M.MUTED))
+                with dpg.child_window(auto_resize_x=True, auto_resize_y=True, border=True) as s:
+                    dpg.bind_item_theme(s, self._th["section"])
+                    with dpg.group(horizontal=True):
+                        ll = dpg.add_text("LOC TEST", color=_c(M.ACCENT))
+                        with dpg.tooltip(ll):
+                            dpg.add_text("Blind localization test: a source plays at a random\n"
+                                         "azimuth through a hidden set — click the radar where you\n"
+                                         "hear it (move your head if unsure). Scored per set on\n"
+                                         "accuracy + response time; best set wins.")
+                        st = dpg.add_button(label="start", callback=lambda: self.on_loc_start(self._loc_n))
+                        dpg.bind_item_theme(st, self._th["step"])
+                        sp = dpg.add_button(label="stop", callback=lambda: self.on_loc_stop())
+                        dpg.bind_item_theme(sp, self._th["step"])
+                        dpg.add_text("idle", tag=self._loc_status, color=_c(M.MUTED))
         dpg.set_primary_window(self._win, True)
 
         # Height leaves room below the canvas for the controls row + titlebar, with a margin so a
@@ -438,6 +460,11 @@ class CockpitWindow:
         az = self._radar_az(dpg)
         if az is None:
             return  # the click wasn't on the radar — leave the source as it is
+        if self._loc_active:
+            # During a localization test a radar click is the ANSWER (where you hear the
+            # source), not a test-source placement.
+            self.on_loc_answer(float(az))
+            return
         if self._test_on:
             self._test_on = False
             self.on_test(False)
@@ -649,6 +676,20 @@ class CockpitWindow:
         else:
             txt = f"playing {ab.current or '-'} (hidden)  n={ab.trials}"
         dpg.set_value(self._blind_txt, txt)
+
+    # ----------------------------------------------------- localization test
+    def set_loc_active(self, on) -> None:
+        """Enter/leave answer-capture mode: while active, a radar click is a trial answer
+        (not a test-source placement)."""
+        self._loc_active = bool(on)
+
+    def set_loc_status(self, text) -> None:
+        try:
+            import dearpygui.dearpygui as dpg
+            if dpg.does_item_exist(self._loc_status):
+                dpg.set_value(self._loc_status, str(text))
+        except Exception:  # noqa: BLE001 — status text is a mirror, never critical
+            pass
 
     def _step_cushion(self, delta: int) -> None:
         """± button on the cushion stepper: move CUSHION_STEP ms and fire ``on_cushion`` live."""

@@ -3,8 +3,16 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
-from binaural_headtracker.hrir_sets import BlindAB, discover_sets, load_dense_grid_sofa
+from binaural_headtracker.hrir_sets import (
+    BlindAB,
+    LocalizationTest,
+    _ang_err_deg,
+    _is_fb_confusion,
+    discover_sets,
+    load_dense_grid_sofa,
+)
 from binaural_headtracker.live_render import InterpWorldLocked7p1
 from binaural_headtracker.surround import CHANNELS_7P1, BakedBRIRSet
 
@@ -148,3 +156,61 @@ def test_blind_prefer_current_none_before_play():
     ab = BlindAB("a", "b")
     assert ab.prefer_current() is None
     assert ab.trials == 0
+
+
+# ------------------------------------------------------------------ LocalizationTest
+def test_ang_err_wraps():
+    assert _ang_err_deg(350, 10) == pytest.approx(20.0)
+    assert _ang_err_deg(10, 350) == pytest.approx(20.0)
+    assert _ang_err_deg(0, 180) == pytest.approx(180.0)
+    assert _ang_err_deg(30, 30) == pytest.approx(0.0)
+
+
+def test_fb_confusion_detection():
+    # 150° (rear-ish) mirrors to 30° (front, same side): guessing 30 for a 150 source is a flip
+    assert _is_fb_confusion(150, 30) is True
+    assert _is_fb_confusion(150, 150) is False      # correct → not a confusion
+    assert _is_fb_confusion(30, 150) is True         # front heard as rear
+
+
+def test_build_trials_count_and_pool():
+    import random
+    t = LocalizationTest.build(["mine", "cand"], n_per_set=5,
+                               rng=random.Random(0), azimuths=[0, 90, 180, 270])
+    assert t.total == 10
+    assert {tr.set_name for tr in t.trials} == {"mine", "cand"}
+    assert all(tr.truth_az in (0, 90, 180, 270) for tr in t.trials)
+    # interleaved (shuffle) — not all of one set grouped first
+    first_half = {tr.set_name for tr in t.trials[:5]}
+    assert len(first_half) == 2
+
+
+def test_answer_advances_and_completes():
+    import random
+    t = LocalizationTest.build(["a"], n_per_set=3, rng=random.Random(1))
+    assert not t.done and t.current is not None
+    for _ in range(3):
+        cur = t.current
+        t.answer(cur.truth_az, rt_s=1.0)   # perfect guesses
+    assert t.done and t.current is None
+    t.answer(0.0)   # no-op when done
+    assert t.i == 3
+
+
+def test_scoreboard_and_ranking():
+    import random
+    t = LocalizationTest.build(["good", "bad"], n_per_set=4, rng=random.Random(2),
+                               azimuths=[45])
+    while not t.done:
+        cur = t.current
+        if cur.set_name == "good":
+            t.answer(cur.truth_az, rt_s=1.0)
+        else:
+            t.answer((180.0 - cur.truth_az) % 360.0, rt_s=3.0)   # front/back flip
+    sb = t.scoreboard()
+    assert sb["good"]["n"] == 4 and sb["bad"]["n"] == 4
+    assert sb["good"]["mae"] == pytest.approx(0.0, abs=1e-6)
+    assert sb["good"]["fbc"] == pytest.approx(0.0)
+    assert sb["bad"]["fbc"] == pytest.approx(1.0)      # every bad trial flipped
+    assert sb["good"]["rt"] == pytest.approx(1.0)
+    assert t.ranking()[0] == "good"                    # lower error ranks first
