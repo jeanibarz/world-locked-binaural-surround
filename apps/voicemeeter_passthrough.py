@@ -245,18 +245,24 @@ def main(argv=None) -> int:
         overrides the launch flags so the cockpit can switch it live."""
         if method == "nearest":
             return _nearest_renderer(backend)
-        # Synthesis methods have no GPU kernel (GpuWorldLocked7p1 is nearest-only), so a 'gpu'
-        # request maps to Rust — the fast real-time synthesis path — not the sub-real-time pure-
-        # Python CPU path. Explicit 'cpu' still selects pure Python.
-        use_rust = backend in ("rust", "gpu") if backend else args.rust
-        print(f"render: {method} — dense-grid 7.1 ({args.grid_step:.0f}°) "
-              f"{'[rust]' if use_rust else '[cpu]'}")
+        # Synthesis methods run the dense interpolated grid, which now has a GPU path too
+        # (GpuBusConvolver over the grid). A 'gpu' request builds the GPU convolver and only falls
+        # back to Rust (then pure-Python CPU) if CuPy is missing; 'rust' uses the kernel; 'cpu'
+        # stays pure Python.
+        use_gpu = backend == "gpu" if backend else args.gpu
+        use_rust = backend in ("rust", "gpu") if backend else (args.rust or args.gpu)
         r = InterpWorldLocked7p1(brir, method, block_size=blk["n"], fade_ms=args.fade_ms,
                                  grid_step=args.grid_step, lfe_mode=args.lfe_mode,
-                                 use_rust=use_rust)
-        # If rust was asked for but the dense-grid engine fell back to CPU (kernel unbuilt), say so.
-        reason = ("Rust kernel unavailable" if use_rust and getattr(r, "engine", "") == "cpu"
-                  else None)
+                                 use_rust=use_rust, use_gpu=use_gpu)
+        actual = getattr(r, "engine", "cpu")
+        print(f"render: {method} — dense-grid 7.1 ({args.grid_step:.0f}°) [{actual}]")
+        # Report a fallback so the UI can snap the selector and toast (GPU first, then the kernel).
+        if use_gpu and actual != "gpu":
+            reason = "GPU unavailable"
+        elif use_rust and actual == "cpu":
+            reason = "Rust kernel unavailable"
+        else:
+            reason = None
         return r, reason
 
     def render_label(renderer, method: str) -> str:
@@ -269,10 +275,10 @@ def main(argv=None) -> int:
 
     def _backend_of(renderer) -> str:
         """The backend ('cpu'/'rust'/'gpu') a built renderer ACTUALLY runs on — used to snap the
-        cockpit's backend radio to engine truth after a switch (a failed accelerator falls back to
-        CPU; a synthesis 'gpu' request runs on rust). Dense-grid carries it on ``.engine``."""
+        cockpit's backend segment to engine truth after a switch (a failed accelerator falls back).
+        The dense-grid renderer carries gpu/rust/cpu on ``.engine``; the nearest classes map 1:1."""
         if isinstance(renderer, InterpWorldLocked7p1):
-            return "rust" if getattr(renderer, "engine", "cpu") == "rust" else "cpu"
+            return getattr(renderer, "engine", "cpu")
         return {"RustWorldLocked7p1": "rust", "GpuWorldLocked7p1": "gpu",
                 "WorldLocked7p1": "cpu"}.get(type(renderer).__name__, "cpu")
 
@@ -634,9 +640,9 @@ def main(argv=None) -> int:
             with lock:
                 main_rend["r"], main_rend["label"] = nm, render_label(nm, m)
                 test["renderer"], test["method"] = test_renderers[m], m
-            # The method's engine may differ from the selected backend (e.g. rust kernel missing, or
-            # a synthesis method with no GPU kernel); keep the radio and toast honest about what's
-            # actually running.
+            # The method's engine may differ from the selected backend (a requested accelerator can
+            # be unavailable and fall back); keep the segment and toast honest about what's actually
+            # running.
             if actual != requested:
                 cur["backend"] = actual
                 win_ck.set_backend_display(actual)

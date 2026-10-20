@@ -413,6 +413,18 @@ def test_interp_world_locked_shape_and_methods() -> None:
         assert out.shape == (64, 2) and np.isfinite(out).all()
 
 
+def test_interp_world_locked_gpu_falls_back_without_cupy() -> None:
+    # The dense-grid GPU path (B8.9) must degrade gracefully where CuPy is absent (CI/WSL): a
+    # ``use_gpu`` request builds the GPU convolver on a real GPU host, else falls back (here to
+    # pure-Python CPU, since use_rust is off) without crashing — engine reflects what built, and
+    # the render stays finite and correctly shaped either way.
+    brir = _synthetic_brir(n=400)
+    r = InterpWorldLocked7p1(brir, "timealign", block_size=64, grid_step=45.0, use_gpu=True)
+    assert r.engine in ("gpu", "cpu")  # 'gpu' only where CuPy is installed (the host)
+    out = r.process_block(np.random.randn(64, brir.n_channels) * 0.1, np.zeros(brir.n_channels))
+    assert out.shape == (64, 2) and np.isfinite(out).all()
+
+
 def test_tail_cap_bounds_voices_during_a_sweep() -> None:
     """A source swept across a dense grid holds many full-tail voices alive when uncapped;
     ``max_tail_ms`` bounds the concurrent voice count (the dropout fix)."""
