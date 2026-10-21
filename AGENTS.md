@@ -136,33 +136,31 @@ restart. (Owner granted "max autonomy", journal 54.)
 
 ### Running the host GUI apps (camera + audio + a window) — ON WINDOWS, not WSL
 
-The interactive apps in `apps/` (`calibration_gui.py`, `live_tracker_audio.py`) and
-the vision/audio spikes need a **real webcam, a real audio output, and a display** —
-they **must run on the Windows host**, never under WSL (no `/dev/video*`, no WASAPI,
-and the package's `cv2`/`mediapipe`/`sounddevice` aren't even installed on the WSL
-side). Drive them through interop with the **host** Python, which *does* have those
-libs (`py.exe -3.12` → `C:\Users\<user>\AppData\Local\Programs\Python\Python312`). The
-recipe, with the two gotchas that will otherwise waste a launch:
+The host apps — the world-lock passthrough engine (daily driver + the cockpit UI) and
+`calibration_gui.py` — and the vision/audio spikes need a **real webcam, a real audio
+output, and a display** — they **must run on the Windows host**, never under WSL (no
+`/dev/video*`, no WASAPI, and the package's `cv2`/`mediapipe`/`sounddevice` aren't even
+installed on the WSL side). There is **one** host entrypoint, `apps/launch.py`, with a
+**mode** as its first argument (`listen` | `test` | `calibrate` | `latency`); the host's
+single `run.cmd` (tracked template in `host/`) forwards to it. Drive it through interop
+with the **host** Python, which *does* have those libs (`py.exe -3.12` →
+`C:\Users\<user>\AppData\Local\Programs\Python\Python312`). The recipe, with the two
+gotchas that will otherwise waste a launch:
 
 1. **Inject the package via `sys.path`, not `PYTHONPATH`.** The host Python does not
    have `binaural_headtracker` installed, and on this box `PYTHONPATH` is overridden by
-   the environment, so exporting it does nothing. Instead run a tiny **host-local**
-   launcher that prepends the worktree's `src` and `apps` to `sys.path` and calls the
-   app's `main()`. A `\\wsl.localhost\<distro>\home\...\src` **UNC path imports fine**
-   from Windows Python — that is the supported way to run the WSL worktree's code on the
-   host without installing anything:
-   ```python
-   # C:\...\launch.py
-   import sys
-   sys.path[:0] = [r'\\wsl.localhost\Ubuntu-22.04\home\jean\git\<worktree>\apps',
-                   r'\\wsl.localhost\Ubuntu-22.04\home\jean\git\<worktree>\src']
-   import live_tracker_audio as app  # or calibration_gui
-   raise SystemExit(app.main())
+   the environment, so exporting it does nothing. Instead call `apps/launch.py` over a
+   `\\wsl.localhost\<distro>\home\...` **UNC path** — it prepends its own repo's `src`
+   and `apps` to `sys.path` from `__file__` and dispatches to the mode's `main()`. UNC
+   imports work fine from Windows Python — the supported way to run the WSL checkout's
+   code on the host without installing anything:
+   ```bat
+   py.exe -3.12 "\\wsl.localhost\Ubuntu-22.04\home\jean\git\binaural-headtracker\apps\launch.py" listen <--flags>
    ```
-   Then `py.exe -3.12 C:\...\launch.py <the app's --flags>`. (`wslpath -w <path>` gives
-   the UNC path for a worktree file.) Launch it with the Bash tool's
-   **`run_in_background`** — it's a long-lived GUI; the completion notice is the user
-   quitting (or a crash to read).
+   (`wslpath -w <path>` gives the UNC path for a worktree file; `host/run.cmd` wraps this
+   with the owner's device flags and the exit-97 reload loop.) Launch it with the Bash
+   tool's **`run_in_background`** — it's a long-lived GUI; the completion notice is the
+   user quitting (or a crash to read).
 2. **MediaPipe can't open a UNC model path.** `cv2`/`sounddevice`/imports take UNC, but
    the FaceLandmarker C++ loader throws `FileNotFoundError` on `\\wsl.localhost\...` —
    **copy the `.task` to a local `C:` path** and pass that as `--model`. (Baked BRIR dirs
@@ -187,7 +185,7 @@ pixel measurement, never by reasoning about the math or by an isolated probe** �
 
 - **Device buffer + split, unattended:** `apps/latency_sweep.py` / `latency_bench.py
   --output device --audio-device FiiO` plays a synthetic tone to the real endpoint and reports
-  the true device buffer. (The owner's `run_latency_sweep.cmd` writes `latency_sweep_results.json`.)
+  the true device buffer. (`run.cmd latency` on the host writes `latency_sweep_results.json`.)
 - **The live `queue`/`stale` audio-pipeline terms do NOT need a face.** The camera only sets a
   pose *value + timestamp*; it does not touch FIFO timing. To measure them unattended, replicate
   the passthrough's loopback-capture → burst-drain worker → output FIFO with a **synthetic
@@ -196,11 +194,12 @@ pixel measurement, never by reasoning about the math or by an isolated probe** �
   audio **by ear** (the motion→sound ground-truth, B8.5 §c). Everything else is runnable now.
 
 **The owner's host install location is `C:\Users\ibarz\BinauralHeadtracker\`** (per-user;
-Program Files needs admin we don't have). It holds the launchers (`launch_live.py`,
-`launch_passthrough.py` — each prepends the worktree's `apps`+`src` to `sys.path`, trying
-the active dev worktree first then the `main` checkout), the double-click `.cmd` wrappers
-(they use `%~dp0`, so they keep working wherever the folder is), the local-`C:` model copy,
-and `dry_snare.wav`. Put new host launchers/assets here, not in Downloads.
+Program Files needs admin we don't have). It holds the **single** `run.cmd` (the tracked
+template is `host/run.cmd`; it uses `%~dp0` so it keeps working wherever the folder is, and
+calls `apps/launch.py` in the `main` checkout over the UNC path), the local-`C:` model copy,
+`dry_snare.wav`, and the `hrir_sets\` candidates. Put new host assets here, not in Downloads.
+Deploy/update the launcher by copying `host/run.cmd` over (see `host/README.md`); keep it a
+single start script — add a *mode* to `apps/launch.py`, don't spawn another `run_*.cmd`.
 
 **GPU compute (CuPy on the RTX 3090) — now OPTIONAL.** The native Rust kernel (B8.2, the
 `--rust` path) renders the 8-channel 500 ms-BRIR passthrough in real time on the **CPU**
@@ -253,13 +252,15 @@ Fast path (what the launchers already do): **CPU, no GPU, via the native Rust ke
 2. **Install it into the host Python**: copy the wheel to `C:\…\BinauralHeadtracker\wheels\`
    and `py -3.12 -m pip install --force-reinstall "C:\…\wheels\<wheel>"`. Verify
    `py -3.12 -c "import binaural_kernel"`.
-3. **Run**: double-click `run.cmd` (or a `run_*.cmd`). The passthrough uses
-   `--rust --lfe-mode brir --output-eq <rev26_final.txt>` at a small `--block` with a low
-   `--latency-ms` for snappy head-tracking. `--gpu` (CuPy) stays available as an alternative
-   but needs the CUDA-12 wheel set above; plain pure-Python CPU is the last-resort fallback
-   (works everywhere, ~0.97× RT, may drop out under motion).
+3. **Run**: double-click `run.cmd` (daily `listen`), or pass a mode — `run.cmd test` /
+   `calibrate` / `latency`. That one script is the **only** host entrypoint (it forwards to
+   `apps/launch.py`); the passthrough uses `--rust --lfe-mode brir --output-eq
+   <rev26_final.txt>` at a small `--block` with a low `--latency-ms` for snappy head-tracking.
+   `--gpu` (CuPy) stays available as an alternative but needs the CUDA-12 wheel set above;
+   plain pure-Python CPU is the last-resort fallback (works everywhere, ~0.97× RT, may drop
+   out under motion).
 
-Updating the app's code needs no redeploy — the launchers import live from the WSL checkout;
+Updating the app's code needs no redeploy — the launcher imports live from the WSL checkout;
 only a **kernel** change (anything under `rust/`) requires rebuilding + reinstalling the wheel
 (steps 1–2). Sharing with a colleague: build their platform's wheel (Linux native / Windows via
 cargo-xwin / macOS on a Mac), or they run the pure-Python fallback.

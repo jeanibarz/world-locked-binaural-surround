@@ -138,7 +138,7 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   nearest selection + wrap, static source == plain BRIR convolution to 1e-9, transition
   reaches the new BRIR's exact steady state, crossfade cuts the worst sample-step ~3.8×
   (down to the signal's own slew = fully artifact-free), pose→azimuth world-lock sign.
-  Host demo `apps/live_tracker_audio.py` (camera → tracker → renderer → `sounddevice`,
+  Host demo `apps/live_tracker_audio.py` (retired in journal 64, superseded by the passthrough) (camera → tracker → renderer → `sounddevice`,
   loops the owner's snare, `--record` dumps the heard wav + az track for a reproducible
   A/B). Steady state = 1 voice, transitions peak at 2 (mean 1.34 over a full sweep).
   Windows/VoiceMeeter routing deferred to M4. See journal 22.)_
@@ -269,7 +269,7 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   `camera_choices`, `resolve_output_device` (index or name-substring → index, loud on a
   typo), `default_choice_label` — 8 tests; plus host-only enumeration (`probe_cameras`,
   `query_output_devices`) and a Tk pre-launch `settings_dialog` (lazy imports, CI-safe).
-  Wired into both apps: `live_tracker_audio.py` (camera + audio), `calibration_gui.py`
+  Wired into both apps: `live_tracker_audio.py` (camera + audio; retired in journal 64), `calibration_gui.py`
   (camera). **Validated live on the host** — the owner ran the live world-lock end-to-end
   (snare stays fixed when turning). Host fixes in the same block: (a) audio callback made
   robust to WASAPI's variable buffer size (render fixed blocks into a pending buffer; surface
@@ -327,8 +327,10 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   heading, verdict pill, radar cardinals) routed to Rajdhani. Perf: `compose` +2.6 ms/frame (11.4 vs
   8.8). Pillow added to the `vision`+`dev` extras. Verified by before/after host PNGs + an
   independent review (no defects). 8 tests (352 total). See journal 48.)_
-- [ ] **B6.10** Route `live_tracker_audio.py`'s remaining raw `cv2.putText` overlays through the
-  shared `_console.text` for one consistent look (follow-up from B6.9).
+- [x] **B6.10** ~~Route `live_tracker_audio.py`'s remaining raw `cv2.putText` overlays through the
+  shared `_console.text`~~ — **obsolete**: `live_tracker_audio.py` was retired when the host
+  launchers were consolidated to a single entrypoint (`apps/launch.py`); the daily driver is the
+  world-lock passthrough, whose overlays already go through `_console`/the cockpit (journal 64).
 - [ ] **B6.11** HiDPI / resizable console window (`WINDOW_NORMAL` + integer canvas scale) so the
   console isn't small on high-DPI displays — distinct from the B6.9 glyph-sharpness fix.
 - [x] **B6.12** **Dear PyGui cockpit** — a native, resizable second host front-end chosen from a
