@@ -74,8 +74,14 @@ py -3.12 "%LAUNCH%" calibrate --model "%MODEL%" --no-dialog --camera 0 %EXTRA%
 goto end
 
 :latency
-REM headless; --output device measures the real FiiO device-buffer term.
-py -3.12 "%LAUNCH%" latency --output device --audio-device FiiO %EXTRA%
+REM headless; synthetic pose + sine on the REAL FiiO output measures the true device-buffer
+REM term. Close anything else using the FiiO (incl. the passthrough) first, or exclusive rows
+REM FAIL (the sweep continues). Writes latency_sweep_results.json next to this .cmd.
+py -3.12 "%LAUNCH%" latency --brir-dir "%BRIR%" ^
+  --output device --audio-device FiiO --rust ^
+  --methods timealign --blocks 256 512 1024 --latencies 20 ^
+  --exclusive-modes shared exclusive --warmup 3 --seconds 8 ^
+  --out "%~dp0latency_sweep_results.json" %EXTRA%
 goto end
 
 :end
