@@ -534,10 +534,22 @@ _(the chain appends here as it learns)_
       Boot to disable), BitLocker OFF (no lockout risk from `testsigning`), no driver installed. A
       bounded host crash-safety attempt is justified under the owner's mandate (demand-start, not set
       as default → no bootloop even on a hypothetical streaming crash).
-    - [ ] **Host crash-safety pass → then B2:** install the signed driver on the host (cert→Root,
-      `testsigning on`, one reboot, install but not default), run the pull-driven test, confirm no host
-      bugcheck. Then B2 (real K11 consumer: 7.1 read → Rust binaural DSP → WASAPI-exclusive to the K11,
-      1:1 advance) + measure end-to-end latency. _(RFC Track B)_
+    - [x] **Latency budget reconciled — Track B wins the `queue` term, not `device` (journal 62):**
+      our SYSVAD device measures the **same 22 ms** WASAPI shared-mode `device` latency as VoiceMeeter
+      (journal 48) — inherent to any shared-mode virtual device, Track B can't remove it. Track B
+      removes the **`queue` ≈ 16–20 ms** cushion FIFO by coupling the consumer 1:1 to the K11 clock
+      (pull-driven, no async worker). Expected win ≈ **16–20 ms + its jitter** (not "all" latency; the
+      22 ms device term + ~40 ms camera stale remain).
+    - [~] **Host crash-safety attempt STAGED + reversible (journal 62):** can't run in-session (the
+      reboot kills this WSL/Claude session, which runs on the host). Turnkey scripts in
+      `spikes/bpre-vm/`: `host_arm_testmode.ps1` → reboot → `host_install_and_test.ps1` (demand-start,
+      not default → no bootloop) → `host_revert.ps1`. Binary hash-matched to the VM-validated driver;
+      all prereqs verified. **Next session (post-reboot) runs it.**
+    - [ ] **B2 — the latency payoff:** real K11 consumer (loopback-read the virtual device → Rust
+      binaural DSP → WASAPI-exclusive to the K11, pull tick 1:1 from the K11 callback, **no cushion
+      FIFO**) + measure end-to-end latency vs the journal-48 baseline to confirm the ≈16–20 ms win.
+      Loopback-read + tick-from-callback loop can be dry-run in the VM; the exclusive-to-K11 leg needs
+      the host. _(RFC Track B)_
 - [x] **B8.8** **Reduce the `queue` term — measured: no cheap win, it trades off against audible
   glitches; folds into B8.7.** _(**Measured** on the host via interop, journal 48:
   `scratchpad/queue_probe.py` reproduces the passthrough's loopback-capture → burst-drain worker →
