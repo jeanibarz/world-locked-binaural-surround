@@ -521,11 +521,15 @@ _(the chain appends here as it learns)_
       (0 gaps, 0 discontinuities), baseline is CLEAN, and a deliberately-injected defect is caught (6
       jumps) → the measurement is sensitive, so the PASS is trustworthy. audiodg tolerates driving the
       device from an external consumer via bursty notifications. The RFC's core Track-B risk is retired.
-    - [ ] **Build the real pull-driven device (B1→B3):** replace the timer with consumption+notification
-      driven by a user-mode consumer (software pseudo-K11 → real K11) over the SPSC ring + `advance()`
-      seam; Rust DSP behind `FrameSource`/`ClockSink`; 7.1@48k; stall-watchdog + engine-absent safety;
-      VM first, then host + K11. Optional: confirm `IAudioClock` A-V monotonicity. Rig in
-      `spikes/bpre-vm/`. _(RFC Track B)_
+    - [x] **B1 slice 1 done (journal 60):** the SYSVAD device is **pull-driven externally** — a
+      user-mode pseudo-K11 signals a named event; each tick drives `PullAdvance` (consume + notify),
+      no internal timer. ~real-time, near-clean output (0 gaps, 13 minor jumps = Python ticker jitter),
+      **VM stable**. Found + fixed two host-risk bugs: a BSOD 0x18 (event over-dereference) and a DACL
+      ACCESS_DENIED (user-mode now creates the event).
+    - [ ] **B1 harden + finish:** stress (many start/stop; stop-consumer-mid-stream watchdog;
+      teardown races) to zero bugchecks; tighten cadence to 0 glitches; then B2 (real K11 consumer:
+      7.1 read → Rust binaural DSP → WASAPI-exclusive to the K11, 1:1 advance) on the host with Secure
+      Boot off + System Restore + removable driver + recovery path. _(RFC Track B)_
 - [x] **B8.8** **Reduce the `queue` term — measured: no cheap win, it trades off against audible
   glitches; folds into B8.7.** _(**Measured** on the host via interop, journal 48:
   `scratchpad/queue_probe.py` reproduces the passthrough's loopback-capture → burst-drain worker →
