@@ -15,7 +15,7 @@ pose into the source's head-relative azimuth via
 :func:`binaural_headtracker.calibrate.directions_for_pose` on a one-speaker layout
 (see :func:`source_layout`) and passes just that azimuth here. This module owns only
 the voice pool and the crossfade, so it is pure numpy and unit-tested headless; the
-camera + ``sounddevice`` live path lives in ``apps/live_tracker_audio.py`` (host-only).
+camera + ``sounddevice`` live path lives in ``apps/voicemeeter_passthrough.py`` (host-only).
 
 The same voice pool generalises to the full 7.1 world-locked passthrough later (one
 source per input channel sharing the ring); B3.1 only needs the single source that

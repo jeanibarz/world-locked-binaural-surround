@@ -327,8 +327,10 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   heading, verdict pill, radar cardinals) routed to Rajdhani. Perf: `compose` +2.6 ms/frame (11.4 vs
   8.8). Pillow added to the `vision`+`dev` extras. Verified by before/after host PNGs + an
   independent review (no defects). 8 tests (352 total). See journal 48.)_
-- [ ] **B6.10** Route `live_tracker_audio.py`'s remaining raw `cv2.putText` overlays through the
-  shared `_console.text` for one consistent look (follow-up from B6.9).
+- [x] **B6.10** ~~Route `live_tracker_audio.py`'s remaining raw `cv2.putText` overlays through the
+  shared `_console.text`~~ — **obsolete**: `live_tracker_audio.py` was retired when the host
+  launchers were consolidated to a single entrypoint (`apps/launch.py`); the daily driver is the
+  world-lock passthrough, whose overlays already go through `_console`/the cockpit (journal 64).
 - [ ] **B6.11** HiDPI / resizable console window (`WINDOW_NORMAL` + integer canvas scale) so the
   console isn't small on high-DPI displays — distinct from the B6.9 glyph-sharpness fix.
 - [x] **B6.12** **Dear PyGui cockpit** — a native, resizable second host front-end chosen from a
