@@ -252,13 +252,15 @@ Fast path (what the launchers already do): **CPU, no GPU, via the native Rust ke
 2. **Install it into the host Python**: copy the wheel to `C:\…\BinauralHeadtracker\wheels\`
    and `py -3.12 -m pip install --force-reinstall "C:\…\wheels\<wheel>"`. Verify
    `py -3.12 -c "import binaural_kernel"`.
-3. **Run**: double-click `run.cmd` (or a `run_*.cmd`). The passthrough uses
-   `--rust --lfe-mode brir --output-eq <rev26_final.txt>` at a small `--block` with a low
-   `--latency-ms` for snappy head-tracking. `--gpu` (CuPy) stays available as an alternative
-   but needs the CUDA-12 wheel set above; plain pure-Python CPU is the last-resort fallback
-   (works everywhere, ~0.97× RT, may drop out under motion).
+3. **Run**: double-click `run.cmd` (daily `listen`), or pass a mode — `run.cmd test` /
+   `calibrate` / `latency`. That one script is the **only** host entrypoint (it forwards to
+   `apps/launch.py`); the passthrough uses `--rust --lfe-mode brir --output-eq
+   <rev26_final.txt>` at a small `--block` with a low `--latency-ms` for snappy head-tracking.
+   `--gpu` (CuPy) stays available as an alternative but needs the CUDA-12 wheel set above;
+   plain pure-Python CPU is the last-resort fallback (works everywhere, ~0.97× RT, may drop
+   out under motion).
 
-Updating the app's code needs no redeploy — the launchers import live from the WSL checkout;
+Updating the app's code needs no redeploy — the launcher imports live from the WSL checkout;
 only a **kernel** change (anything under `rust/`) requires rebuilding + reinstalling the wheel
 (steps 1–2). Sharing with a colleague: build their platform's wheel (Linux native / Windows via
 cargo-xwin / macOS on a Mac), or they run the pure-Python fallback.
