@@ -907,7 +907,7 @@ def main(argv=None) -> int:
         loc = {"test": None, "t0": None, "cache": {}, "comp": "ctf"}
 
         def _write_loc_results(t):
-            """Persist a localization test: a per-trial CSV + a scoreboard JSON. Returns the JSON path."""
+            """Persist a localization test: a per-trial CSV + scoreboard JSON; returns JSON path."""
             import csv as _csv
             import datetime as _datetime
             import json as _json
