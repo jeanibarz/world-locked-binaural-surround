@@ -24,11 +24,12 @@ class SECURITY_ATTRIBUTES(Structure):
 # build a security descriptor with a NULL DACL (everyone), so the SYSTEM driver can open the event
 sd = (ctypes.c_byte * 64)()
 adv.InitializeSecurityDescriptor(byref(sd), 1)                 # SECURITY_DESCRIPTOR_REVISION
-adv.SetSecurityDescriptorDacl(byref(sd), True, None, False)    # present=TRUE, DACL=NULL => allow all
+adv.SetSecurityDescriptorDacl(byref(sd), True, None, False)  # present, DACL=NULL => allow all
 sa = SECURITY_ATTRIBUTES(sizeof(SECURITY_ATTRIBUTES), ctypes.cast(byref(sd), c_void_p), False)
 
 k.CreateEventW.restype = wintypes.HANDLE
-k.CreateEventW.argtypes = [POINTER(SECURITY_ATTRIBUTES), wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR]
+k.CreateEventW.argtypes = [POINTER(SECURITY_ATTRIBUTES), wintypes.BOOL, wintypes.BOOL,
+                           wintypes.LPCWSTR]
 k.SetEvent.argtypes = [wintypes.HANDLE]
 
 dur = float(sys.argv[1]) if len(sys.argv) > 1 else 15.0
