@@ -526,10 +526,18 @@ _(the chain appends here as it learns)_
       no internal timer. ~real-time, near-clean output (0 gaps, 13 minor jumps = Python ticker jitter),
       **VM stable**. Found + fixed two host-risk bugs: a BSOD 0x18 (event over-dereference) and a DACL
       ACCESS_DENIED (user-mode now creates the event).
-    - [ ] **B1 harden + finish:** stress (many start/stop; stop-consumer-mid-stream watchdog;
-      teardown races) to zero bugchecks; tighten cadence to 0 glitches; then B2 (real K11 consumer:
-      7.1 read → Rust binaural DSP → WASAPI-exclusive to the K11, 1:1 advance) on the host with Secure
-      Boot off + System Restore + removable driver + recovery path. _(RFC Track B)_
+    - [x] **B1 hardened — zero bugcheck under stress (journal 61):** 15 rapid start/stop lifecycle
+      cycles + consumer-drop mid-stream (watchdog under-produces safely, no crash) + clean recovery
+      afterward (device output 0 gaps / 0 discontinuities). No bugcheck in the VM event log across any
+      run. The transient jumps from journal 60 were Python-ticker jitter, not a driver fault.
+    - [x] **Host state checked — favorable + reversible (journal 61):** host is legacy BIOS (no Secure
+      Boot to disable), BitLocker OFF (no lockout risk from `testsigning`), no driver installed. A
+      bounded host crash-safety attempt is justified under the owner's mandate (demand-start, not set
+      as default → no bootloop even on a hypothetical streaming crash).
+    - [ ] **Host crash-safety pass → then B2:** install the signed driver on the host (cert→Root,
+      `testsigning on`, one reboot, install but not default), run the pull-driven test, confirm no host
+      bugcheck. Then B2 (real K11 consumer: 7.1 read → Rust binaural DSP → WASAPI-exclusive to the K11,
+      1:1 advance) + measure end-to-end latency. _(RFC Track B)_
 - [x] **B8.8** **Reduce the `queue` term — measured: no cheap win, it trades off against audible
   glitches; folds into B8.7.** _(**Measured** on the host via interop, journal 48:
   `scratchpad/queue_probe.py` reproduces the passthrough's loopback-capture → burst-drain worker →
