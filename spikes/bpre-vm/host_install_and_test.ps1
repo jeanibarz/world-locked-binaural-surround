@@ -12,13 +12,34 @@ $log = 'D:\kookr-vm\host_test_result.txt'
 function Say($m){ $m | Tee-Object -FilePath $log -Append | Out-Null; Write-Output $m }
 "=== Kookr host install+test  $(Get-Date -Format s) ===" | Set-Content $log
 
-# 0. confirm test mode is actually active (driver load requires it)
+# 0. confirm test mode is actually LIVE in the running kernel, not merely configured.
+#    bcdedit testsigning=Yes is only the *configured* value; it takes effect on the NEXT boot. A
+#    package signed with the test cert still fails to load (CodeIntegrity event 3004, node
+#    CM_PROB_UNSIGNED_DRIVER) if the running kernel booted before test-signing was armed. Journal 66
+#    burned a whole session on exactly this: the old gate checked only the config and reported
+#    "active" while the kernel was stale. So gate on LastBootUpTime vs the armed-at marker that
+#    host_arm_testmode.ps1 drops.
 $ts = (bcdedit /enum '{current}' | Select-String 'testsigning\s+Yes')
-if (-not $ts) { Say "ABORT: test-signing is not active. Run host_arm_testmode.ps1 then reboot first."; exit 1 }
-Say "test-signing: active"
+if (-not $ts) { Say "ABORT: test-signing is not configured. Run host_arm_testmode.ps1 then reboot first."; exit 1 }
+$boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
+$armFile = 'D:\kookr-vm\testmode_armed_at.txt'
+if (Test-Path $armFile) {
+    $armedAt = [datetime]::Parse((Get-Content $armFile -Raw).Trim())
+    if ($boot -lt $armedAt) {
+        Say "ABORT: test-signing was armed at $($armedAt.ToString('s')) but the running kernel booted"
+        Say "       earlier ($($boot.ToString('s'))) -> you have NOT rebooted since arming it, so the"
+        Say "       kernel still enforces signatures and the test-signed driver will not load."
+        Say "       Do a full Windows RESTART of the host (not shutdown+power-on), then re-run this."
+        exit 1
+    }
+    Say "test-signing: LIVE (kernel booted $($boot.ToString('s')), armed $($armedAt.ToString('s')))"
+} else {
+    Say "WARN: test-signing configured Yes but no armed-at marker ($armFile) -> cannot prove the"
+    Say "      running kernel booted into test mode. If install hits CodeIntegrity 3004, reboot first."
+}
 
 $devcon = 'C:\Program Files (x86)\Windows Kits\10\Tools\10.0.26100.0\x64\devcon.exe'
-$pkg = 'D:\kookr-vm\pkg'
+$pkg = 'D:\kookr-vm\pkg10'  # Win10-ported, re-signed package (journal 66); the old 'pkg' is Win11-gated.
 $hwid = 'Root\Sysvad_ComponentizedAudioSample'
 
 # 1. record current default playback device (we must NOT change it)

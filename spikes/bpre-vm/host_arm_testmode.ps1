@@ -25,7 +25,15 @@ bcdedit /set testsigning on | Out-Null
 Write-Output "bcdedit testsigning -> ON (effective after reboot)"
 bcdedit /enum '{current}' | Select-String 'testsigning'
 
+# 3. Drop an armed-at marker so host_install_and_test.ps1 can prove the kernel actually rebooted
+#    AFTER this (testsigning=Yes alone is only the configured value; the running kernel enforces
+#    signatures until the next boot — journal 66).
+$armFile = 'D:\kookr-vm\testmode_armed_at.txt'
+(Get-Date).ToString('o') | Set-Content $armFile
+Write-Output "armed-at marker -> $armFile ($(Get-Date -Format s))"
+
 Write-Output ""
-Write-Output ">>> ARMED. Next: REBOOT the host (this restarts WSL + any Claude session on it)."
+Write-Output ">>> ARMED. Next: do a full Windows RESTART of the host (not shutdown+power-on; that can skip"
+Write-Output ">>> the config via Fast Startup). This also restarts WSL + any Claude session on it."
 Write-Output ">>> After reboot, run:  powershell -ExecutionPolicy Bypass -File D:\kookr-vm\host_install_and_test.ps1"
 Write-Output ">>> To undo everything:  powershell -ExecutionPolicy Bypass -File D:\kookr-vm\host_revert.ps1  (then reboot)"
