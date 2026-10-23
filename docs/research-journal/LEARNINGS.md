@@ -643,3 +643,14 @@ full story.
     harnesses guarantee stream teardown on every exit path (try/finally + watchdog, never hang
     unbounded), `KookrPullTick` is the liveness probe (`err=0/183` clear, `err=5` stuck), and the only
     recovery for a stuck endpoint is a reboot. (→ [70](70-bsod-on-driver-unload-with-open-stream.md))
+86. **A "zero-drop" audio gate that replays a stale block is lying — count the starve.** The B2
+    consumer reported `ZERO-DROP PASS` while audibly beeping: its 1-deep hand-off re-emitted the last
+    stereo block when no fresh one arrived (and discarded surplus capture), and `no_data` only counted
+    a too-short buffer, never a stale replay. A real gate renders every captured frame through a
+    bounded FIFO and counts FIFO-empty (starve) / FIFO-full (overflow) as drops, plus a
+    capture/output frame **balance** (want ~1.0). That exposed the real defect: our pull-driven SYSVAD
+    sink advances one notification interval (~240 frames) per `KookrPullTick`, but the consumer ticks
+    once per 512-frame K11 block → a sustained 2.13× under-pull (balance 0.47) a FIFO can't absorb. The
+    fault is the sink's per-tick advance vs the consumer block (our driver's config), NOT the output
+    device; fix by making one tick = one consumer block, never by free-running a second clock.
+    (→ [71](71-b2-consumer-pull-rate-starvation.md))
