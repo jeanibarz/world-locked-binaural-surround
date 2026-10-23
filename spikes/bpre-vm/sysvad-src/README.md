@@ -33,12 +33,15 @@ git -C wds checkout bb68ed5e770bce04dc5395ec9258dafab034184d
 # 2. apply our tracked patch
 git -C wds apply <repo>/spikes/bpre-vm/sysvad-src/sysvad_b1b2.patch
 
-# 3. build + Win10-compat + 7.1 + sign (the repo's tracked scripts)
-spikes/bpre-vm/build_sysvad.ps1          # EWDK build (EndpointsCommon + TabletAudioSample)
-spikes/bpre-vm/apply_win10_compat.ps1    # vcxproj NTDDI/sideband down-level edits + import verify
+# 3. build + Win10-compat + 7.1 + device-pull + sign (the repo's tracked scripts)
 spikes/bpre-vm/make_speaker_71.py        # idempotent 7.1 header patch (already in the diff; safe to re-run)
-spikes/bpre-vm/sign_package.ps1          # test-sign into pkg10 (DriverVer 10.0.19041.x)
+spikes/bpre-vm/make_device_pull.py <sysvad>/EndpointsCommon   # issue #104: device-level single pull (already in the diff)
+spikes/bpre-vm/apply_win10_compat.ps1    # EWDK build (EndpointsCommon + TabletAudioSample) + import verify
+spikes/bpre-vm/host_port_win10.ps1       # make pkg10: INF gated 19041 (covers Win10+Win11), re-cat, re-sign
 ```
+
+> `build_sysvad.ps1` uses VS Community MSBuild, which lacks the driver platform toolset on this host
+> (`MSB8020`) — the real build is the EWDK one inside `apply_win10_compat.ps1`. Use that.
 
 > The `.vcxproj` NTDDI / sideband edits are applied by `apply_win10_compat.ps1` at build time (it leaves
 > `*.preNTDDI.bak` / `*.preSideband.bak` backups), so they are reproducible from the tracked scripts and

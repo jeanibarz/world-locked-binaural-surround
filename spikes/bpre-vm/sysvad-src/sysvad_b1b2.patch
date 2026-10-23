@@ -1,26 +1,18 @@
 diff --git a/audio/sysvad/EndpointsCommon/minwavertstream.cpp b/audio/sysvad/EndpointsCommon/minwavertstream.cpp
-index adea0c8..d3d5a47 100644
+index adea0c8..5416b6c 100644
 --- a/audio/sysvad/EndpointsCommon/minwavertstream.cpp
 +++ b/audio/sysvad/EndpointsCommon/minwavertstream.cpp
-@@ -54,6 +54,17 @@ Return Value:
+@@ -54,6 +54,9 @@ Return Value:
          m_pMiniport = NULL;
      }
  
-+    // B1: defensive pull-thread teardown (normally done on the RUN->PAUSE transition).
-+    if (m_pPullThread != NULL)
-+    {
-+        KeSetEvent(&m_PullStopEvent, 0, FALSE);
-+        KeWaitForSingleObject(m_pPullThread, Executive, KernelMode, FALSE, NULL);
-+        ObDereferenceObject(m_pPullThread);
-+        m_pPullThread = NULL;
-+    }
-+    if (m_hPullEvent) { ZwClose(m_hPullEvent); m_hPullEvent = NULL; }
-+    m_pPullEvent = NULL;   // pointer owned by the handle; closing the handle is enough
++    // B2 (issue #104): defensive unregister from the device-wide pull list (idempotent).
++    PullUnregister(this);
 +
      if (m_pDpc)
      {
          ExFreePoolWithTag( m_pDpc, MINWAVERTSTREAM_POOLTAG );
-@@ -232,6 +243,7 @@ Return Value:
+@@ -232,6 +235,7 @@ Return Value:
      m_hnsDPCTimeCarryForward = 0;
      m_ulDmaMovementRate = 0;
      m_byteDisplacementCarryForward = 0;
@@ -28,7 +20,7 @@ index adea0c8..d3d5a47 100644
      m_bLfxEnabled = FALSE;
      m_pbMuted = NULL;
      m_plVolumeLevel = NULL;
-@@ -269,6 +281,14 @@ Return Value:
+@@ -269,6 +273,16 @@ Return Value:
      InitializeListHead(&m_NotificationList);
      m_ulNotificationIntervalMs = 0;
  
@@ -39,11 +31,13 @@ index adea0c8..d3d5a47 100644
 +    m_hPullEvent = NULL;
 +    m_pPullThread = NULL;
 +    KeInitializeEvent(&m_PullStopEvent, NotificationEvent, FALSE);
++    m_PullListEntry.Flink = NULL;   // B2 (issue #104): not yet in the device pull list
++    m_PullListEntry.Blink = NULL;
 +
      // Initialize the spinlock to synchronize position updates
      KeInitializeSpinLock(&m_PositionSpinLock);
  
-@@ -865,7 +885,9 @@ NTSTATUS CMiniportWaveRTStream::GetPosition
+@@ -865,7 +879,9 @@ NTSTATUS CMiniportWaveRTStream::GetPosition
      KIRQL oldIrql;
      KeAcquireSpinLock(&m_PositionSpinLock, &oldIrql);
  
@@ -54,22 +48,15 @@ index adea0c8..d3d5a47 100644
      {
          //
          // Get the current time and update position.
-@@ -1261,10 +1283,22 @@ NTSTATUS CMiniportWaveRTStream::SetState
+@@ -1261,10 +1277,15 @@ NTSTATUS CMiniportWaveRTStream::SetState
                  }
  
                  // Pause DMA
 -                if (m_ulNotificationIntervalMs > 0)
-+                if (m_bPullMode && m_pPullThread != NULL)
++                if (m_bPullMode)
 +                {
-+                    // B1: stop the pull thread cleanly.
-+                    KeSetEvent(&m_PullStopEvent, 0, FALSE);
-+                    KeWaitForSingleObject(m_pPullThread, Executive, KernelMode, FALSE, NULL);
-+                    ObDereferenceObject(m_pPullThread);
-+                    m_pPullThread = NULL;
-+                    // pointer owned by the handle; close the handle only (no deref -> no 0x18).
-+                    if (m_hPullEvent) { ZwClose(m_hPullEvent); m_hPullEvent = NULL; }
-+                    m_pPullEvent = NULL;
-+                    KeClearEvent(&m_PullStopEvent);
++                    // B2 (issue #104): leave the device-wide pull list (tears down the shared thread if last).
++                    CMiniportWaveRTStream::PullUnregister(this);
 +                }
 +                if (!m_bPullMode && m_ulNotificationIntervalMs > 0)
                  {
@@ -79,39 +66,25 @@ index adea0c8..d3d5a47 100644
  
                      // If pin is transitioning from RUN, save the time since last buffer completion event was sent 
                      // so if the pin goes to RUN state again we can send the buffer completion event at correct time.
-@@ -1344,17 +1378,41 @@ NTSTATUS CMiniportWaveRTStream::SetState
+@@ -1344,17 +1365,27 @@ NTSTATUS CMiniportWaveRTStream::SetState
              ullPerfCounterTemp = KeQueryPerformanceCounter(&m_ullPerformanceCounterFrequency);
              m_ullLastDPCTimeStamp = m_ullDmaTimeStamp = KSCONVERT_PERFORMANCE_TIME(m_ullPerformanceCounterFrequency.QuadPart, ullPerfCounterTemp);
  
 -            if (m_ulNotificationIntervalMs > 0)
 +            if (m_bPullMode && m_ulNotificationIntervalMs > 0)
-             {
--                // Set timer for 1 ms. This will cause DPC to run every 1 ms but driver will send out 
--                // notification events only after notification interval. This timer is used by Sysvad to 
++            {
 +                // B1 (RFC Track B): create the named sync event a user-mode pseudo-K11 signals, and
 +                // start the pull thread. Each signal advances one notification period (consume +
 +                // notify); the real K11 consumer will drive this 1:1 with its playback callback.
-+                UNICODE_STRING evName;
-+                RtlInitUnicodeString(&evName, L"\\BaseNamedObjects\\KookrPullTick");
-+                // The user-mode consumer creates this named event first (with a permissive DACL);
-+                // IoCreateSynchronizationEvent OPENS the existing one. Its pointer is owned by the
-+                // handle - do NOT ObDereferenceObject it (that over-dereferences -> bugcheck 0x18).
-+                m_pPullEvent = IoCreateSynchronizationEvent(&evName, &m_hPullEvent);
-+                if (m_pPullEvent != NULL)
-+                {
-+                    HANDLE hThread = NULL;
-+                    NTSTATUS st = PsCreateSystemThread(&hThread, THREAD_ALL_ACCESS, NULL, NULL, NULL,
-+                                                       CMiniportWaveRTStream::PullThreadRoutine, this);
-+                    if (NT_SUCCESS(st))
-+                    {
-+                        ObReferenceObjectByHandle(hThread, THREAD_ALL_ACCESS, *PsThreadType, KernelMode,
-+                                                  (PVOID*)&m_pPullThread, NULL);
-+                        ZwClose(hThread);
-+                    }
-+                }
++                // B2 (issue #104): register with the device-wide pull list (one shared pull thread
++                // advances every active stream per tick, instead of a per-stream thread that would
++                // steal ticks from the others on the shared auto-reset event).
++                CMiniportWaveRTStream::PullRegister(this);
 +            }
 +            else if (m_ulNotificationIntervalMs > 0)
-+            {
+             {
+-                // Set timer for 1 ms. This will cause DPC to run every 1 ms but driver will send out 
+-                // notification events only after notification interval. This timer is used by Sysvad to 
 +                // Set timer for 1 ms. This will cause DPC to run every 1 ms but driver will send out
 +                // notification events only after notification interval. This timer is used by Sysvad to
                  // emulate hardware and send out notification event. Real hardware should not use this
@@ -125,7 +98,7 @@ index adea0c8..d3d5a47 100644
                      NULL
                   );
  
-@@ -1853,5 +1911,56 @@ End:
+@@ -1853,5 +1884,176 @@ End:
      return;
  }
  //=============================================================================
@@ -162,20 +135,140 @@ index adea0c8..d3d5a47 100644
 +    KeReleaseSpinLock(&m_PositionSpinLock, oldIrql);
 +}
 +
++//=============================================================================
++// B2 (issue #104): device-level single pull. One KookrPullTick advances EVERY active stream.
++// A SYNCHRONIZATION (auto-reset) event wakes only ONE waiter per SetEvent, so the B1 per-stream pull
++// threads stole ticks from each other (balance = 1/N streams; research-journal 72). Here a single
++// process-wide pull thread waits on KookrPullTick and, per tick, advances all registered streams once.
++// g_PullMutex is a KMUTEX (NOT a guarded/fast mutex): acquiring it stays at PASSIVE_LEVEL, which is
++// required because register/unregister call PsCreateSystemThread / IoCreateSynchronizationEvent /
++// KeWaitForSingleObject(thread) -- all PASSIVE-only. (A guarded/fast mutex raises to APC_LEVEL -> bugcheck.)
++static KMUTEX           g_PullMutex;          // serialises register/unregister (PASSIVE_LEVEL)
++static KSPIN_LOCK       g_PullSpinLock;       // guards the list vs the pull thread's iteration
++static LIST_ENTRY       g_PullList;
++static LONG             g_PullReady = 0;      // 0=uninit, 1=initializing, 2=ready
++static ULONG            g_PullCount = 0;
++static PKEVENT          g_pPullEvent = NULL;  // the single \BaseNamedObjects\KookrPullTick
++static HANDLE           g_hPullEvent = NULL;
++static KEVENT           g_PullStopEvent;
++static PKTHREAD         g_pPullThread = NULL;
++
++VOID CMiniportWaveRTStream::PullEnsureInit()
++{
++    if (InterlockedCompareExchange(&g_PullReady, 1, 0) == 0)
++    {
++        KeInitializeMutex(&g_PullMutex, 0);
++        KeInitializeSpinLock(&g_PullSpinLock);
++        InitializeListHead(&g_PullList);
++        KeInitializeEvent(&g_PullStopEvent, NotificationEvent, FALSE);
++        InterlockedExchange(&g_PullReady, 2);
++    }
++    else
++    {
++        while (InterlockedCompareExchange(&g_PullReady, 2, 2) != 2) { /* brief spin until ready */ }
++    }
++}
++
++VOID CMiniportWaveRTStream::PullRegister(CMiniportWaveRTStream* stream)
++{
++    PullEnsureInit();
++    KeWaitForSingleObject(&g_PullMutex, Executive, KernelMode, FALSE, NULL);
++    KIRQL irql;
++    KeAcquireSpinLock(&g_PullSpinLock, &irql);
++    BOOLEAN first = FALSE;
++    if (stream->m_PullListEntry.Flink == NULL)   // not already linked (idempotent)
++    {
++        InsertTailList(&g_PullList, &stream->m_PullListEntry);
++        g_PullCount++;
++        first = (g_PullCount == 1);
++    }
++    KeReleaseSpinLock(&g_PullSpinLock, irql);
++    (VOID)first;
++    // Start the single pull thread if it isn't running yet (first register, or a prior start failed).
++    if (g_PullCount >= 1 && g_pPullThread == NULL)
++    {
++        if (g_pPullEvent == NULL)
++        {
++            UNICODE_STRING evName;
++            RtlInitUnicodeString(&evName, L"\\BaseNamedObjects\\KookrPullTick");
++            KeClearEvent(&g_PullStopEvent);
++            g_pPullEvent = IoCreateSynchronizationEvent(&evName, &g_hPullEvent);
++        }
++        if (g_pPullEvent != NULL)
++        {
++            HANDLE hThread = NULL;
++            NTSTATUS st = PsCreateSystemThread(&hThread, THREAD_ALL_ACCESS, NULL, NULL, NULL,
++                                               CMiniportWaveRTStream::PullThreadRoutine, NULL);
++            if (NT_SUCCESS(st))
++            {
++                ObReferenceObjectByHandle(hThread, THREAD_ALL_ACCESS, *PsThreadType, KernelMode,
++                                          (PVOID*)&g_pPullThread, NULL);
++                ZwClose(hThread);
++            }
++            else
++            {
++                // Thread not created: drop the just-opened event so it is not leaked and the next
++                // register retries cleanly (no orphan thread exists on this path). The device simply
++                // gets no ticks until then.
++                if (g_hPullEvent) { ZwClose(g_hPullEvent); g_hPullEvent = NULL; }
++                g_pPullEvent = NULL;
++            }
++        }
++    }
++    KeReleaseMutex(&g_PullMutex, FALSE);
++}
++
++VOID CMiniportWaveRTStream::PullUnregister(CMiniportWaveRTStream* stream)
++{
++    PullEnsureInit();
++    KeWaitForSingleObject(&g_PullMutex, Executive, KernelMode, FALSE, NULL);
++    KIRQL irql;
++    KeAcquireSpinLock(&g_PullSpinLock, &irql);
++    if (stream->m_PullListEntry.Flink != NULL)   // linked -> remove (idempotent)
++    {
++        RemoveEntryList(&stream->m_PullListEntry);
++        stream->m_PullListEntry.Flink = NULL;
++        stream->m_PullListEntry.Blink = NULL;
++        if (g_PullCount > 0) { g_PullCount--; }
++    }
++    BOOLEAN last = (g_PullCount == 0);
++    KeReleaseSpinLock(&g_PullSpinLock, irql);
++    if (last && g_pPullThread != NULL)
++    {
++        KeSetEvent(&g_PullStopEvent, 0, FALSE);
++        KeWaitForSingleObject(g_pPullThread, Executive, KernelMode, FALSE, NULL);
++        ObDereferenceObject(g_pPullThread);
++        g_pPullThread = NULL;
++        // pointer owned by the handle; close the handle only (no deref -> no bugcheck 0x18).
++        if (g_hPullEvent) { ZwClose(g_hPullEvent); g_hPullEvent = NULL; }
++        g_pPullEvent = NULL;
++        KeClearEvent(&g_PullStopEvent);
++    }
++    KeReleaseMutex(&g_PullMutex, FALSE);
++}
++
 +VOID CMiniportWaveRTStream::PullThreadRoutine(_In_ PVOID StartContext)
 +{
-+    CMiniportWaveRTStream* _this = (CMiniportWaveRTStream*)StartContext;
++    UNREFERENCED_PARAMETER(StartContext);
 +    PVOID objs[2];
-+    objs[0] = _this->m_pPullEvent;          // user-mode pseudo-K11 tick
-+    objs[1] = &_this->m_PullStopEvent;      // shutdown
++    objs[0] = g_pPullEvent;            // the single KookrPullTick
++    objs[1] = &g_PullStopEvent;        // shutdown
 +    LARGE_INTEGER timeout;
 +    timeout.QuadPart = (-100) * ((LONGLONG)HNSTIME_PER_MILLISECOND);  // 100 ms free-run watchdog
 +    for (;;)
 +    {
 +        NTSTATUS st = KeWaitForMultipleObjects(2, objs, WaitAny, Executive, KernelMode, FALSE,
 +                                               &timeout, NULL);
-+        if (st == STATUS_WAIT_0 + 1) { break; }     // stop requested
-+        _this->PullAdvance();                       // tick (WAIT_0) or timeout free-run
++        if (st == STATUS_WAIT_0 + 1) { break; }   // stop requested
++        // B2 (issue #104): one tick advances EVERY active stream once -> the whole device moves one period.
++        KIRQL irql;
++        KeAcquireSpinLock(&g_PullSpinLock, &irql);
++        for (PLIST_ENTRY le = g_PullList.Flink; le != &g_PullList; le = le->Flink)
++        {
++            CMiniportWaveRTStream* s = CONTAINING_RECORD(le, CMiniportWaveRTStream, m_PullListEntry);
++            s->PullAdvance();
++        }
++        KeReleaseSpinLock(&g_PullSpinLock, irql);
 +    }
 +    PsTerminateSystemThread(STATUS_SUCCESS);
 +}
@@ -183,10 +276,10 @@ index adea0c8..d3d5a47 100644
  
  
 diff --git a/audio/sysvad/EndpointsCommon/minwavertstream.h b/audio/sysvad/EndpointsCommon/minwavertstream.h
-index 4e9e882..6f5486e 100644
+index 4e9e882..bb2f50e 100644
 --- a/audio/sysvad/EndpointsCommon/minwavertstream.h
 +++ b/audio/sysvad/EndpointsCommon/minwavertstream.h
-@@ -58,6 +58,14 @@ protected:
+@@ -58,6 +58,15 @@ protected:
      LIST_ENTRY                  m_NotificationList;
      PEX_TIMER                   m_pNotificationTimer;
      ULONG                       m_ulNotificationIntervalMs;
@@ -198,10 +291,11 @@ index 4e9e882..6f5486e 100644
 +    HANDLE                      m_hPullEvent;
 +    KEVENT                      m_PullStopEvent;   // signalled to stop the pull thread
 +    PKTHREAD                    m_pPullThread;
++    LIST_ENTRY                  m_PullListEntry;   // B2 (issue #104): link in the device-wide active-pull list
      ULONG                       m_ulCurrentWritePosition;
      LONG                        m_IsCurrentWritePositionUpdated;
      
-@@ -112,6 +120,7 @@ protected:
+@@ -112,6 +121,7 @@ protected:
      ULONGLONG                   m_ullLastDPCTimeStamp;
      ULONGLONG                   m_hnsDPCTimeCarryForward;
      ULONG                       m_byteDisplacementCarryForward;
@@ -209,7 +303,7 @@ index 4e9e882..6f5486e 100644
      ULONG                       m_ulDmaMovementRate;
      BOOL                        m_bLfxEnabled;
      PBOOL                       m_pbMuted;
-@@ -290,7 +299,11 @@ private:
+@@ -290,7 +300,15 @@ private:
      (
          _In_ ULONG ByteDisplacement
      );
@@ -217,6 +311,10 @@ index 4e9e882..6f5486e 100644
 +
 +    // B1 pull-driven mode: advance one notification period (consume + notify), driven externally.
 +    VOID PullAdvance();
++    // B2 (issue #104): one device-wide pull thread advances every registered stream per tick.
++    static VOID PullEnsureInit();
++    static VOID PullRegister(CMiniportWaveRTStream* stream);
++    static VOID PullUnregister(CMiniportWaveRTStream* stream);
 +    static KSTART_ROUTINE PullThreadRoutine;
 +
      VOID UpdatePosition
