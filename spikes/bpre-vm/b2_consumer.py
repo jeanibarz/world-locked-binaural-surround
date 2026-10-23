@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import os
 import sys
 import threading
 import time
@@ -176,23 +177,29 @@ def main(argv=None):
         except Exception as e:  # noqa: BLE001 — teardown must never raise
             print(f"  teardown {label}: {e!r}")
 
+    _td_lock = threading.Lock()
+
     def teardown():
+        # Serialised + idempotent: the watchdog thread and the main thread's `finally`
+        # may both reach here. Closes streams first, then the pull-event handle, so no
+        # audio callback runs after its handle is freed. Never touches the driver.
         nonlocal cap_stream, prod_stream, out_stream, hev, pya
-        if out_stream is not None:
-            _close("out_stream", out_stream.stop, out_stream.close)
-            out_stream = None
-        if prod_stream is not None:
-            _close("prod_stream", prod_stream.stop, prod_stream.close)
-            prod_stream = None
-        if cap_stream is not None:
-            _close("cap_stream", cap_stream.stop_stream, cap_stream.close)
-            cap_stream = None
-        if pya is not None:
-            _close("pyaudio", pya.terminate)
-            pya = None
-        if hev:
-            _close("pull_event", lambda: k.CloseHandle(hev))
-            hev = None
+        with _td_lock:
+            if out_stream is not None:
+                _close("out_stream", out_stream.stop, out_stream.close)
+                out_stream = None
+            if prod_stream is not None:
+                _close("prod_stream", prod_stream.stop, prod_stream.close)
+                prod_stream = None
+            if cap_stream is not None:
+                _close("cap_stream", cap_stream.stop_stream, cap_stream.close)
+                cap_stream = None
+            if pya is not None:
+                _close("pyaudio", pya.terminate)
+                pya = None
+            if hev:
+                _close("pull_event", lambda: k.CloseHandle(hev))
+                hev = None
 
     def pulltick_is_clear():
         """True if Global\\KookrPullTick is NOT pinned by a leaked stream."""
@@ -218,7 +225,25 @@ def main(argv=None):
 
     rc = 3
     crashed = False
-    watchdog = None
+
+    # Hard deadline that bounds the ENTIRE open+run window — a WASAPI open (the exclusive
+    # K11 leg especially) or a start() can wedge indefinitely, and nothing on the main
+    # thread could then close it. As a last resort the watchdog hard-exits the PROCESS
+    # (client-side only: the OS reclaims this process's audio streams; the driver is never
+    # unloaded, so no bugcheck). If that still leaves the endpoint pinned, the banner says
+    # the only recovery is a reboot. Armed before the first open; cancelled once teardown
+    # completes on a healthy run.
+    def _watchdog_fire():
+        print(f"\nWATCHDOG: {args.seconds:.0f}s + grace elapsed with the run wedged — "
+              f"hard-exiting the process (client streams only; the driver is left installed).")
+        print_recovery_banner()
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(4)
+    watchdog = threading.Timer(args.seconds + 20.0, _watchdog_fire)
+    watchdog.daemon = True
+    watchdog.start()
+
     try:
         lb = None
         for d in pya.get_loopback_device_info_generator():
@@ -275,7 +300,9 @@ def main(argv=None):
             st["out_cb"] += 1
             if status and status.output_underflow:
                 st["out_under"] += 1
-            k.SetEvent(hev)  # advance the pull-driven SYSVAD device, locked to this hardware clock
+            h = hev  # may be None once teardown has run; a late callback must not SetEvent a freed handle
+            if h:
+                k.SetEvent(h)  # advance the pull-driven SYSVAD device, locked to this hardware clock
             st["ticks"] += 1
             with lock:
                 s = latest["stereo"]
@@ -287,15 +314,7 @@ def main(argv=None):
         out_stream = sd.OutputStream(device=k11_idx, samplerate=SR, channels=2, dtype="float32",
                                      blocksize=blk, callback=out_cb, extra_settings=extra)
 
-        # ---- run (watchdog-bounded so a wedged exclusive open can never hang forever) ----
-        def _watchdog_fire():
-            print(f"\nWATCHDOG: {args.seconds:.0f}s + grace elapsed with the run still wedged — "
-                  f"forcing teardown (streams only, never the driver).")
-            teardown()
-        watchdog = threading.Timer(args.seconds + 15.0, _watchdog_fire)
-        watchdog.daemon = True
-        watchdog.start()
-
+        # ---- run (watchdog, armed before the opens above, bounds any wedge) ----
         try:
             cap_stream.start_stream()
             if prod_stream is not None:
@@ -311,7 +330,7 @@ def main(argv=None):
         deadline = time.monotonic() + args.seconds
         while True:
             remaining = deadline - time.monotonic()
-            if remaining <= 0 or out_stream is None:  # watchdog may have nulled out_stream
+            if remaining <= 0:
                 break
             time.sleep(min(0.5, remaining))
 
@@ -339,11 +358,18 @@ def main(argv=None):
         print(f"ERROR: {e!r}")
         crashed = True
     finally:
+        # Tear the streams down FIRST, then disarm the watchdog — so if a close() blocks on
+        # a wedged stream, the watchdog (still armed) hard-exits the process at its deadline
+        # instead of the finally hanging forever.
+        teardown()
         if watchdog is not None:
             watchdog.cancel()
-        teardown()
-        clear = pulltick_is_clear()
-        print(f"post-run KookrPullTick clear: {clear}")
+        try:
+            clear = pulltick_is_clear()
+            print(f"post-run KookrPullTick clear: {clear}")
+        except Exception as e:  # noqa: BLE001 — never mask the return code over a probe failure
+            print(f"post-run KookrPullTick probe failed: {e!r}")
+            clear = False
         if crashed or not clear:
             print_recovery_banner()
     return rc
