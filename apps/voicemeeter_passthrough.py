@@ -174,6 +174,12 @@ def main(argv=None) -> int:
     p.add_argument("--camera", type=int, default=0)
     p.add_argument("--input-device", default=None,
                    help="7.1 capture device index or name substring (e.g. 'VoiceMeeter Output')")
+    p.add_argument("--pull-sysvad", action="store_true",
+                   help="Approach A (B2): capture our own pull-driven SYSVAD virtual device instead of "
+                        "VoiceMeeter, and drive it from the K11 output callback (one KookrPullTick per "
+                        "period) so the headphone clock is the single master clock — no two-clock drift, "
+                        "no resampler. Pins the output to one 10 ms period and rebuffers --block behind "
+                        "the FIFO. Defaults --input-device to the Tablet (SYSVAD) loopback.")
     p.add_argument("--audio-device", default=None,
                    help="headphone output device index or name substring (e.g. 'FiiO')")
     p.add_argument("--exclusive", action="store_true",
@@ -247,6 +253,7 @@ def main(argv=None) -> int:
                         "the queue term as clock skew (A1 resampler) vs jitter/burst (Track B). "
                         "Off by default; measure at a fixed --block/--latency-ms.")
     args = p.parse_args(argv)
+    pull_mode = args.pull_sysvad  # Approach A: drive our SYSVAD device from the output clock
 
     brir = load_baked_brir(args.brir_dir)
 
@@ -418,12 +425,18 @@ def main(argv=None) -> int:
     import pyaudiowpatch as pawp
 
     pya = pawp.PyAudio()
-    in_spec = (args.input_device or "VoiceMeeter Input").lower()
-    lb = next((d for d in pya.get_loopback_device_info_generator()
-               if in_spec in d["name"].lower()), None)
+    in_spec = (args.input_device or ("tablet" if pull_mode else "VoiceMeeter Input")).lower()
+    _cands = [d for d in pya.get_loopback_device_info_generator()
+              if in_spec in d["name"].lower()]
+    # Prefer the endpoint with the right channel count: "tablet"/"voicemeeter" match several endpoints
+    # (headset 2ch, SPDIF, the 7.1 speakers), and only the 7.1 one has brir.n_channels.
+    lb = next((d for d in _cands if int(d["maxInputChannels"]) == brir.n_channels),
+              _cands[0] if _cands else None)
     if lb is None:
-        raise SystemExit(f"no WASAPI loopback device matching {in_spec!r} — is VoiceMeeter "
-                         "running and set as the default 7.1 playback device?")
+        raise SystemExit(f"no WASAPI loopback device matching {in_spec!r} — "
+                         + ("is the SYSVAD 'Tablet Sample' speakers endpoint present and set to 7.1?"
+                            if pull_mode else
+                            "is VoiceMeeter running and set as the default 7.1 playback device?"))
     in_ch = int(lb["maxInputChannels"])
     if in_ch != brir.n_channels:
         raise SystemExit(f"loopback '{lb['name']}' is {in_ch}ch, need {brir.n_channels} — set "
@@ -460,6 +473,39 @@ def main(argv=None) -> int:
     in_tail = {"buf": np.zeros((0, brir.n_channels))}  # leftover capture < one block
     cb_error: list[BaseException] = []
     max_backlog = cushion * 2  # cap latency growth from drift at ~2x the target cushion
+
+    # Approach A (B2 / issue #104): drive our own pull-driven SYSVAD device from the K11 output callback,
+    # making the headphone output the single master clock. Each output callback advances SYSVAD exactly one
+    # notification period by signalling KookrPullTick. The output is PINNED to one period (blocksize below),
+    # so one SetEvent == one period -- an auto-reset event coalesces, so we must never need >1 per callback.
+    # This removes the two-clock drift the VoiceMeeter path carries (no async resampler needed); the renderer
+    # keeps its larger --block behind the out_fifo cushion. SAFETY: to stop it, close this handle (finally)
+    # and let the stream close -- NEVER unload/disable/devcon-restart the driver (that bugchecks).
+    PULL_PERIOD = max(1, round(brir.samplerate * 0.010))   # SYSVAD 10 ms notification period (480 @ 48k)
+    hev = None
+    kset = None
+    if pull_mode:
+        import ctypes
+        from ctypes import wintypes, Structure, POINTER, byref, c_void_p, sizeof
+        _k = ctypes.WinDLL("kernel32", use_last_error=True)
+        _adv = ctypes.WinDLL("advapi32", use_last_error=True)
+
+        class _SA(Structure):
+            _fields_ = [("nLength", wintypes.DWORD), ("lpSD", c_void_p), ("bInherit", wintypes.BOOL)]
+
+        _sdb = (ctypes.c_byte * 64)()
+        _adv.InitializeSecurityDescriptor(byref(_sdb), 1)
+        _adv.SetSecurityDescriptorDacl(byref(_sdb), True, None, False)  # NULL DACL -> the SYSTEM driver opens it
+        _sa = _SA(sizeof(_SA), ctypes.cast(byref(_sdb), c_void_p), False)
+        _k.CreateEventW.restype = wintypes.HANDLE
+        _k.CreateEventW.argtypes = [POINTER(_SA), wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR]
+        _k.SetEvent.argtypes = [wintypes.HANDLE]
+        hev = _k.CreateEventW(byref(_sa), False, False, "Global\\KookrPullTick")
+        if not hev:
+            raise SystemExit(f"CreateEvent(KookrPullTick) failed (err {ctypes.get_last_error()})")
+        kset = _k.SetEvent
+        print(f"SYSVAD pull: KookrPullTick armed; output pinned to one period "
+              f"({PULL_PERIOD} fr = {PULL_PERIOD / brir.samplerate * 1e3:.1f} ms) as the single master clock")
 
     # A0 diagnostic (RFC Track A, `--log-fifo-fill`): record output-FIFO fill vs time so the
     # standing `queue` term can be classified as clock skew (a sustained slope → the A1 async
@@ -610,6 +656,8 @@ def main(argv=None) -> int:
     def out_cb(outdata, frames, _t, status):  # noqa: ANN001  (FIFO → headphones)
         try:
             now = time.monotonic()
+            if kset is not None:
+                kset(hev)  # advance SYSVAD one period; output is pinned to one period/callback (no coalescing)
             dev = out_lat["ms"]
             buf = out_carry["buf"]
             with fifo_lock:
@@ -702,8 +750,8 @@ def main(argv=None) -> int:
     def _open_output(exclusive: bool):
         extra = sd.WasapiSettings(exclusive=True) if exclusive else None
         ctx = sd.OutputStream(samplerate=brir.samplerate, channels=2, device=out_index,
-                              blocksize=0, dtype="float32", latency=out_lat_req, callback=out_cb,
-                              extra_settings=extra)
+                              blocksize=(PULL_PERIOD if pull_mode else 0), dtype="float32",
+                              latency=out_lat_req, callback=out_cb, extra_settings=extra)
         ctx.start()
         return ctx
 
@@ -1363,6 +1411,12 @@ def main(argv=None) -> int:
         worker.join(timeout=1.0)
         out_ctx.stop()
         out_ctx.close()
+        if hev:
+            try:
+                import ctypes
+                ctypes.WinDLL("kernel32").CloseHandle(hev)  # close KookrPullTick; NEVER unload the driver
+            except Exception:  # noqa: BLE001 — teardown must not raise
+                pass
         in_stream.stop_stream()
         in_stream.close()
         pya.terminate()
