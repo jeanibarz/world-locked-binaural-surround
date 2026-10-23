@@ -36,8 +36,9 @@ if(($c -join "`n") -match [regex]::Escape($marker)){
     '#endif // Kookr Win10 down-level compat',
     ''
   )
-  $new = @(); $new += $c[0..($anchor-1)]; $new += $block; $new += $c[$anchor..($c.Count-1)]
-  Set-Content $cc -Value $new
+  $tail = if($anchor -lt $c.Count){ $c[$anchor..($c.Count-1)] } else { @() }  # guard N..(N-1) descending-range trap
+  $new = @(); $new += $c[0..($anchor-1)]; $new += $block; $new += $tail
+  Set-Content $cc -Value $new -Encoding Ascii   # common.cpp is ASCII; keep it ASCII/no-BOM for the compiler
   Say "inserted compat block after line $anchor in common.cpp"
 }
 # rebuild
