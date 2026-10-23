@@ -665,3 +665,15 @@ full story.
     lesson — the B1/B2 driver C++ was hand-edited into the host build tree and never vendored into the
     repo, so it couldn't be reviewed, rebuilt from source control, or this cause caught in review.
     (→ [72](72-tick-stealing-shared-pull-event.md))
+
+88. **One auto-reset event can't fan out to N consumers — use one device-level pump.** The B2
+    tick-stealing (lesson #87) is fixed by moving the pull from per-stream to a single process-wide
+    pull thread that advances EVERY active stream per `KookrPullTick` (balance -> 1.0 for any stream
+    count), instead of each stream racing for the shared event. Kernel gotchas that bit on the way:
+    register/unregister must serialise at PASSIVE_LEVEL (a `KMUTEX`, NOT a guarded/fast mutex) because
+    `PsCreateSystemThread`/`IoCreateSynchronizationEvent` are PASSIVE-only; the list is guarded by a
+    separate spinlock for the pull thread's iteration; list links double as an idempotency flag
+    (`Flink == NULL` = not linked). VM-validated (loads + 15x start/stop stress, zero bugcheck).
+    Process lesson: driver-store install scripts that parse `pnputil` English labels silently no-op on
+    a French host (journal 54 redux) -> bind an old package; enumerate with `/format:xml` instead.
+    (-> [73](73-device-level-pull-fix.md))
