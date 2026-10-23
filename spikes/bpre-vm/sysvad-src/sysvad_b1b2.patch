@@ -1,0 +1,562 @@
+diff --git a/audio/sysvad/EndpointsCommon/minwavertstream.cpp b/audio/sysvad/EndpointsCommon/minwavertstream.cpp
+index adea0c8..d3d5a47 100644
+--- a/audio/sysvad/EndpointsCommon/minwavertstream.cpp
++++ b/audio/sysvad/EndpointsCommon/minwavertstream.cpp
+@@ -54,6 +54,17 @@ Return Value:
+         m_pMiniport = NULL;
+     }
+ 
++    // B1: defensive pull-thread teardown (normally done on the RUN->PAUSE transition).
++    if (m_pPullThread != NULL)
++    {
++        KeSetEvent(&m_PullStopEvent, 0, FALSE);
++        KeWaitForSingleObject(m_pPullThread, Executive, KernelMode, FALSE, NULL);
++        ObDereferenceObject(m_pPullThread);
++        m_pPullThread = NULL;
++    }
++    if (m_hPullEvent) { ZwClose(m_hPullEvent); m_hPullEvent = NULL; }
++    m_pPullEvent = NULL;   // pointer owned by the handle; closing the handle is enough
++
+     if (m_pDpc)
+     {
+         ExFreePoolWithTag( m_pDpc, MINWAVERTSTREAM_POOLTAG );
+@@ -232,6 +243,7 @@ Return Value:
+     m_hnsDPCTimeCarryForward = 0;
+     m_ulDmaMovementRate = 0;
+     m_byteDisplacementCarryForward = 0;
++    m_burstAccum = 0;
+     m_bLfxEnabled = FALSE;
+     m_pbMuted = NULL;
+     m_plVolumeLevel = NULL;
+@@ -269,6 +281,14 @@ Return Value:
+     InitializeListHead(&m_NotificationList);
+     m_ulNotificationIntervalMs = 0;
+ 
++    // B1 (RFC Track B): pull-driven mode on. A user-mode pseudo-K11 ticks m_pPullEvent to drive
++    // each advance; the pull thread free-runs on a long timeout so the device never wedges.
++    m_bPullMode = TRUE;
++    m_pPullEvent = NULL;
++    m_hPullEvent = NULL;
++    m_pPullThread = NULL;
++    KeInitializeEvent(&m_PullStopEvent, NotificationEvent, FALSE);
++
+     // Initialize the spinlock to synchronize position updates
+     KeInitializeSpinLock(&m_PositionSpinLock);
+ 
+@@ -865,7 +885,9 @@ NTSTATUS CMiniportWaveRTStream::GetPosition
+     KIRQL oldIrql;
+     KeAcquireSpinLock(&m_PositionSpinLock, &oldIrql);
+ 
+-    if (m_KsState == KSSTATE_RUN)
++    // B1: in pull-driven mode the position is advanced only by PullAdvance (external ticks), so do
++    // NOT interpolate by wall-clock here - return the pulled position directly.
++    if (m_KsState == KSSTATE_RUN && !m_bPullMode)
+     {
+         //
+         // Get the current time and update position.
+@@ -1261,10 +1283,22 @@ NTSTATUS CMiniportWaveRTStream::SetState
+                 }
+ 
+                 // Pause DMA
+-                if (m_ulNotificationIntervalMs > 0)
++                if (m_bPullMode && m_pPullThread != NULL)
++                {
++                    // B1: stop the pull thread cleanly.
++                    KeSetEvent(&m_PullStopEvent, 0, FALSE);
++                    KeWaitForSingleObject(m_pPullThread, Executive, KernelMode, FALSE, NULL);
++                    ObDereferenceObject(m_pPullThread);
++                    m_pPullThread = NULL;
++                    // pointer owned by the handle; close the handle only (no deref -> no 0x18).
++                    if (m_hPullEvent) { ZwClose(m_hPullEvent); m_hPullEvent = NULL; }
++                    m_pPullEvent = NULL;
++                    KeClearEvent(&m_PullStopEvent);
++                }
++                if (!m_bPullMode && m_ulNotificationIntervalMs > 0)
+                 {
+                     ExCancelTimer(m_pNotificationTimer, NULL);
+-                    KeFlushQueuedDpcs(); 
++                    KeFlushQueuedDpcs();
+ 
+                     // If pin is transitioning from RUN, save the time since last buffer completion event was sent 
+                     // so if the pin goes to RUN state again we can send the buffer completion event at correct time.
+@@ -1344,17 +1378,41 @@ NTSTATUS CMiniportWaveRTStream::SetState
+             ullPerfCounterTemp = KeQueryPerformanceCounter(&m_ullPerformanceCounterFrequency);
+             m_ullLastDPCTimeStamp = m_ullDmaTimeStamp = KSCONVERT_PERFORMANCE_TIME(m_ullPerformanceCounterFrequency.QuadPart, ullPerfCounterTemp);
+ 
+-            if (m_ulNotificationIntervalMs > 0)
++            if (m_bPullMode && m_ulNotificationIntervalMs > 0)
+             {
+-                // Set timer for 1 ms. This will cause DPC to run every 1 ms but driver will send out 
+-                // notification events only after notification interval. This timer is used by Sysvad to 
++                // B1 (RFC Track B): create the named sync event a user-mode pseudo-K11 signals, and
++                // start the pull thread. Each signal advances one notification period (consume +
++                // notify); the real K11 consumer will drive this 1:1 with its playback callback.
++                UNICODE_STRING evName;
++                RtlInitUnicodeString(&evName, L"\\BaseNamedObjects\\KookrPullTick");
++                // The user-mode consumer creates this named event first (with a permissive DACL);
++                // IoCreateSynchronizationEvent OPENS the existing one. Its pointer is owned by the
++                // handle - do NOT ObDereferenceObject it (that over-dereferences -> bugcheck 0x18).
++                m_pPullEvent = IoCreateSynchronizationEvent(&evName, &m_hPullEvent);
++                if (m_pPullEvent != NULL)
++                {
++                    HANDLE hThread = NULL;
++                    NTSTATUS st = PsCreateSystemThread(&hThread, THREAD_ALL_ACCESS, NULL, NULL, NULL,
++                                                       CMiniportWaveRTStream::PullThreadRoutine, this);
++                    if (NT_SUCCESS(st))
++                    {
++                        ObReferenceObjectByHandle(hThread, THREAD_ALL_ACCESS, *PsThreadType, KernelMode,
++                                                  (PVOID*)&m_pPullThread, NULL);
++                        ZwClose(hThread);
++                    }
++                }
++            }
++            else if (m_ulNotificationIntervalMs > 0)
++            {
++                // Set timer for 1 ms. This will cause DPC to run every 1 ms but driver will send out
++                // notification events only after notification interval. This timer is used by Sysvad to
+                 // emulate hardware and send out notification event. Real hardware should not use this
+                 // timer to fire notification event as it will drain power if the timer is running at 1 msec.
+                 ExSetTimer
+                 (
+                     m_pNotificationTimer,
+                     (-1) * HNSTIME_PER_MILLISECOND,
+-                    HNSTIME_PER_MILLISECOND, // 1 ms 
++                    HNSTIME_PER_MILLISECOND, // 1 ms
+                     NULL
+                  );
+ 
+@@ -1853,5 +1911,56 @@ End:
+     return;
+ }
+ //=============================================================================
++// B1 (RFC Track B): pull-driven advance. One call = one notification period consumed + notified,
++// driven externally by the user-mode pseudo-K11 (later the real K11 playback callback).
++VOID CMiniportWaveRTStream::PullAdvance()
++{
++    KIRQL oldIrql;
++    KeAcquireSpinLock(&m_PositionSpinLock, &oldIrql);
++    if (m_KsState == KSSTATE_RUN && m_ulDmaMovementRate > 0 && m_ulNotificationIntervalMs > 0)
++    {
++        ULONG bytes = (m_ulDmaMovementRate * m_ulNotificationIntervalMs) / 1000;
++        LARGE_INTEGER qpc = KeQueryPerformanceCounter(NULL);
++
++        m_ullPresentationPosition += bytes;
++        if (m_bCapture) { WriteBytes(bytes); }
++        else if (!g_DoNotCreateDataFiles) { ReadBytes(bytes); }
++        m_ullPlayPosition = m_ullWritePosition = (m_ullWritePosition + bytes) % m_ulDmaBufferSize;
++        m_ullLinearPosition += bytes;
++        m_ullDmaTimeStamp = KSCONVERT_PERFORMANCE_TIME(m_ullPerformanceCounterFrequency.QuadPart, qpc);
++        m_llPacketCounter++;
++
++        if (!IsListEmpty(&m_NotificationList))
++        {
++            PLIST_ENTRY le = m_NotificationList.Flink;
++            while (le != &m_NotificationList)
++            {
++                NotificationListEntry* nle = CONTAINING_RECORD(le, NotificationListEntry, ListEntry);
++                KeSetEvent(nle->NotificationEvent, 0, FALSE);
++                le = le->Flink;
++            }
++        }
++    }
++    KeReleaseSpinLock(&m_PositionSpinLock, oldIrql);
++}
++
++VOID CMiniportWaveRTStream::PullThreadRoutine(_In_ PVOID StartContext)
++{
++    CMiniportWaveRTStream* _this = (CMiniportWaveRTStream*)StartContext;
++    PVOID objs[2];
++    objs[0] = _this->m_pPullEvent;          // user-mode pseudo-K11 tick
++    objs[1] = &_this->m_PullStopEvent;      // shutdown
++    LARGE_INTEGER timeout;
++    timeout.QuadPart = (-100) * ((LONGLONG)HNSTIME_PER_MILLISECOND);  // 100 ms free-run watchdog
++    for (;;)
++    {
++        NTSTATUS st = KeWaitForMultipleObjects(2, objs, WaitAny, Executive, KernelMode, FALSE,
++                                               &timeout, NULL);
++        if (st == STATUS_WAIT_0 + 1) { break; }     // stop requested
++        _this->PullAdvance();                       // tick (WAIT_0) or timeout free-run
++    }
++    PsTerminateSystemThread(STATUS_SUCCESS);
++}
++//=============================================================================
+ 
+ 
+diff --git a/audio/sysvad/EndpointsCommon/minwavertstream.h b/audio/sysvad/EndpointsCommon/minwavertstream.h
+index 4e9e882..6f5486e 100644
+--- a/audio/sysvad/EndpointsCommon/minwavertstream.h
++++ b/audio/sysvad/EndpointsCommon/minwavertstream.h
+@@ -58,6 +58,14 @@ protected:
+     LIST_ENTRY                  m_NotificationList;
+     PEX_TIMER                   m_pNotificationTimer;
+     ULONG                       m_ulNotificationIntervalMs;
++    // B1 (RFC Track B): pull-driven mode. An external user-mode consumer (pseudo-K11, later the
++    // real K11) ticks a named sync event; each tick advances consumption + fires one notification,
++    // instead of the internal periodic timer.
++    BOOLEAN                     m_bPullMode;
++    PKEVENT                     m_pPullEvent;      // named sync event the consumer signals
++    HANDLE                      m_hPullEvent;
++    KEVENT                      m_PullStopEvent;   // signalled to stop the pull thread
++    PKTHREAD                    m_pPullThread;
+     ULONG                       m_ulCurrentWritePosition;
+     LONG                        m_IsCurrentWritePositionUpdated;
+     
+@@ -112,6 +120,7 @@ protected:
+     ULONGLONG                   m_ullLastDPCTimeStamp;
+     ULONGLONG                   m_hnsDPCTimeCarryForward;
+     ULONG                       m_byteDisplacementCarryForward;
++    ULONG                       m_burstAccum;   // B-pre: bytes accumulated toward the next pull-driven burst
+     ULONG                       m_ulDmaMovementRate;
+     BOOL                        m_bLfxEnabled;
+     PBOOL                       m_pbMuted;
+@@ -290,7 +299,11 @@ private:
+     (
+         _In_ ULONG ByteDisplacement
+     );
+-    
++
++    // B1 pull-driven mode: advance one notification period (consume + notify), driven externally.
++    VOID PullAdvance();
++    static KSTART_ROUTINE PullThreadRoutine;
++
+     VOID UpdatePosition
+     (
+         _In_ LARGE_INTEGER ilQPC
+diff --git a/audio/sysvad/EndpointsCommon/speakertoptable.h b/audio/sysvad/EndpointsCommon/speakertoptable.h
+index ea3890f..0c93e27 100644
+--- a/audio/sysvad/EndpointsCommon/speakertoptable.h
++++ b/audio/sysvad/EndpointsCommon/speakertoptable.h
+@@ -87,7 +87,7 @@ PCPIN_DESCRIPTOR SpeakerTopoMiniportPins[] =
+ static
+ KSJACK_DESCRIPTION SpeakerJackDescBridge =
+ {
+-    KSAUDIO_SPEAKER_STEREO,
++    KSAUDIO_SPEAKER_7POINT1_SURROUND,
+     0xB3C98C,               // Color spec for green
+     eConnTypeUnknown,
+     eGeoLocFront,
+diff --git a/audio/sysvad/EndpointsCommon/speakerwavtable.h b/audio/sysvad/EndpointsCommon/speakerwavtable.h
+index 6fb058a..57a4ce3 100644
+--- a/audio/sysvad/EndpointsCommon/speakerwavtable.h
++++ b/audio/sysvad/EndpointsCommon/speakerwavtable.h
+@@ -21,15 +21,15 @@ Abstract:
+ 
+ // To keep the code simple assume device supports only 48KHz, 16-bit, stereo (PCM and NON-PCM)
+ 
+-#define SPEAKER_DEVICE_MAX_CHANNELS                 2       // Max Channels.
++#define SPEAKER_DEVICE_MAX_CHANNELS                 8       // Max Channels.
+ 
+-#define SPEAKER_HOST_MAX_CHANNELS                   2       // Max Channels.
++#define SPEAKER_HOST_MAX_CHANNELS                   8       // Max Channels.
+ #define SPEAKER_HOST_MIN_BITS_PER_SAMPLE            16      // Min Bits Per Sample
+ #define SPEAKER_HOST_MAX_BITS_PER_SAMPLE            16      // Max Bits Per Sample
+ #define SPEAKER_HOST_MIN_SAMPLE_RATE                24000   // Min Sample Rate
+ #define SPEAKER_HOST_MAX_SAMPLE_RATE                96000   // Max Sample Rate
+ 
+-#define SPEAKER_OFFLOAD_MAX_CHANNELS                2       // Max Channels.
++#define SPEAKER_OFFLOAD_MAX_CHANNELS                8       // Max Channels.
+ #define SPEAKER_OFFLOAD_MIN_BITS_PER_SAMPLE         16      // Min Bits Per Sample
+ #define SPEAKER_OFFLOAD_MAX_BITS_PER_SAMPLE         16      // Max Bits Per Sample
+ #define SPEAKER_OFFLOAD_MIN_SAMPLE_RATE             44100   // Min Sample Rate
+@@ -71,15 +71,15 @@ KSDATAFORMAT_WAVEFORMATEXTENSIBLE SpeakerAudioEngineSupportedDeviceFormats[] =
+         {
+             {
+                 WAVE_FORMAT_EXTENSIBLE,
+-                2,
++                8,
+                 44100,
+-                176400,
+-                4,
++                705600,
++                16,
+                 16,
+                 sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)
+             },
+             16,
+-            KSAUDIO_SPEAKER_STEREO,
++            KSAUDIO_SPEAKER_7POINT1_SURROUND,
+             STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM)
+         }
+     },
+@@ -96,15 +96,15 @@ KSDATAFORMAT_WAVEFORMATEXTENSIBLE SpeakerAudioEngineSupportedDeviceFormats[] =
+         {
+             {
+                 WAVE_FORMAT_EXTENSIBLE,
+-                2,
++                8,
+                 24000,
+-                96000,
+-                4,
++                384000,
++                16,
+                 16,
+                 sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)
+             },
+             16,
+-            KSAUDIO_SPEAKER_STEREO,
++            KSAUDIO_SPEAKER_7POINT1_SURROUND,
+             STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM)
+         }
+     },
+@@ -121,15 +121,15 @@ KSDATAFORMAT_WAVEFORMATEXTENSIBLE SpeakerAudioEngineSupportedDeviceFormats[] =
+         {
+             {
+                 WAVE_FORMAT_EXTENSIBLE,
+-                2,
++                8,
+                 48000,
+-                192000,
+-                4,
++                768000,
++                16,
+                 16,
+                 sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)
+             },
+             16,
+-            KSAUDIO_SPEAKER_STEREO,
++            KSAUDIO_SPEAKER_7POINT1_SURROUND,
+             STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM)
+         }
+     },
+@@ -146,15 +146,15 @@ KSDATAFORMAT_WAVEFORMATEXTENSIBLE SpeakerAudioEngineSupportedDeviceFormats[] =
+         {
+             {
+                 WAVE_FORMAT_EXTENSIBLE,
+-                2,
++                8,
+                 88200,
+-                352800,
+-                4,
++                1411200,
++                16,
+                 16,
+                 sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)
+             },
+             16,
+-            KSAUDIO_SPEAKER_STEREO,
++            KSAUDIO_SPEAKER_7POINT1_SURROUND,
+             STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM)
+         }
+     },
+@@ -171,15 +171,15 @@ KSDATAFORMAT_WAVEFORMATEXTENSIBLE SpeakerAudioEngineSupportedDeviceFormats[] =
+         {
+             {
+                 WAVE_FORMAT_EXTENSIBLE,
+-                2,
++                8,
+                 96000,
+-                384000,
+-                4,
++                1536000,
++                16,
+                 16,
+                 sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)
+             },
+             16,
+-            KSAUDIO_SPEAKER_STEREO,
++            KSAUDIO_SPEAKER_7POINT1_SURROUND,
+             STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM)
+         }
+     }
+@@ -201,15 +201,15 @@ KSDATAFORMAT_WAVEFORMATEXTENSIBLE SpeakerHostPinSupportedDeviceFormats[] =
+         {
+             {
+                 WAVE_FORMAT_EXTENSIBLE,
+-                2,
++                8,
+                 24000,
+-                96000,
+-                4,
++                384000,
++                16,
+                 16,
+                 sizeof(WAVEFORMATEXTENSIBLE)-sizeof(WAVEFORMATEX)
+             },
+             16,
+-            KSAUDIO_SPEAKER_STEREO,
++            KSAUDIO_SPEAKER_7POINT1_SURROUND,
+             STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM)
+         }
+     },
+@@ -226,15 +226,15 @@ KSDATAFORMAT_WAVEFORMATEXTENSIBLE SpeakerHostPinSupportedDeviceFormats[] =
+         {
+             {
+                 WAVE_FORMAT_EXTENSIBLE,
+-                2,
++                8,
+                 32000,
+-                128000,
+-                4,
++                512000,
++                16,
+                 16,
+                 sizeof(WAVEFORMATEXTENSIBLE)-sizeof(WAVEFORMATEX)
+             },
+             16,
+-            KSAUDIO_SPEAKER_STEREO,
++            KSAUDIO_SPEAKER_7POINT1_SURROUND,
+             STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM)
+         }
+     },
+@@ -251,15 +251,15 @@ KSDATAFORMAT_WAVEFORMATEXTENSIBLE SpeakerHostPinSupportedDeviceFormats[] =
+         {
+             {
+                 WAVE_FORMAT_EXTENSIBLE,
+-                2,
++                8,
+                 44100,
+-                176400,
+-                4,
++                705600,
++                16,
+                 16,
+                 sizeof(WAVEFORMATEXTENSIBLE)-sizeof(WAVEFORMATEX)
+             },
+             16,
+-            KSAUDIO_SPEAKER_STEREO,
++            KSAUDIO_SPEAKER_7POINT1_SURROUND,
+             STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM)
+         }
+     },
+@@ -276,15 +276,15 @@ KSDATAFORMAT_WAVEFORMATEXTENSIBLE SpeakerHostPinSupportedDeviceFormats[] =
+         {
+             {
+                 WAVE_FORMAT_EXTENSIBLE,
+-                2,
++                8,
+                 48000,
+-                192000,
+-                4,
++                768000,
++                16,
+                 16,
+                 sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)
+             },
+             16,
+-            KSAUDIO_SPEAKER_STEREO,
++            KSAUDIO_SPEAKER_7POINT1_SURROUND,
+             STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM)
+         }
+     },
+@@ -301,15 +301,15 @@ KSDATAFORMAT_WAVEFORMATEXTENSIBLE SpeakerHostPinSupportedDeviceFormats[] =
+         {
+             {
+                 WAVE_FORMAT_EXTENSIBLE,
+-                2,
++                8,
+                 88200,
+-                352800,
+-                4,
++                1411200,
++                16,
+                 16,
+                 sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)
+             },
+             16,
+-            KSAUDIO_SPEAKER_STEREO,
++            KSAUDIO_SPEAKER_7POINT1_SURROUND,
+             STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM)
+         }
+     },
+@@ -326,15 +326,15 @@ KSDATAFORMAT_WAVEFORMATEXTENSIBLE SpeakerHostPinSupportedDeviceFormats[] =
+         {
+             {
+                 WAVE_FORMAT_EXTENSIBLE,
+-                2,
++                8,
+                 96000,
+-                384000,
+-                4,
++                1536000,
++                16,
+                 16,
+                 sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)
+             },
+             16,
+-            KSAUDIO_SPEAKER_STEREO,
++            KSAUDIO_SPEAKER_7POINT1_SURROUND,
+             STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM)
+         }
+     }
+@@ -356,15 +356,15 @@ KSDATAFORMAT_WAVEFORMATEXTENSIBLE SpeakerOffloadPinSupportedDeviceFormats[] =
+         {
+             {
+                 WAVE_FORMAT_EXTENSIBLE,
+-                2,
++                8,
+                 44100,
+-                176400,
+-                4,
++                705600,
++                16,
+                 16,
+                 sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)
+             },
+             16,
+-            KSAUDIO_SPEAKER_STEREO,
++            KSAUDIO_SPEAKER_7POINT1_SURROUND,
+             STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM)
+         }
+     },
+@@ -381,15 +381,15 @@ KSDATAFORMAT_WAVEFORMATEXTENSIBLE SpeakerOffloadPinSupportedDeviceFormats[] =
+         {
+             {
+                 WAVE_FORMAT_EXTENSIBLE,
+-                2,
++                8,
+                 48000,
+-                192000,
+-                4,
++                768000,
++                16,
+                 16,
+                 sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)
+             },
+             16,
+-            KSAUDIO_SPEAKER_STEREO,
++            KSAUDIO_SPEAKER_7POINT1_SURROUND,
+             STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM)
+         }
+     }
+diff --git a/audio/sysvad/adapter.cpp b/audio/sysvad/adapter.cpp
+index 0f44c59..bf53669 100644
+--- a/audio/sysvad/adapter.cpp
++++ b/audio/sysvad/adapter.cpp
+@@ -249,7 +249,7 @@ DRIVER_DISPATCH PnpHandler;
+ // Rendering streams are not saved to a file by default. Use the registry value 
+ // DoNotCreateDataFiles (DWORD) = 0 to override this default.
+ //
+-DWORD g_DoNotCreateDataFiles = 1;  // default is off.
++DWORD g_DoNotCreateDataFiles = 0;  // B-pre: ENABLED so ReadBytes saves the device-output WAV.
+ DWORD g_DisableToneGenerator = 0;  // default is to generate tones.
+ UNICODE_STRING g_RegistryPath;      // This is used to store the registry settings path for the driver
+ 
+diff --git a/audio/sysvad/common.cpp b/audio/sysvad/common.cpp
+index 1334411..2c2f04c 100644
+--- a/audio/sysvad/common.cpp
++++ b/audio/sysvad/common.cpp
+@@ -46,6 +46,24 @@ Abstract:
+ #include "A2dpHpDevice.h"
+ #endif // SYSVAD_A2DP_SIDEBAND
+ 
++// ===== Kookr Win10 down-level compat (binaural-headtracker, research-journal #68) =====
++// Win10 (< NTDDI_WIN10_NI) ntoskrnl does not export Ex{Allocate,Free}{To}NPagedLookasideList
++// (inline-only below NI). This package builds at NI (its topology uses KSJACK_DESCRIPTION3 and
++// audio-posture, both NI-gated), so the 26100 WDK emits those two lookaside calls as imports and
++// the driver fails to load on Win10 19045 (STATUS_DRIVER_ENTRY_NOT_FOUND). They are used ONLY by
++// the BTH/USB/A2DP sideband work-task pools, which a Root-enumerated pull-driven virtual render
++// device never instantiates. Redirect them to always-exported pool APIs so the driver loads
++// down-level; the pools are never exercised, so the allocation semantics are irrelevant.
++#if (NTDDI_VERSION >= NTDDI_WIN10_NI)
++#undef  ExAllocateFromNPagedLookasideList
++#undef  ExFreeToNPagedLookasideList
++#define ExAllocateFromNPagedLookasideList(Lookaside) \
++            ExAllocatePool2(POOL_FLAG_NON_PAGED, (Lookaside)->L.Size, (Lookaside)->L.Tag)
++#define ExFreeToNPagedLookasideList(Lookaside, Entry) \
++            ExFreePool(Entry)
++#endif // Kookr Win10 down-level compat
++
++
+ //-----------------------------------------------------------------------------
+ // CSaveData statics
+ //-----------------------------------------------------------------------------
