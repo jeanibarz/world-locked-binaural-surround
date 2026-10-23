@@ -634,3 +634,12 @@ full story.
     before the toolkit starts, then measured sizes and 1:1 drawing share one pixel space and a
     `size = measured / design` fit fills the window at any scale. Measure and draw in the *same*
     item's coordinate space. (→ [50](50-cockpit-live-engine.md))
+85. **Never unload a kernel audio driver to clear a stuck stream — reboot instead; it BSODs otherwise.**
+    A hung/killed host-audio run can leave a half-open stream on the SYSVAD sink that pins the kernel
+    pull-event `Global\KookrPullTick` (fresh `CreateEvent` → `err=5`) with `audiodg` still attached.
+    Uninstalling / removing / disabling / `devcon restart`-ing the driver to force it shut faults the
+    driver's teardown in kernel mode → bugcheck (it cost a whole session). The *stream* is stuck, not
+    the driver (post-reboot the device is `CM_PROB_NONE` and the event is `err=0`). So: host-audio
+    harnesses guarantee stream teardown on every exit path (try/finally + watchdog, never hang
+    unbounded), `KookrPullTick` is the liveness probe (`err=0/183` clear, `err=5` stuck), and the only
+    recovery for a stuck endpoint is a reboot. (→ [70](70-bsod-on-driver-unload-with-open-stream.md))

@@ -19,6 +19,14 @@ counts on capture and output. Pass/fail gate = ZERO drops over the run.
 
 Usage (host, py -3.12):
   py -3.12 b2_consumer.py --brir-dir "<baked_7p1>" --block 512 --mode exclusive --seconds 60 [--rust]
+  # First validate on a fresh boot with:  --mode shared --seconds 6   (exclusive-open is the leg
+  # that can wedge; shared first proves the pipe, then raise --seconds / switch to exclusive).
+
+SAFETY (journal 70 — a BSOD cost us a whole session): every exit path tears down the *streams*
+only. If a run ever leaves the SYSVAD endpoint stuck (post-run "KookrPullTick clear: False"), the
+ONLY safe recovery is a host REBOOT. NEVER uninstall / remove / disable / `devcon restart` the
+virtual-audio driver to force a stuck stream shut — unloading it with a stream still open
+bugchecks (BSOD) the host.
 """
 from __future__ import annotations
 
@@ -151,108 +159,194 @@ def main(argv=None):
     # ---- loopback capture (pyaudiowpatch) + render in this thread ----
     import pyaudiowpatch as pa
     pya = pa.PyAudio()
-    lb = None
-    for d in pya.get_loopback_device_info_generator():
-        nm = d["name"]
-        if ("Tablet Sample" in nm) and (("parleurs" in nm) or ("Speakers" in nm)):
-            lb = d; break
-    if lb is None:
-        print("no WASAPI loopback device for the SYSVAD speakers"); return 2
-    lb_ch = int(lb["maxInputChannels"])
-    print(f"loopback[{lb['index']}] = {lb['name']}  {lb_ch}ch")
+    cap_stream = prod_stream = out_stream = None
 
-    def cap_cb(in_data, frame_count, time_info, status):
-        st["cap_cb"] += 1
-        if status:  # paInputOverflow=flag; treat any nonzero as a glitch
-            if status & pa.paInputOverflow:
-                st["cap_over"] += 1
-            if status & pa.paInputUnderflow:
-                st["cap_under"] += 1
-        pcm = np.frombuffer(in_data, dtype=np.float32)
-        n = pcm.size // lb_ch
-        pcm = pcm[: n * lb_ch].reshape(n, lb_ch)
-        if n >= blk:
-            x = pcm[:blk, :8] if lb_ch >= 8 else np.pad(pcm[:blk], ((0, 0), (0, 8 - lb_ch)))
-            t0 = time.perf_counter()
-            stereo = rend.process_block(x, az) if az is not None else rend.process_block(x)
-            st["render_us"].append((time.perf_counter() - t0) * 1e6)
-            with lock:
-                latest["stereo"] = np.ascontiguousarray(stereo[:blk], dtype=np.float32)
-                latest["n"] += 1
-        return (None, pa.paContinue)
+    # --------------------------------------------------------------------- safe teardown
+    # WHY THIS EXISTS (docs/research-journal/70): a half-open stream on the SYSVAD sink
+    # pins the kernel pull-event (Global\KookrPullTick) and keeps audiodg attached to the
+    # device. The ONLY safe way to clear a stuck one is a host REBOOT. Never unload /
+    # remove / disable / `devcon restart` the virtual-audio driver to force the stream
+    # shut — tearing the driver down with a stream still open bugchecks (BSOD) the host.
+    # So every exit path — normal, exception, KeyboardInterrupt, or watchdog deadline —
+    # must route through teardown(), which closes the streams (never the driver).
+    def _close(label, *actions):
+        try:
+            for act in actions:
+                act()
+        except Exception as e:  # noqa: BLE001 — teardown must never raise
+            print(f"  teardown {label}: {e!r}")
 
-    cap_stream = pya.open(format=pa.paFloat32, channels=lb_ch, rate=SR, input=True,
-                          input_device_index=lb["index"], frames_per_buffer=blk,
-                          stream_callback=cap_cb)
-
-    # ---- producer: 8ch test signal into the SYSVAD sink (the stand-in app) ----
-    prod_stream = None
-    if not args.no_producer:
-        ph = {"p": 0}
-        freqs = np.array([110, 140, 180, 60, 220, 260, 300, 340], dtype=np.float64)  # per-channel tones
-
-        def prod_cb(outdata, frames, tinfo, status):
-            t = (ph["p"] + np.arange(frames))[:, None] / SR
-            outdata[:] = (0.05 * np.sin(2 * np.pi * freqs[None, :] * t)).astype(np.float32)
-            ph["p"] += frames
-        prod_stream = sd.OutputStream(device=sv_idx, samplerate=SR, channels=8, dtype="float32",
-                                      blocksize=blk, callback=prod_cb)
-
-    # ---- K11 output: tick + emit latest stereo (the master clock) ----
-    extra = None
-    if args.mode == "exclusive":
-        extra = sd.WasapiSettings(exclusive=True)
-
-    def out_cb(outdata, frames, tinfo, status):
-        st["out_cb"] += 1
-        if status and status.output_underflow:
-            st["out_under"] += 1
-        k.SetEvent(hev)  # advance the pull-driven SYSVAD device, locked to this hardware clock
-        st["ticks"] += 1
-        with lock:
-            s = latest["stereo"]
-        if s.shape[0] >= frames:
-            outdata[:] = s[:frames]
-        else:
-            outdata.fill(0); st["no_data"] += 1
-
-    out_stream = sd.OutputStream(device=k11_idx, samplerate=SR, channels=2, dtype="float32",
-                                 blocksize=blk, callback=out_cb, extra_settings=extra)
-
-    # ---- run ----
-    try:
-        cap_stream.start_stream()
+    def teardown():
+        nonlocal cap_stream, prod_stream, out_stream, hev, pya
+        if out_stream is not None:
+            _close("out_stream", out_stream.stop, out_stream.close)
+            out_stream = None
         if prod_stream is not None:
-            prod_stream.start()
-        out_stream.start()
+            _close("prod_stream", prod_stream.stop, prod_stream.close)
+            prod_stream = None
+        if cap_stream is not None:
+            _close("cap_stream", cap_stream.stop_stream, cap_stream.close)
+            cap_stream = None
+        if pya is not None:
+            _close("pyaudio", pya.terminate)
+            pya = None
+        if hev:
+            _close("pull_event", lambda: k.CloseHandle(hev))
+            hev = None
+
+    def pulltick_is_clear():
+        """True if Global\\KookrPullTick is NOT pinned by a leaked stream."""
+        probe = ctypes.WinDLL("kernel32", use_last_error=True)
+        probe.CreateEventW.restype = wintypes.HANDLE
+        h = probe.CreateEventW(None, 1, 0, "Global\\KookrPullTick")
+        err = ctypes.get_last_error()
+        if h:
+            probe.CloseHandle(h)
+        # 0 = created fresh, 183 = exists but openable (ours) -> clear;
+        # 5 = ACCESS_DENIED -> a leaked stream still pins it.
+        return err in (0, 183)
+
+    def print_recovery_banner():
+        print("\n" + "=" * 72)
+        print("!! SAFE RECOVERY — the SYSVAD endpoint may hold a half-open stream.")
+        print("   To clear it: REBOOT the host. That is the ONLY safe recovery.")
+        print("   Do NOT uninstall / remove / disable / `devcon restart` the")
+        print("   'Virtual Audio Device (WDM) - Tablet Sample' driver to force it —")
+        print("   unloading it with a stream still open BUGCHECKS (BSOD) the host.")
+        print("   (Root cause: docs/research-journal/70-*.md)")
+        print("=" * 72)
+
+    rc = 3
+    crashed = False
+    watchdog = None
+    try:
+        lb = None
+        for d in pya.get_loopback_device_info_generator():
+            nm = d["name"]
+            if ("Tablet Sample" in nm) and (("parleurs" in nm) or ("Speakers" in nm)):
+                lb = d; break
+        if lb is None:
+            print("no WASAPI loopback device for the SYSVAD speakers"); return 2
+        lb_ch = int(lb["maxInputChannels"])
+        print(f"loopback[{lb['index']}] = {lb['name']}  {lb_ch}ch")
+
+        def cap_cb(in_data, frame_count, time_info, status):
+            st["cap_cb"] += 1
+            if status:  # paInputOverflow=flag; treat any nonzero as a glitch
+                if status & pa.paInputOverflow:
+                    st["cap_over"] += 1
+                if status & pa.paInputUnderflow:
+                    st["cap_under"] += 1
+            pcm = np.frombuffer(in_data, dtype=np.float32)
+            n = pcm.size // lb_ch
+            pcm = pcm[: n * lb_ch].reshape(n, lb_ch)
+            if n >= blk:
+                x = pcm[:blk, :8] if lb_ch >= 8 else np.pad(pcm[:blk], ((0, 0), (0, 8 - lb_ch)))
+                t0 = time.perf_counter()
+                stereo = rend.process_block(x, az) if az is not None else rend.process_block(x)
+                st["render_us"].append((time.perf_counter() - t0) * 1e6)
+                with lock:
+                    latest["stereo"] = np.ascontiguousarray(stereo[:blk], dtype=np.float32)
+                    latest["n"] += 1
+            return (None, pa.paContinue)
+
+        cap_stream = pya.open(format=pa.paFloat32, channels=lb_ch, rate=SR, input=True,
+                              input_device_index=lb["index"], frames_per_buffer=blk,
+                              stream_callback=cap_cb)
+
+        # ---- producer: 8ch test signal into the SYSVAD sink (the stand-in app) ----
+        if not args.no_producer:
+            ph = {"p": 0}
+            freqs = np.array([110, 140, 180, 60, 220, 260, 300, 340], dtype=np.float64)  # per-channel tones
+
+            def prod_cb(outdata, frames, tinfo, status):
+                t = (ph["p"] + np.arange(frames))[:, None] / SR
+                outdata[:] = (0.05 * np.sin(2 * np.pi * freqs[None, :] * t)).astype(np.float32)
+                ph["p"] += frames
+            prod_stream = sd.OutputStream(device=sv_idx, samplerate=SR, channels=8, dtype="float32",
+                                          blocksize=blk, callback=prod_cb)
+
+        # ---- K11 output: tick + emit latest stereo (the master clock) ----
+        extra = None
+        if args.mode == "exclusive":
+            extra = sd.WasapiSettings(exclusive=True)
+
+        def out_cb(outdata, frames, tinfo, status):
+            st["out_cb"] += 1
+            if status and status.output_underflow:
+                st["out_under"] += 1
+            k.SetEvent(hev)  # advance the pull-driven SYSVAD device, locked to this hardware clock
+            st["ticks"] += 1
+            with lock:
+                s = latest["stereo"]
+            if s.shape[0] >= frames:
+                outdata[:] = s[:frames]
+            else:
+                outdata.fill(0); st["no_data"] += 1
+
+        out_stream = sd.OutputStream(device=k11_idx, samplerate=SR, channels=2, dtype="float32",
+                                     blocksize=blk, callback=out_cb, extra_settings=extra)
+
+        # ---- run (watchdog-bounded so a wedged exclusive open can never hang forever) ----
+        def _watchdog_fire():
+            print(f"\nWATCHDOG: {args.seconds:.0f}s + grace elapsed with the run still wedged — "
+                  f"forcing teardown (streams only, never the driver).")
+            teardown()
+        watchdog = threading.Timer(args.seconds + 15.0, _watchdog_fire)
+        watchdog.daemon = True
+        watchdog.start()
+
+        try:
+            cap_stream.start_stream()
+            if prod_stream is not None:
+                prod_stream.start()
+            out_stream.start()
+        except Exception as e:  # noqa: BLE001
+            print(f"STREAM OPEN FAILED ({args.mode}): {e!r}")
+            crashed = True
+            return 3  # finally still tears the streams down
+        dev_in = cap_stream.get_input_latency() * 1e3
+        dev_out = out_stream.latency * 1e3
+
+        deadline = time.monotonic() + args.seconds
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or out_stream is None:  # watchdog may have nulled out_stream
+                break
+            time.sleep(min(0.5, remaining))
+
+        # graceful stop BEFORE reading final counters (idempotent with the finally)
+        teardown()
+
+        ru = np.array(st["render_us"]) if st["render_us"] else np.array([0.0])
+        drops = st["cap_over"] + st["cap_under"] + st["out_under"] + st["no_data"]
+        print("---- RESULT ----")
+        print(f"block={blk} mode={args.mode} seconds={args.seconds:.0f}")
+        print(f"device latency: in(loopback)={dev_in:.1f} ms  out(K11)={dev_out:.1f} ms")
+        print(f"render/block: p50={np.percentile(ru,50):.0f}us p95={np.percentile(ru,95):.0f}us "
+              f"max={ru.max():.0f}us  (block budget {blk/SR*1e3:.1f} ms)")
+        print(f"callbacks: cap={st['cap_cb']} out={st['out_cb']} ticks={st['ticks']} rendered={latest['n']}")
+        print(f"DROPS: cap_over={st['cap_over']} cap_under={st['cap_under']} out_under={st['out_under']} "
+              f"no_data={st['no_data']}  TOTAL={drops}")
+        approx = dev_in + dev_out + 2 * blk / SR * 1e3  # device in+out + ~2-block pull pipeline
+        print(f"approx audio latency (device_in + device_out + ~2 block pull) = {approx:.1f} ms")
+        print("VERDICT: " + ("ZERO-DROP PASS" if drops == 0 else f"FAIL ({drops} drops)"))
+        rc = 0 if drops == 0 else 1
+    except KeyboardInterrupt:
+        print("\ninterrupted — tearing streams down (driver left installed)")
+        crashed = True
     except Exception as e:  # noqa: BLE001
-        print(f"STREAM OPEN FAILED ({args.mode}): {e!r}")
-        try: cap_stream.close()
-        except Exception: pass
-        return 3
-    dev_in = cap_stream.get_input_latency() * 1e3
-    dev_out = out_stream.latency * 1e3
-    time.sleep(args.seconds)
-
-    out_stream.stop(); out_stream.close()
-    if prod_stream is not None:
-        prod_stream.stop(); prod_stream.close()
-    cap_stream.stop_stream(); cap_stream.close(); pya.terminate()
-
-    ru = np.array(st["render_us"]) if st["render_us"] else np.array([0.0])
-    drops = st["cap_over"] + st["cap_under"] + st["out_under"] + st["no_data"]
-    print("---- RESULT ----")
-    print(f"block={blk} mode={args.mode} seconds={args.seconds:.0f}")
-    print(f"device latency: in(loopback)={dev_in:.1f} ms  out(K11)={dev_out:.1f} ms")
-    print(f"render/block: p50={np.percentile(ru,50):.0f}us p95={np.percentile(ru,95):.0f}us "
-          f"max={ru.max():.0f}us  (block budget {blk/SR*1e3:.1f} ms)")
-    print(f"callbacks: cap={st['cap_cb']} out={st['out_cb']} ticks={st['ticks']} rendered={latest['n']}")
-    print(f"DROPS: cap_over={st['cap_over']} cap_under={st['cap_under']} out_under={st['out_under']} "
-          f"no_data={st['no_data']}  TOTAL={drops}")
-    approx = dev_in + dev_out + 2 * blk / SR * 1e3  # device in+out + ~2-block pull pipeline
-    print(f"approx audio latency (device_in + device_out + ~2 block pull) = {approx:.1f} ms")
-    print("VERDICT: " + ("ZERO-DROP PASS" if drops == 0 else f"FAIL ({drops} drops)"))
-    return 0 if drops == 0 else 1
+        print(f"ERROR: {e!r}")
+        crashed = True
+    finally:
+        if watchdog is not None:
+            watchdog.cancel()
+        teardown()
+        clear = pulltick_is_clear()
+        print(f"post-run KookrPullTick clear: {clear}")
+        if crashed or not clear:
+            print_recovery_banner()
+    return rc
 
 
 if __name__ == "__main__":
