@@ -78,7 +78,7 @@ GLOBALS_AND_FUNCS = '''//=======================================================
 // process-wide pull thread waits on KookrPullTick and, per tick, advances all registered streams once.
 // g_PullMutex is a KMUTEX (NOT a guarded/fast mutex): acquiring it stays at PASSIVE_LEVEL, which is
 // required because register/unregister call PsCreateSystemThread / IoCreateSynchronizationEvent /
-// KeWaitForSingleObject(thread) — all PASSIVE-only. (A guarded/fast mutex raises to APC_LEVEL -> bugcheck.)
+// KeWaitForSingleObject(thread) -- all PASSIVE-only. (A guarded/fast mutex raises to APC_LEVEL -> bugcheck.)
 static KMUTEX           g_PullMutex;          // serialises register/unregister (PASSIVE_LEVEL)
 static KSPIN_LOCK       g_PullSpinLock;       // guards the list vs the pull thread's iteration
 static LIST_ENTRY       g_PullList;
@@ -119,12 +119,17 @@ VOID CMiniportWaveRTStream::PullRegister(CMiniportWaveRTStream* stream)
         first = (g_PullCount == 1);
     }
     KeReleaseSpinLock(&g_PullSpinLock, irql);
-    if (first)
+    (VOID)first;
+    // Start the single pull thread if it isn't running yet (first register, or a prior start failed).
+    if (g_PullCount >= 1 && g_pPullThread == NULL)
     {
-        UNICODE_STRING evName;
-        RtlInitUnicodeString(&evName, L"\\\\BaseNamedObjects\\\\KookrPullTick");
-        KeClearEvent(&g_PullStopEvent);
-        g_pPullEvent = IoCreateSynchronizationEvent(&evName, &g_hPullEvent);
+        if (g_pPullEvent == NULL)
+        {
+            UNICODE_STRING evName;
+            RtlInitUnicodeString(&evName, L"\\\\BaseNamedObjects\\\\KookrPullTick");
+            KeClearEvent(&g_PullStopEvent);
+            g_pPullEvent = IoCreateSynchronizationEvent(&evName, &g_hPullEvent);
+        }
         if (g_pPullEvent != NULL)
         {
             HANDLE hThread = NULL;
@@ -135,6 +140,14 @@ VOID CMiniportWaveRTStream::PullRegister(CMiniportWaveRTStream* stream)
                 ObReferenceObjectByHandle(hThread, THREAD_ALL_ACCESS, *PsThreadType, KernelMode,
                                           (PVOID*)&g_pPullThread, NULL);
                 ZwClose(hThread);
+            }
+            else
+            {
+                // Thread not created: drop the just-opened event so it is not leaked and the next
+                // register retries cleanly (no orphan thread exists on this path). The device simply
+                // gets no ticks until then.
+                if (g_hPullEvent) { ZwClose(g_hPullEvent); g_hPullEvent = NULL; }
+                g_pPullEvent = NULL;
             }
         }
     }
