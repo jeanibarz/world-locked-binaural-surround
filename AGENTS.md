@@ -124,15 +124,25 @@ restart. (Owner granted "max autonomy", journal 54.)
   anytime to cut access instantly.
 
 **Safety contract for this channel (NON-NEGOTIABLE — it holds real admin):**
-- **Kernel drivers load ONLY inside the Hyper-V VM, never on the host.** The host keeps Secure
-  Boot on and test-signing off, so host audio and anti-cheat games are never disturbed.
+- **New kernel drivers are validated in the Hyper-V VM first** (checkpoint → install → load), never
+  straight onto the host. The one driver now **installed on the host** is the Track-B virtual audio
+  device, test-signed, after the owner explicitly authorised a host install and enabled test-signing
+  (journals 64 / 68 / 69). Do not install/load *other* kernel drivers on the host.
 - **Take a Hyper-V checkpoint before every driver install/load** in the VM (one-command rollback
   of a BSOD/bad driver).
-- **Never touch host boot config** (`bcdedit`, test-signing, Secure Boot) or the host's default
-  audio device / VoiceMeeter routing.
+- **Never unload the virtual audio driver to clear a stuck stream — REBOOT instead.** A hung or
+  killed host-audio run can leave a **half-open stream** on the SYSVAD sink that pins the kernel
+  pull-event `Global\KookrPullTick` (fresh `CreateEvent` → `err=5`) with `audiodg` still attached.
+  Uninstalling / removing / disabling / `devcon restart`-ing the driver to force that stream shut
+  **bugchecks (BSOD) the host** — it cost a whole session once (journal 70). The stream is stuck, not
+  the driver; a reboot clears it cleanly. Any host-audio harness must guarantee stream teardown on
+  **every** exit path and never hang unbounded.
+- **Never touch host boot config** (`bcdedit`, Secure Boot) or the host's default audio device /
+  VoiceMeeter routing. (Test-signing is on for the Track-B device above; do not toggle it off blindly
+  — other work may depend on it.)
 - **Confirm with the owner before anything irreversible or outward-facing** on the host (deleting
-  a VM, uninstalling tools, network-exposing changes). Installs, VM creation, checkpoints, and
-  in-VM work are fine to do autonomously.
+  a VM, uninstalling tools or the audio driver, network-exposing changes). Installs, VM creation,
+  checkpoints, and in-VM work are fine to do autonomously.
 
 ### Running the host GUI apps (camera + audio + a window) — ON WINDOWS, not WSL
 
