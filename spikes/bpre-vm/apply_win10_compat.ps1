@@ -58,6 +58,7 @@ $db='F:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.4
 $imp = & $db /imports $sys 2>&1
 $cur=$null;$map=@{}
 foreach($line in $imp){
+  if($line -match '^\s*Summary\s*$'){ break }   # stop before dumpbin's section-size summary (INIT/PAGE are section names, not imports)
   if($line -match '^\s{4}([A-Za-z0-9_]+\.(?:sys|exe|dll))\s*$'){ $cur=$matches[1].ToLower(); if(-not $map.ContainsKey($cur)){$map[$cur]=@()}; continue }
   if($cur -and $line -match '^\s+[0-9A-Fa-f]+\s+([A-Za-z_][A-Za-z0-9_@]+)\s*$'){ $map[$cur]+=$matches[1] }
 }
