@@ -1,21 +1,25 @@
 """B2 consumer + latency harness (RFC Track B, host-only).
 
 The real pull-driven consumer the whole of Track B was building toward, plus an unattended latency /
-drop measurement. Wiring (journal 62/63 design, no cushion FIFO):
+drop measurement. Wiring (journal 62/63 design):
 
   producer  --(8ch 7.1 render, shared)-->  SYSVAD virtual sink (pull-driven)
                                                |  (advances one period per KookrPullTick)
                                                v
-  loopback capture (8ch) --> render thread (RustWorldLocked7p1 -> stereo) --> latest_stereo (1-deep)
+  loopback capture (8ch) --> render EVERY complete block (-> stereo) --> bounded FIFO (out_q)
                                                |
-  K11 output callback: SetEvent(KookrPullTick)  +  write latest_stereo  (the single master clock)
+  K11 output callback: SetEvent(KookrPullTick)  +  pop one block from out_q  (the single master clock)
 
-The K11 render callback is the only thing that ticks, so the SYSVAD device, its loopback, and the
-producer all advance 1:1 with the K11 hardware clock -> one clock, no drift, no jitter buffer. The
-producer stands in for games/apps (unattended test signal); with real apps playing, drop --no-producer.
+The K11 callback is the only thing that ticks, so the SYSVAD device, its loopback, and the producer
+advance against the K11 hardware clock. The loopback callback delivers frames in bursts (often > blk
+per callback) at a different cadence than the output, so a small bounded FIFO decouples the two: the
+capture side renders every complete block into it (journal 71 — rendering only the first block per
+callback discarded the surplus and beeped), the output side pops one per callback, and a FIFO empty
+(starve) or full (overflow) is counted as a real drop. The producer stands in for games/apps
+(unattended test signal); with real apps playing, drop --no-producer.
 
-Measures, per (block, mode): realised device latency in/out, per-block render time, and under/overflow
-counts on capture and output. Pass/fail gate = ZERO drops over the run.
+Measures, per (block, mode): realised device latency in/out, per-block render time, capture/output
+frame balance, FIFO depth, and real under/overflow/starve counts. Pass/fail gate = ZERO drops.
 
 Usage (host, py -3.12):
   py -3.12 b2_consumer.py --brir-dir "<baked_7p1>" --block 512 --mode exclusive --seconds 60 [--rust]
@@ -31,6 +35,7 @@ bugchecks (BSOD) the host.
 from __future__ import annotations
 
 import argparse
+import collections
 import ctypes
 import os
 import sys
@@ -152,10 +157,18 @@ def main(argv=None):
 
     k, hev = make_pull_event()
 
-    latest = {"stereo": np.zeros((blk, 2), dtype=np.float32), "n": 0}
     lock = threading.Lock()
+    # Bounded jitter FIFO of rendered stereo blocks. The loopback callback delivers frames in
+    # bursts (often > blk per callback) and at a different cadence than the K11 output callback,
+    # so a 1-deep "latest block" either discards surplus capture or replays a stale block — both
+    # audible as beeps (journal 71). The FIFO decouples the two: capture renders EVERY complete
+    # block into it in order; the K11 consumes one per callback.
+    OUT_Q_MAX = 8  # ~85 ms at block 512 / 48 kHz; overflow means capture is outpacing output
+    out_q = collections.deque()
+    armed = {"v": False}  # set True after a warm-up so FIFO priming isn't counted as drops
     st = {"cap_cb": 0, "cap_over": 0, "cap_under": 0, "out_cb": 0, "out_under": 0,
-          "ticks": 0, "render_us": [], "no_data": 0}
+          "ticks": 0, "render_us": [], "rendered": 0, "out_starve": 0, "q_over": 0,
+          "q_depth_max": 0, "cap_frames": 0, "out_frames": 0}
 
     # ---- loopback capture (pyaudiowpatch) + render in this thread ----
     import pyaudiowpatch as pa
@@ -255,24 +268,47 @@ def main(argv=None):
         lb_ch = int(lb["maxInputChannels"])
         print(f"loopback[{lb['index']}] = {lb['name']}  {lb_ch}ch")
 
+        cap_accum = {"buf": np.zeros((0, 8), dtype=np.float32)}  # frames not yet forming a full block
+
         def cap_cb(in_data, frame_count, time_info, status):
             st["cap_cb"] += 1
             if status:  # paInputOverflow=flag; treat any nonzero as a glitch
-                if status & pa.paInputOverflow:
+                if status & pa.paInputOverflow and armed["v"]:
                     st["cap_over"] += 1
-                if status & pa.paInputUnderflow:
+                if status & pa.paInputUnderflow and armed["v"]:
                     st["cap_under"] += 1
             pcm = np.frombuffer(in_data, dtype=np.float32)
             n = pcm.size // lb_ch
+            if n == 0:
+                return (None, pa.paContinue)
             pcm = pcm[: n * lb_ch].reshape(n, lb_ch)
-            if n >= blk:
-                x = pcm[:blk, :8] if lb_ch >= 8 else np.pad(pcm[:blk], ((0, 0), (0, 8 - lb_ch)))
+            x8 = pcm[:, :8] if lb_ch >= 8 else np.pad(pcm, ((0, 0), (0, 8 - lb_ch)))
+            if armed["v"]:
+                st["cap_frames"] += n
+            # Keep EVERY captured frame: append to the carry buffer and render each complete block.
+            # (Rendering only the first blk per callback was the beeps bug — it discarded the rest.)
+            buf = cap_accum["buf"]
+            buf = x8 if buf.shape[0] == 0 else np.concatenate((buf, x8), axis=0)
+            off = 0
+            while buf.shape[0] - off >= blk:
+                blockin = buf[off:off + blk]
                 t0 = time.perf_counter()
-                stereo = rend.process_block(x, az) if az is not None else rend.process_block(x)
-                st["render_us"].append((time.perf_counter() - t0) * 1e6)
+                stereo = rend.process_block(blockin, az) if az is not None else rend.process_block(blockin)
+                if armed["v"]:
+                    st["render_us"].append((time.perf_counter() - t0) * 1e6)
+                stereo = np.ascontiguousarray(stereo[:blk], dtype=np.float32)
                 with lock:
-                    latest["stereo"] = np.ascontiguousarray(stereo[:blk], dtype=np.float32)
-                    latest["n"] += 1
+                    if len(out_q) >= OUT_Q_MAX:
+                        out_q.popleft()
+                        if armed["v"]:
+                            st["q_over"] += 1  # capture outpaced output -> a real dropped block
+                    out_q.append(stereo)
+                    if armed["v"]:
+                        st["rendered"] += 1
+                        if len(out_q) > st["q_depth_max"]:
+                            st["q_depth_max"] = len(out_q)
+                off += blk
+            cap_accum["buf"] = np.ascontiguousarray(buf[off:])
             return (None, pa.paContinue)
 
         cap_stream = pya.open(format=pa.paFloat32, channels=lb_ch, rate=SR, input=True,
@@ -291,25 +327,31 @@ def main(argv=None):
             prod_stream = sd.OutputStream(device=sv_idx, samplerate=SR, channels=8, dtype="float32",
                                           blocksize=blk, callback=prod_cb)
 
-        # ---- K11 output: tick + emit latest stereo (the master clock) ----
+        # ---- K11 output: tick + pop one rendered block from the FIFO (the master clock) ----
         extra = None
         if args.mode == "exclusive":
             extra = sd.WasapiSettings(exclusive=True)
 
         def out_cb(outdata, frames, tinfo, status):
             st["out_cb"] += 1
-            if status and status.output_underflow:
+            if status and status.output_underflow and armed["v"]:
                 st["out_under"] += 1
             h = hev  # may be None once teardown has run; a late callback must not SetEvent a freed handle
             if h:
                 k.SetEvent(h)  # advance the pull-driven SYSVAD device, locked to this hardware clock
             st["ticks"] += 1
+            if armed["v"]:
+                st["out_frames"] += frames
             with lock:
-                s = latest["stereo"]
-            if s.shape[0] >= frames:
-                outdata[:] = s[:frames]
+                block = out_q.popleft() if out_q else None
+            if block is not None and block.shape[0] >= frames:
+                outdata[:] = block[:frames]
             else:
-                outdata.fill(0); st["no_data"] += 1
+                # FIFO empty (or short block): a real, audible gap — count it honestly instead of
+                # replaying a stale block (the old 1-deep path hid this and still reported ZERO drops).
+                outdata.fill(0)
+                if armed["v"]:
+                    st["out_starve"] += 1
 
         out_stream = sd.OutputStream(device=k11_idx, samplerate=SR, channels=2, dtype="float32",
                                      blocksize=blk, callback=out_cb, extra_settings=extra)
@@ -327,26 +369,36 @@ def main(argv=None):
         dev_in = cap_stream.get_input_latency() * 1e3
         dev_out = out_stream.latency * 1e3
 
+        # Warm-up: let the FIFO prime and the streams settle, THEN start counting, so the
+        # unavoidable first-block priming starves don't read as drops. Measure for --seconds after.
+        time.sleep(0.7)
+        armed["v"] = True
         deadline = time.monotonic() + args.seconds
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
             time.sleep(min(0.5, remaining))
+        armed["v"] = False
 
         # graceful stop BEFORE reading final counters (idempotent with the finally)
         teardown()
 
         ru = np.array(st["render_us"]) if st["render_us"] else np.array([0.0])
-        drops = st["cap_over"] + st["cap_under"] + st["out_under"] + st["no_data"]
+        drops = (st["cap_over"] + st["cap_under"] + st["out_under"]
+                 + st["out_starve"] + st["q_over"])
         print("---- RESULT ----")
         print(f"block={blk} mode={args.mode} seconds={args.seconds:.0f}")
         print(f"device latency: in(loopback)={dev_in:.1f} ms  out(K11)={dev_out:.1f} ms")
         print(f"render/block: p50={np.percentile(ru,50):.0f}us p95={np.percentile(ru,95):.0f}us "
               f"max={ru.max():.0f}us  (block budget {blk/SR*1e3:.1f} ms)")
-        print(f"callbacks: cap={st['cap_cb']} out={st['out_cb']} ticks={st['ticks']} rendered={latest['n']}")
+        print(f"callbacks: cap={st['cap_cb']} out={st['out_cb']} ticks={st['ticks']} rendered={st['rendered']}")
+        # capture/output frame balance: should be ~1.0 (every captured frame reaches the output).
+        bal = (st["cap_frames"] / st["out_frames"]) if st["out_frames"] else 0.0
+        print(f"frames: cap={st['cap_frames']} out={st['out_frames']} balance={bal:.3f}  "
+              f"q_depth_max={st['q_depth_max']}/{OUT_Q_MAX}")
         print(f"DROPS: cap_over={st['cap_over']} cap_under={st['cap_under']} out_under={st['out_under']} "
-              f"no_data={st['no_data']}  TOTAL={drops}")
+              f"out_starve={st['out_starve']} q_over={st['q_over']}  TOTAL={drops}")
         approx = dev_in + dev_out + 2 * blk / SR * 1e3  # device in+out + ~2-block pull pipeline
         print(f"approx audio latency (device_in + device_out + ~2 block pull) = {approx:.1f} ms")
         print("VERDICT: " + ("ZERO-DROP PASS" if drops == 0 else f"FAIL ({drops} drops)"))
