@@ -653,4 +653,15 @@ full story.
     once per 512-frame K11 block → a sustained 2.13× under-pull (balance 0.47) a FIFO can't absorb. The
     fault is the sink's per-tick advance vs the consumer block (our driver's config), NOT the output
     device; fix by making one tick = one consumer block, never by free-running a second clock.
-    (→ [71](71-b2-consumer-pull-rate-starvation.md))
+    (→ [71](71-b2-consumer-pull-rate-starvation.md))  **[Corrected by #87 — the dominant cause is
+    the shared pull event, not the notification interval.]**
+87. **A shared auto-reset event can't drive N consumers — it wakes one waiter per signal.** Correcting
+    #86: the B2 capture deficit scales as **1 / (RUN streams on the device)**, not the block/interval
+    ratio. One-variable proof: balance 0.47 with a producer + loopback (2 streams) vs **0.94 with the
+    loopback alone** (`--no-producer`). Every pull-mode stream opens the *same* `\BaseNamedObjects\
+    KookrPullTick` (an `IoCreateSynchronizationEvent` = auto-reset) and runs its own pull thread, so one
+    `SetEvent` advances only one stream. Fix: a single device-level pull thread that advances **all**
+    active streams per tick (one K11 tick = the whole device advances one period). Also a process
+    lesson — the B1/B2 driver C++ was hand-edited into the host build tree and never vendored into the
+    repo, so it couldn't be reviewed, rebuilt from source control, or this cause caught in review.
+    (→ [72](72-tick-stealing-shared-pull-event.md))
