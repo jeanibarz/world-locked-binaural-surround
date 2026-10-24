@@ -130,7 +130,8 @@ VOID CMiniportWaveRTStream::PullPushRenderWindow(ULONG bytes)
         ULONG run = min(rem, m_ulDmaBufferSize - srcOff);
         if (w + run > g_PullDataCap) { run = g_PullDataCap - w; }
         RtlCopyMemory(dst + w, m_pDmaBuffer + srcOff, run);
-        RtlZeroMemory(m_pDmaBuffer + srcOff, run);   // take-and-clear (RFC D3)
+        // NOTE: take-and-clear (RtlZeroMemory of the consumed source for RFC D3) is intentionally
+        // omitted during Q1 validation so the raw render DMA is observed. Re-add once Q1 is YES.
         srcOff = (srcOff + run) % m_ulDmaBufferSize;
         w += run; rem -= run;
     }

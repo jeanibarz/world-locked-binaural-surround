@@ -26,33 +26,30 @@ DUR = float(sys.argv[1]) if len(sys.argv) > 1 else 6.0
 k32 = C.WinDLL("kernel32", use_last_error=True)
 PAGE_READWRITE = 0x04
 FILE_MAP_ALL = 0xF001F
-EVENT_ALL = 0x1F0003
 INVALID = wintypes.HANDLE(-1)
 
-# --- permissive (NULL DACL) security attributes so the kernel driver can open the objects ---
-class SECURITY_ATTRIBUTES(C.Structure):
-    _fields_ = [("nLength", wintypes.DWORD), ("lpSecurityDescriptor", wintypes.LPVOID),
-                ("bInheritHandle", wintypes.BOOL)]
-
-SD_SIZE = 20
-adv = C.WinDLL("advapi32", use_last_error=True)
-sd_buf = (C.c_byte * SD_SIZE)()
-adv.InitializeSecurityDescriptor(sd_buf, 1)
-adv.SetSecurityDescriptorDacl(sd_buf, True, None, False)  # NULL DACL = allow all
-sa = SECURITY_ATTRIBUTES(C.sizeof(SECURITY_ATTRIBUTES), C.cast(sd_buf, wintypes.LPVOID), False)
-
-# --- create section + tick event ---
+# Proper 64-bit signatures (default ctypes argtypes truncate pointers -> ERROR_NOACCESS 998).
+# No explicit DACL: the default security on a user-created object already grants SYSTEM (the kernel
+# pull thread) access, so the driver's ZwOpenSection/ZwOpenEvent succeed.
+k32.CreateFileMappingW.argtypes = [wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD,
+                                   wintypes.DWORD, wintypes.DWORD, wintypes.LPCWSTR]
 k32.CreateFileMappingW.restype = wintypes.HANDLE
-hMap = k32.CreateFileMappingW(INVALID, C.byref(sa), PAGE_READWRITE, 0, SEC_SIZE, "Global\\KookrPullData")
+k32.MapViewOfFile.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, C.c_size_t]
+k32.MapViewOfFile.restype = wintypes.LPVOID
+k32.CreateEventW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR]
+k32.CreateEventW.restype = wintypes.HANDLE
+k32.SetEvent.argtypes = [wintypes.HANDLE]
+k32.SetEvent.restype = wintypes.BOOL
+
+# --- create section + tick event (default security; Global\ namespace) ---
+hMap = k32.CreateFileMappingW(INVALID, None, PAGE_READWRITE, 0, SEC_SIZE, "Global\\KookrPullData")
 if not hMap:
     print("CreateFileMapping failed", C.get_last_error()); sys.exit(1)
-k32.MapViewOfFile.restype = wintypes.LPVOID
 view = k32.MapViewOfFile(hMap, FILE_MAP_ALL, 0, 0, SEC_SIZE)
 if not view:
     print("MapViewOfFile failed", C.get_last_error()); sys.exit(1)
 C.memset(view, 0, HDR)
-k32.CreateEventW.restype = wintypes.HANDLE
-hTick = k32.CreateEventW(C.byref(sa), False, False, "Global\\KookrPullTick")   # auto-reset
+hTick = k32.CreateEventW(None, False, False, "Global\\KookrPullTick")   # auto-reset
 if not hTick:
     print("CreateEvent failed", C.get_last_error()); sys.exit(1)
 print("created Global\\KookrPullData (%d KiB) + Global\\KookrPullTick" % (SEC_SIZE >> 10))
@@ -60,16 +57,18 @@ print("created Global\\KookrPullData (%d KiB) + Global\\KookrPullTick" % (SEC_SI
 def rd_u32(off):
     return C.cast(view + off, C.POINTER(wintypes.DWORD))[0]
 
-# --- find SYSVAD 7.1 render endpoint ---
-def find_out():
+# --- find SYSVAD render endpoints (any host API; WASAPI hits a PortAudio usbTerminalGUID bug on
+#     this endpoint, so try MME/DirectSound first). The render DMA fills regardless of host API. ---
+def find_outs():
     ha = {i: h["name"] for i, h in enumerate(sd.query_hostapis())}
+    cands = []
     for i, d in enumerate(sd.query_devices()):
-        if (d["max_output_channels"] >= 8 and "Tablet Sample" in d["name"]
-                and "WASAPI" in ha.get(d["hostapi"], "")):
-            return i, d["name"]
-    return None, None
-dev, name = find_out()
-print("play device:", dev, repr(name))
+        if d["max_output_channels"] >= 2 and "Tablet Sample" in d["name"]:
+            api = ha.get(d["hostapi"], "")
+            cands.append((i, d["name"], api, min(8, int(d["max_output_channels"]))))
+    order = {"MME": 0, "Windows DirectSound": 1, "Windows WDM-KS": 2, "Windows WASAPI": 3}
+    cands.sort(key=lambda c: (order.get(c[2], 5), -c[3]))   # prefer MME/DS, then most channels
+    return cands
 
 stop = threading.Event()
 ph = {"p": 0}
@@ -80,14 +79,17 @@ def ocb(o, f, t, s):  # noqa: ANN001
     if o.shape[1] > 1: o[:, 1] = tone
     ph["p"] += f
 def play():
-    try:
-        with sd.OutputStream(device=dev, samplerate=SR, channels=8, dtype="float32",
-                             blocksize=0, callback=ocb):
-            stop.wait(DUR + 2)
-    except Exception as e:  # noqa: BLE001
-        print("play err:", repr(e))
-if dev is not None:
-    threading.Thread(target=play, daemon=True).start()
+    for (i, nm, api, nch) in find_outs():
+        try:
+            with sd.OutputStream(device=i, samplerate=SR, channels=nch, dtype="float32",
+                                 blocksize=0, callback=ocb):
+                print(f"playing to dev {i} [{api}] {nch}ch {nm!r}")
+                stop.wait(DUR + 2)
+            return
+        except Exception as e:  # noqa: BLE001
+            print(f"open dev {i} [{api}] failed: {e!r}")
+    print("NO playable SYSVAD output found")
+threading.Thread(target=play, daemon=True).start()
 
 # --- tick the device at the 10 ms period ---
 def tick():

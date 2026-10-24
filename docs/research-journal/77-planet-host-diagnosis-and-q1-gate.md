@@ -127,6 +127,47 @@ State left: host build tree has the Plane-T patch applied + a fresh unsigned `.s
 output; the **installed/running driver is untouched** (build only, no install). `.prePlaneT` +
 `.preCompat` backups exist. Host otherwise clean; relaunch `run_pull.cmd` for audio.
 
+## Update 2 — Q1 answered: NO. The pull-driven render DMA never receives the real mix.
+
+Built, Win11-signed, and installed the Plane-T driver into the `kookr-bpre` VM (Win11 26300, where
+the Win10 lookaside issue doesn't apply), and ran `planet_consumer.py` there (creates the section +
+tick, plays 500 Hz into the SYSVAD render endpoint via DirectSound — WASAPI playback hits a PortAudio
+`usbTerminalGUID` bug on this endpoint — ticks the device, reads the exported window, FFTs it):
+
+- **The Plane-T mechanism works.** Device `Status=OK` / problemcode 0 (no bugcheck); the consumer
+  read **601 windows**, seq advancing cleanly (seqlock), a `!m_bCapture` render stream demonstrably
+  pull-advanced each tick. The kernel section-map + MDL-lock + per-tick DISPATCH copy are **correct**.
+- **But every exported window is RMS exactly 0.00000 — silent.** Confirmed with **and** without the
+  take-and-clear zeroing (two full build/sign/install/test cycles, loaded hashes `15B5D921` then
+  `15F30C28`): the render DMA at the consumed position is genuinely zero while real audio "plays" to
+  the endpoint.
+
+**Conclusion: Q1 = NO.** `audiodg` does not deposit the real rendered mix into this *pull-driven,
+DAC-less* device's render DMA (at the position the driver plays out). So **no render-DMA-based data
+plane — Plane T, the capture-pin mirror, or the `SaveData` dump — can deliver real passthrough**:
+there is nothing real in the buffer to export. This is precisely the shared blind spot the RFC's
+consensus attack named: whether the real mix reaches the DMA was never tested; B-pre only ever proved
+the **clock** plane with a synthetic sine. It is now disproven.
+
+**Where the real blocker is:** upstream of the data plane — making the engine actually render the
+real mix into the device. The current pull-driven design advances the clock and fires notifications,
+and `audiodg` opens a render stream, yet no samples land in the DMA. That is a **parent-RFC B-pre
+gap** (the data half of B-pre, never validated), not a Plane-T defect. Options to pursue next belong
+in the parent RFC: (a) fix the WaveRT render/notification/position semantics so `audiodg` writes real
+samples into the pull-driven buffer; (b) a non-pull render path where the engine drives the device
+normally and a separate mechanism paces the K11; (c) reconsider whether a Root-enumerated virtual
+WaveRT device can receive a real engine mix at all without a conventional (non-pull) render model.
+
+**Value banked:** the Plane-T kernel data plane is implemented, builds clean, installs, and is proven
+to export reliably and safely — reusable the moment the upstream data-flow is fixed. The whole
+RFC → review → consensus-attack → autonomous-build arc converted a plausible-looking plan into a
+hard, empirically-grounded redirection, without shipping a driver built on the false premise.
+
+**State:** host build tree carries the Plane-T patch (take-and-clear currently disabled for the Q1
+probe) + a built unsigned `.sys`; the host's **installed/running driver is untouched**. The
+`kookr-bpre` VM has the Plane-T test driver installed (dev VM; device healthy). Host registry clean;
+relaunch `run_pull.cmd` for audio (VoiceMeeter path).
+
 (Original groundwork below preserved — the diagnosis that got us here.)
 
 ---
