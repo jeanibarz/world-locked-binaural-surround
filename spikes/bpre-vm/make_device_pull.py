@@ -77,8 +77,17 @@ GLOBALS_AND_FUNCS = '''//=======================================================
 // threads stole ticks from each other (balance = 1/N streams; research-journal 72). Here a single
 // process-wide pull thread waits on KookrPullTick and, per tick, advances all registered streams once.
 // g_PullMutex is a KMUTEX (NOT a guarded/fast mutex): acquiring it stays at PASSIVE_LEVEL, which is
-// required because register/unregister call PsCreateSystemThread / IoCreateSynchronizationEvent /
-// KeWaitForSingleObject(thread) -- all PASSIVE-only. (A guarded/fast mutex raises to APC_LEVEL -> bugcheck.)
+// required because register/unregister call PsCreateSystemThread / KeWaitForSingleObject(thread) --
+// both PASSIVE-only. (A guarded/fast mutex raises to APC_LEVEL -> bugcheck.)
+//
+// Option B (DACL fix): the user-mode consumer CREATES KookrPullTick with a permissive (NULL) DACL; the
+// driver only ever OPENS it (ZwOpenEvent + ObReferenceObjectByHandle). It never calls
+// IoCreateSynchronizationEvent, which would create a SYSTEM-only-DACL object first whenever a Tablet
+// stream entered RUN before the consumer started -- making the consumer's CreateEvent fail ACCESS_DENIED.
+// The pull thread opens the event lazily and, whenever ticks stop for one watchdog period, releases and
+// re-opens it, so it always re-locks onto the consumer's current event (e.g. across a consumer restart).
+// ZwOpenEvent and ExEventObjectType are both declared by wdm.h (no forward declaration needed); under a
+// non-HAL build ExEventObjectType is a POBJECT_TYPE* (deref with *ExEventObjectType when referencing it).
 static KMUTEX           g_PullMutex;          // serialises register/unregister (PASSIVE_LEVEL)
 static KSPIN_LOCK       g_PullSpinLock;       // guards the list vs the pull thread's iteration
 static LIST_ENTRY       g_PullList;
@@ -120,36 +129,22 @@ VOID CMiniportWaveRTStream::PullRegister(CMiniportWaveRTStream* stream)
     }
     KeReleaseSpinLock(&g_PullSpinLock, irql);
     (VOID)first;
-    // Start the single pull thread if it isn't running yet (first register, or a prior start failed).
+    // Start the single pull thread on the first register (or if a prior start failed). The thread opens
+    // KookrPullTick lazily (Option B: open-only, never create) and free-runs on the 100 ms watchdog until
+    // the consumer creates it -- so a Tablet stream that enters RUN before the consumer still advances.
     if (g_PullCount >= 1 && g_pPullThread == NULL)
     {
-        if (g_pPullEvent == NULL)
+        KeClearEvent(&g_PullStopEvent);
+        HANDLE hThread = NULL;
+        NTSTATUS st = PsCreateSystemThread(&hThread, THREAD_ALL_ACCESS, NULL, NULL, NULL,
+                                           CMiniportWaveRTStream::PullThreadRoutine, NULL);
+        if (NT_SUCCESS(st))
         {
-            UNICODE_STRING evName;
-            RtlInitUnicodeString(&evName, L"\\\\BaseNamedObjects\\\\KookrPullTick");
-            KeClearEvent(&g_PullStopEvent);
-            g_pPullEvent = IoCreateSynchronizationEvent(&evName, &g_hPullEvent);
+            ObReferenceObjectByHandle(hThread, THREAD_ALL_ACCESS, *PsThreadType, KernelMode,
+                                      (PVOID*)&g_pPullThread, NULL);
+            ZwClose(hThread);
         }
-        if (g_pPullEvent != NULL)
-        {
-            HANDLE hThread = NULL;
-            NTSTATUS st = PsCreateSystemThread(&hThread, THREAD_ALL_ACCESS, NULL, NULL, NULL,
-                                               CMiniportWaveRTStream::PullThreadRoutine, NULL);
-            if (NT_SUCCESS(st))
-            {
-                ObReferenceObjectByHandle(hThread, THREAD_ALL_ACCESS, *PsThreadType, KernelMode,
-                                          (PVOID*)&g_pPullThread, NULL);
-                ZwClose(hThread);
-            }
-            else
-            {
-                // Thread not created: drop the just-opened event so it is not leaked and the next
-                // register retries cleanly (no orphan thread exists on this path). The device simply
-                // gets no ticks until then.
-                if (g_hPullEvent) { ZwClose(g_hPullEvent); g_hPullEvent = NULL; }
-                g_pPullEvent = NULL;
-            }
-        }
+        // If PsCreateSystemThread failed, g_pPullThread stays NULL and the next register retries.
     }
     KeReleaseMutex(&g_PullMutex, FALSE);
 }
@@ -175,9 +170,8 @@ VOID CMiniportWaveRTStream::PullUnregister(CMiniportWaveRTStream* stream)
         KeWaitForSingleObject(g_pPullThread, Executive, KernelMode, FALSE, NULL);
         ObDereferenceObject(g_pPullThread);
         g_pPullThread = NULL;
-        // pointer owned by the handle; close the handle only (no deref -> no bugcheck 0x18).
-        if (g_hPullEvent) { ZwClose(g_hPullEvent); g_hPullEvent = NULL; }
-        g_pPullEvent = NULL;
+        // Option B: the pull thread released KookrPullTick on its way out (PullReleaseEvent), so
+        // g_pPullEvent / g_hPullEvent are already cleared -- the event's lifetime is owned by the thread.
         KeClearEvent(&g_PullStopEvent);
     }
     KeReleaseMutex(&g_PullMutex, FALSE);
@@ -203,20 +197,70 @@ PULLTHREAD_OLD = '''VOID CMiniportWaveRTStream::PullThreadRoutine(_In_ PVOID Sta
     PsTerminateSystemThread(STATUS_SUCCESS);
 }'''
 
-PULLTHREAD_NEW = '''VOID CMiniportWaveRTStream::PullThreadRoutine(_In_ PVOID StartContext)
+PULLTHREAD_NEW = '''// ''' + MARK + ''': open KookrPullTick (created by the user-mode consumer with a permissive DACL) --
+// open-only, never create. Called only from the pull thread, so writes to g_pPullEvent/g_hPullEvent
+// are single-writer.
+static VOID PullTryOpenEvent()
+{
+    if (g_pPullEvent != NULL) { return; }
+    UNICODE_STRING evName;
+    RtlInitUnicodeString(&evName, L"\\\\BaseNamedObjects\\\\KookrPullTick");
+    OBJECT_ATTRIBUTES oa;
+    InitializeObjectAttributes(&oa, &evName, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
+    HANDLE h = NULL;
+    NTSTATUS os = ZwOpenEvent(&h, SYNCHRONIZE, &oa);   // SYNCHRONIZE: we only WAIT; the consumer sets it
+    if (!NT_SUCCESS(os)) { return; }                   // not created yet -> stay on the free-run watchdog
+    PVOID pObj = NULL;
+    if (NT_SUCCESS(ObReferenceObjectByHandle(h, SYNCHRONIZE, *ExEventObjectType, KernelMode, &pObj, NULL)))
+    {
+        g_pPullEvent = (PKEVENT)pObj;
+        g_hPullEvent = h;
+    }
+    else
+    {
+        ZwClose(h);
+    }
+}
+
+// ''' + MARK + ''': release our reference to KookrPullTick so the next PullTryOpenEvent re-acquires the
+// consumer's CURRENT event. We hold BOTH an object reference and a handle, so release both. Thread-only.
+static VOID PullReleaseEvent()
+{
+    if (g_pPullEvent) { ObDereferenceObject(g_pPullEvent); g_pPullEvent = NULL; }
+    if (g_hPullEvent) { ZwClose(g_hPullEvent); g_hPullEvent = NULL; }
+}
+
+VOID CMiniportWaveRTStream::PullThreadRoutine(_In_ PVOID StartContext)
 {
     UNREFERENCED_PARAMETER(StartContext);
-    PVOID objs[2];
-    objs[0] = g_pPullEvent;            // the single KookrPullTick
-    objs[1] = &g_PullStopEvent;        // shutdown
     LARGE_INTEGER timeout;
     timeout.QuadPart = (-100) * ((LONGLONG)HNSTIME_PER_MILLISECOND);  // 100 ms free-run watchdog
     for (;;)
     {
-        NTSTATUS st = KeWaitForMultipleObjects(2, objs, WaitAny, Executive, KernelMode, FALSE,
-                                               &timeout, NULL);
-        if (st == STATUS_WAIT_0 + 1) { break; }   // stop requested
-        // ''' + MARK + ''': one tick advances EVERY active stream once -> the whole device moves one period.
+        PullTryOpenEvent();   // lock onto the consumer's event once it exists (open-only, never create)
+
+        if (g_pPullEvent != NULL)
+        {
+            PVOID objs[2];
+            objs[0] = g_pPullEvent;        // the single KookrPullTick (auto-reset)
+            objs[1] = &g_PullStopEvent;    // shutdown
+            NTSTATUS st = KeWaitForMultipleObjects(2, objs, WaitAny, Executive, KernelMode, FALSE,
+                                                   &timeout, NULL);
+            if (st == STATUS_WAIT_0 + 1) { break; }    // stop requested
+            if (st == STATUS_TIMEOUT)
+            {
+                // No tick for a full watchdog period: the consumer is gone or was restarted. Drop our ref
+                // so the next PullTryOpenEvent re-locks onto its current event instead of a stale one.
+                PullReleaseEvent();
+            }
+            // STATUS_WAIT_0 (tick) or STATUS_TIMEOUT (watchdog) both advance the device one period below.
+        }
+        else
+        {
+            NTSTATUS st = KeWaitForSingleObject(&g_PullStopEvent, Executive, KernelMode, FALSE, &timeout);
+            if (st == STATUS_SUCCESS) { break; }       // stop requested (STATUS_TIMEOUT -> free-run advance)
+        }
+        // ''' + MARK + ''': one tick (or watchdog) advances EVERY active stream once -> whole device moves a period.
         KIRQL irql;
         KeAcquireSpinLock(&g_PullSpinLock, &irql);
         for (PLIST_ENTRY le = g_PullList.Flink; le != &g_PullList; le = le->Flink)
@@ -226,6 +270,7 @@ PULLTHREAD_NEW = '''VOID CMiniportWaveRTStream::PullThreadRoutine(_In_ PVOID Sta
         }
         KeReleaseSpinLock(&g_PullSpinLock, irql);
     }
+    PullReleaseEvent();   // own the event lifetime: always release before the thread exits
     PsTerminateSystemThread(STATUS_SUCCESS);
 }'''
 
