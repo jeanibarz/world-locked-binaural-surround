@@ -247,6 +247,12 @@
     renderBufferCells({ fill_blocks: 7, cushion_blocks: 6, capacity: 12 });  // sample buffer meter
     if (location.protocol.indexOf("http") === 0) {
       connect(); startCamera();
+      // Size the window reliably from the page: Chrome ignores --window-size for an --app window when
+      // Chrome is already running (and our port changes each launch, so it can't remember either), so
+      // resize ourselves to the saved size. window.resizeTo works on a standalone --app window.
+      fetch("/api/get_config").then((r) => r.json()).then((c) => {
+        if (c.win_w && c.win_h) { try { window.resizeTo(c.win_w, c.win_h); } catch (_) { /* blocked */ } }
+      }).catch(() => {});
       // remember the window size: report it (debounced) on resize so the engine reopens at this
       // size next launch. outerWidth/Height is what Chrome's --window-size controls. Arm only after
       // startup settles, so Chrome's initial/DPI layout resize can't ratchet the saved size down.

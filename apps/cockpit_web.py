@@ -266,7 +266,9 @@ class WebCockpit:
         return {"cameras": self._cameras, "hrir": self._hrir_names,
                 "methods": ["nearest", "timealign", "minphase", "notchwarp"],
                 "resolutions": ["default", "320×240", "640×480", "848×480", "1280×720"],
-                "framerates": ["default", "30 fps", "60 fps"], "samplerate": 48000, **self._config}
+                "framerates": ["default", "30 fps", "60 fps"], "samplerate": 48000,
+                "win_w": self._w, "win_h": self._h,  # the page resizes itself to this on load
+                **self._config}
 
     # ---- display setters (feed the config the settings dialog seeds from) ----
     def set_block_display(self, n):
