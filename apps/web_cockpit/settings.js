@@ -4,8 +4,9 @@
 (function () {
   "use strict";
   const $ = (id) => document.getElementById(id);
-  const api = () => (window.pywebview && window.pywebview.api) || null;
-  const call = (name, ...args) => { const a = api(); if (a && typeof a[name] === "function") return a[name](...args); };
+  const call = (name, ...args) => fetch("/api/" + name, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(args),
+  }).catch(() => {});
 
   const BLOCKS = [256, 512, 1024, 2048];
   const CUSHION_STEP = 10, CUSHION_MIN = 0, CUSHION_MAX = 500;
@@ -124,11 +125,10 @@
   function selectSeg(id, v) { const s = $(id); if (!s) return; s.querySelectorAll(".seg-btn").forEach((b) => b.classList.toggle("active", b.dataset.v === v)); }
 
   document.addEventListener("DOMContentLoaded", () => {
-    const a = api();
-    if (a && a.get_config) {
-      Promise.resolve(a.get_config()).then(init).catch(() => init(null));
+    if (location.protocol.indexOf("http") === 0) {
+      fetch("/api/get_config").then((r) => r.json()).then(init).catch(() => init(null));
     } else {
-      init(null);  // standalone: wire with defaults so the page is interactive
+      init(null);  // standalone (file://): wire with defaults so the page is interactive
     }
   });
 })();

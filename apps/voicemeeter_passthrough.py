@@ -245,7 +245,7 @@ def main(argv=None) -> int:
                         "concurrent voices so a moving source on a fine grid stays real-time")
     p.add_argument("--rotate-speed", type=float, default=45.0,
                    help="auto-rotation speed of the test source in deg/s (toggle with R)")
-    p.add_argument("--ui", choices=("console", "cockpit"), default="console",
+    p.add_argument("--ui", choices=("console", "cockpit", "web"), default="console",
                    help="front-end: 'console' = the OpenCV window (default); 'cockpit' = the "
                         "native Dear PyGui cockpit (B6.12) — same engine, resizable, with live "
                         "method/backend/predict/test controls. Needs the 'gui' extra (dearpygui).")
@@ -792,11 +792,14 @@ def main(argv=None) -> int:
         view-model, and the cockpit's control hooks mutate the live engine state (method, backend,
         predict, the test source placed/dragged on the radar, recenter). Returns True to reload."""
         nonlocal cap
-        import cockpit_view as CK
-
         from binaural_headtracker import cockpit as CM
 
-        win_ck = CK.CockpitWindow(title=f"world-lock passthrough — webcam {cam_index}")
+        if args.ui == "web":
+            import cockpit_web as CW
+            win_ck = CW.WebCockpit(title=f"world-lock passthrough — webcam {cam_index}")
+        else:
+            import cockpit_view as CK
+            win_ck = CK.CockpitWindow(title=f"world-lock passthrough — webcam {cam_index}")
         q = {"stop": False, "restart": False}
         cur = {"backend": ("rust" if args.rust else "gpu" if args.gpu else "cpu"),
                "predict": args.predict, "comp": "ctf"}
@@ -1232,7 +1235,12 @@ def main(argv=None) -> int:
                 win_ck.set_test_state(t_on, t_world_az)  # reflect engine state on the radar
                 win_ck.update(view, camera_rgb=disp, landmarks=landmarks, pose=pose,
                               world_az=world_az, channels=brir.channels,
-                              facing_i=nearest_i, head_deg=head_deg)
+                              facing_i=nearest_i, head_deg=head_deg,
+                              diag=diag, rate_hz=rate,
+                              cushion_ms=cushion * blk["n"] / brir.samplerate * 1000.0,
+                              predict=cur["predict"], exclusive=bool(args.exclusive),
+                              cam_fps=cam_fps, cam_w=cam_w, cam_h=cam_h,
+                              hrir_name=cur_set["name"], comp=cur["comp"])
                 win_ck.render_frame()
         finally:
             win_ck.teardown()
@@ -1245,7 +1253,7 @@ def main(argv=None) -> int:
 
     restart = False  # Reload key (Enter): tear down cleanly, then the launcher relaunches us
     try:
-        if args.ui == "cockpit":
+        if args.ui in ("cockpit", "web"):
             restart = _run_cockpit()
         while args.ui == "console":
             if cb_error:

@@ -754,7 +754,8 @@ class CockpitWindow:
         dpg.destroy_context()
 
     def update(self, view: M.CockpitView, *, camera_rgb=None, landmarks=None, pose=None,
-               world_az=None, channels=None, facing_i=0, head_deg=0.0, source_az=None) -> None:
+               world_az=None, channels=None, facing_i=0, head_deg=0.0, source_az=None,
+               **_extra) -> None:
         """Repaint the whole canvas from ``view``, scaled to the current window size.
 
         ``landmarks`` are the MediaPipe normalised face landmarks for the current frame (from the

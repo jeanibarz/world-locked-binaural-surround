@@ -6,8 +6,22 @@
 (function () {
   "use strict";
   const $ = (id) => document.getElementById(id);
-  const api = () => (window.pywebview && window.pywebview.api) || null;
-  const call = (name, ...args) => { const a = api(); if (a && typeof a[name] === "function") a[name](...args); };
+  const call = (name, ...args) => fetch("/api/" + name, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(args),
+  }).catch(() => {});
+
+  function toast(message, kind) {
+    const t = document.createElement("div");
+    t.textContent = message;
+    const bg = kind === "error" ? "#f2545b" : kind === "info" ? "#35d0d0" : "#54d98c";
+    Object.assign(t.style, {
+      position: "fixed", right: "16px", bottom: "16px", zIndex: 2000, background: bg, color: "#06222a",
+      font: "600 13px Inter,sans-serif", padding: "10px 14px", borderRadius: "8px",
+      boxShadow: "0 8px 24px rgba(0,0,0,.4)", maxWidth: "360px",
+    });
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 5000);
+  }
 
   // ---- histogram -------------------------------------------------------------
   function buildHistogram(heights, p50pct) {
@@ -142,12 +156,32 @@
     document.querySelectorAll(".tb-btn").forEach((b) => b.addEventListener("click", () => call("window_" + b.dataset.win)));
   }
 
-  // expose to the Python bridge
-  window.cockpit = { applyState, setCameraFrame };
+  // expose (for tests / manual injection)
+  window.cockpit = { applyState, setCameraFrame, toast };
+
+  function connect() {
+    try {
+      const es = new EventSource("/events");
+      es.onmessage = (e) => {
+        let m; try { m = JSON.parse(e.data); } catch (_) { return; }
+        if (m.type === "state") applyState(m.state);
+        else if (m.type === "toast") toast(m.message, m.kind);
+        else if (m.type === "drawer_status") { const d = $("drawer-status"); if (d) d.textContent = "Status: " + m.text; }
+      };
+      es.onerror = () => {};  // EventSource auto-reconnects
+    } catch (_) { /* no live feed */ }
+  }
+  function startCamera() {
+    const img = $("cam-img"), ph = $("cam-placeholder");
+    if (!img) return;
+    img.onload = () => { img.style.display = "block"; if (ph) ph.style.display = "none"; };
+    img.onerror = () => { img.style.display = "none"; if (ph) ph.style.display = "block"; };
+    img.src = "/camera";
+  }
 
   document.addEventListener("DOMContentLoaded", () => {
     wire();
-    buildHistogram(SAMPLE.bins, null);  // render the mockup histogram so standalone matches the design
-    call("ready");                      // tell Python the page is up (no-op standalone)
+    buildHistogram(SAMPLE.bins, null);  // sample histogram so the page matches the design before data
+    if (location.protocol.indexOf("http") === 0) { connect(); startCamera(); }  // live feed when served
   });
 })();
