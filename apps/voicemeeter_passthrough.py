@@ -201,7 +201,12 @@ def main(argv=None) -> int:
                         "a head turn is heard ~this late, since the cushion of already-rendered "
                         "audio drains first. Lower = snappier; raise if you get dropouts. Note the "
                         "cushion floors at 2 render blocks, so below ~2x the --block duration this "
-                        "has no effect — lower --block to actually shrink the floor (journal 76).")
+                        "has no effect — lower --block to actually shrink the floor (journal 76). "
+                        "The cushion is whole render blocks (round(ms·sr/block)), so it grows in "
+                        "~--block-duration steps: at block 2048 the jump from 2→3 blocks needs "
+                        "~107 ms, 3→4 ~150 ms — a smaller bump reads back as the same depth. The "
+                        "cushion is held as a setpoint, not just a prefill: after an underrun "
+                        "the output re-primes to full depth so the margin persists (journal 81).")
     p.add_argument("--min-cutoff", type=float, default=1.0)
     p.add_argument("--beta", type=float, default=0.3)
     p.add_argument("--yaw-sign", type=float, default=1.0)
@@ -657,6 +662,18 @@ def main(argv=None) -> int:
                 cb_error.append(exc)
 
     out_carry = {"buf": np.zeros((0, 2))}  # leftover rendered samples < one output request
+    # Re-prime the cushion after a starvation (journal 81). The cushion is a one-shot *prefill*:
+    # in the single-master-clock pull path the worker is rate-locked to the output (one
+    # KookrPullTick per callback → one capture period in), so it produces exactly one block per
+    # block it consumes and can NEVER get ahead to rebuild margin a transient has eaten. Left to
+    # itself the FIFO therefore rides the 0–1-block floor after the first hiccup — the configured
+    # cushion stops being margin and the next jitter underruns (the rare crack the owner hears).
+    # On underrun we instead hold the output silent — the clock keeps ticking (kset above), so the
+    # worker keeps filling — until the FIFO is back to the full ``cushion`` depth, then resume with
+    # the whole cushion restored. Bounded: the rebuild silence lasts at most the cushion's own
+    # latency, which the owner already accepts as head-move-to-ear delay. Flag is touched only by
+    # this callback thread; the ``out_fifo`` read stays under ``fifo_lock``.
+    reprime = {"active": False}
 
     def out_cb(outdata, frames, _t, status):  # noqa: ANN001  (FIFO → headphones)
         try:
@@ -668,6 +685,15 @@ def main(argv=None) -> int:
             with fifo_lock:
                 if fifo_log is not None:  # A0: standing FIFO depth (frames) at this callback
                     fifo_log["rows"].append((now - fifo_log["t0"], len(out_fifo) * fifo_log["n"]))
+                if reprime["active"]:
+                    # Rebuilding after a starvation: stay silent until the cushion is whole again,
+                    # so we resume with real margin instead of limping along at the empty floor.
+                    if len(out_fifo) >= cushion:
+                        reprime["active"] = False
+                    else:
+                        outdata.fill(0)
+                        out_carry["buf"] = np.zeros((0, 2))
+                        return
                 while buf.shape[0] < frames and out_fifo:
                     block, pose_t, render_t = out_fifo.popleft()
                     # Measure pose-age-at-ear at the moment the block is handed to the device:
@@ -682,6 +708,8 @@ def main(argv=None) -> int:
             if n < frames:
                 outdata[n:] = 0  # underrun → silence
                 meter["under_ts"].append(time.monotonic())  # record the dropout (cheap)
+                reprime["active"] = True   # rebuild the cushion to full depth before draining again
+                buf = buf[:n]              # drop the sub-block remainder; re-prime restarts clean
             out_carry["buf"] = buf[n:]
         except BaseException as exc:  # noqa: BLE001
             cb_error.append(exc)
