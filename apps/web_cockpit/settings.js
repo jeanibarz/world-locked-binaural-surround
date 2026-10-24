@@ -39,10 +39,13 @@
   }
 
   function fieldText(fieldEl, text) {
-    // the field's displayed value is its first <span> (or the .val span's leading text node)
+    // the field's displayed value is the .val span's leading text node, else a plain value <span>
+    // (method/HRIR/camera use <span>value</span><span class="caret">), else a leading text node
     const val = fieldEl.querySelector(".val");
     if (val) { val.childNodes[0].nodeValue = text + " "; return; }
-    fieldEl.childNodes[0].nodeValue = text + " ";
+    const s = fieldEl.querySelector("span:not(.caret)");
+    if (s) { s.textContent = text; return; }
+    if (fieldEl.firstChild) fieldEl.firstChild.nodeValue = text + " ";
   }
 
   function wireDropdown(id, getOptions, apiName, render) {
@@ -119,16 +122,31 @@
     wireToggle("hpeq-toggle", "set_hpeq");
     if (cfg.hp_models) wireDropdown("set-hpmodel", () => cfg.hp_models, "set_hp_model");
 
-    // --- footer --- (this is a separate window; closing it must NOT quit the app)
-    const close = () => window.close();
-    $("settings-close").addEventListener("click", close);
-    $("settings-cancel").addEventListener("click", close);
-    $("settings-apply").addEventListener("click", () => { call("settings_apply"); close(); });
-    $("reset-defaults").addEventListener("click", () => call("reset_defaults"));
-
-    // seed current selections
+    // --- seed current selections from the live config ---
     if (cfg.backend) selectSeg("set-backend", cfg.backend);
     if (cfg.comp) selectSeg("set-comp", cfg.comp);
+    if (cfg.method) fieldText($("set-method"), cfg.method);
+    if (cfg.hrir_name) fieldText($("set-hrir"), cfg.hrir_name);
+    const setToggle = (id, on) => { const t = $(id); if (t) t.setAttribute("aria-checked", on ? "true" : "false"); };
+    if (cfg.exclusive != null) setToggle("exclusive-toggle", cfg.exclusive);
+    if (cfg.hp_eq != null) setToggle("hpeq-toggle", cfg.hp_eq);
+
+    // --- edit session --- changes apply live but are saved only on Confirm; Cancel / ✕ / closing
+    // the window restores the engine to how it was when the dialog opened (the snapshot + revert
+    // live in the engine). This is a separate window, so closing it must NOT quit the app.
+    call("settings_begin");
+    let done = false;
+    const finish = (how) => { if (done) return; done = true; call(how); window.close(); };
+    $("settings-apply").addEventListener("click", () => finish("settings_commit"));   // "Confirm"
+    $("settings-cancel").addEventListener("click", () => finish("settings_cancel"));
+    $("settings-close").addEventListener("click", () => finish("settings_cancel"));   // ✕ = discard
+    $("reset-defaults").addEventListener("click", () => call("reset_defaults"));
+    // closing the OS window without choosing = Cancel (restore); sendBeacon survives unload
+    window.addEventListener("beforeunload", () => {
+      if (done) return;
+      done = true;
+      try { navigator.sendBeacon("/api/settings_cancel", new Blob(["[]"], { type: "application/json" })); } catch (e) { /* best effort */ }
+    });
   }
 
   const parseFmt = (res, fps) => { const m = (res || "").match(/(\d+)\D+(\d+)/); const f = (fps || "").match(/(\d+)/); return [m ? +m[1] : 0, m ? +m[2] : 0, f ? +f[1] : 0]; };

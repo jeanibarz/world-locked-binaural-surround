@@ -871,6 +871,7 @@ def main(argv=None) -> int:
             with lock:
                 main_rend["r"], main_rend["label"] = nm, render_label(nm, m)
                 test["renderer"], test["method"] = test_renderers[m], m
+            win_ck.set_method_display(m)  # keep the settings dialog's method seed in sync
             # The method's engine may differ from the selected backend (a requested accelerator can
             # be unavailable and fall back); keep the segment and toast honest about what's actually
             # running.
@@ -1145,7 +1146,7 @@ def main(argv=None) -> int:
             q["stop"] = True
 
         # live-reversible auto-revert (RFC rfc-crash-safe-settings v2): block/cushion are applied
-        # live, then watched — if the output FIFO keeps starving, snap back to the last-good value so
+        # live, then watched — if the output FIFO keeps starving, snap back to the last-good value
         # a too-aggressive setting can't leave the stream permanently broken. The watch IGNORES the
         # first _REVERT_SETTLE_S: a block-size change rebuilds every renderer under the lock (losing
         # their overlap tails) and a cushion change re-tops the FIFO, both of which cause a one-time
@@ -1155,6 +1156,62 @@ def main(argv=None) -> int:
         _REVERT_WINDOW_S = 4.0    # total watch window
         _REVERT_UNDERRUNS = 8     # underruns AFTER settle that mean the stream genuinely can't hold
         _watch: dict = {"revert": None, "t0": 0.0, "knob": ""}
+
+        # settings edit session (web dialog): changes apply live but are NOT persisted until the
+        # user Confirms; Cancel restores the snapshot from when the dialog opened. ``snap`` non-None
+        # means a session is open, which suspends the loop's auto-save. The DPG cockpit never opens
+        # a session (no dialog), so there it stays None and auto-save behaves as before.
+        _edit: dict = {"snap": None}
+
+        def _knobs_now() -> dict:
+            return _SB.current_knobs(
+                method=test["method"], backend=cur["backend"], block=blk["n"],
+                cushion_blocks=cushion, exclusive=bool(args.exclusive),
+                hrir=cur_set["name"], comp=cur["comp"], predict=cur["predict"],
+                camera=cam_index, cam_w=cam_w, cam_h=cam_h, cam_fps=cam_fps,
+                hp_eq=(args.output_eq is not None))
+
+        def _apply_snapshot(s: dict) -> None:
+            """Restore the live engine to a snapshot (dialog Cancel). exclusive/hp_eq don't apply
+            live (they need a restart), so for those only the displayed value is put back."""
+            if int(s["block"]) != blk["n"]:
+                _set_block(int(s["block"]))
+            if s["method"] != test["method"]:
+                _set_method(s["method"])
+            if s["backend"] != cur["backend"]:
+                _set_backend(s["backend"])
+            if s["comp"] != cur["comp"]:
+                _set_comp(s["comp"])
+            if s["hrir"] != cur_set["name"]:
+                _set_hrir(s["hrir"])
+            _set_cushion(int(s["cushion_blocks"]) * blk["n"] / brir.samplerate * 1000.0)
+            cur["predict"] = bool(s["predict"])
+            win_ck.set_exclusive_display(bool(s["exclusive"]))
+            win_ck.set_hpeq_display(bool(s["hp_eq"]))
+
+        def _settings_begin() -> None:
+            _edit["snap"] = _knobs_now()  # restore point; suspends auto-save until commit/cancel
+
+        def _settings_commit() -> None:
+            nonlocal _last_knobs
+            if _edit["snap"] is None:
+                return
+            kn = _knobs_now()
+            try:
+                settings_store.save(kn)  # persist the previewed state (atomic + durable)
+            except Exception:  # noqa: BLE001 — persistence must never crash the engine
+                pass
+            _last_knobs = kn
+            _edit["snap"] = None
+
+        def _settings_cancel() -> None:
+            nonlocal _last_knobs
+            snap = _edit["snap"]
+            if snap is None:
+                return
+            _apply_snapshot(snap)        # revert live engine while the session still blocks saving
+            _last_knobs = snap           # saved file already = last-confirmed, so persist nothing
+            _edit["snap"] = None
 
         def _arm_watch(knob: str, revert) -> None:  # noqa: ANN001
             _watch["knob"], _watch["revert"], _watch["t0"] = knob, revert, time.monotonic()
@@ -1172,6 +1229,9 @@ def main(argv=None) -> int:
 
         win_ck.on_quit = lambda: q.__setitem__("stop", True)
         win_ck.on_reset_defaults = _reset_defaults
+        win_ck.on_settings_begin = _settings_begin
+        win_ck.on_settings_commit = _settings_commit
+        win_ck.on_settings_cancel = _settings_cancel
         win_ck.on_recenter = _recenter
         win_ck.on_method = _set_method
         win_ck.on_backend = _set_backend
@@ -1195,6 +1255,9 @@ def main(argv=None) -> int:
         win_ck.set_block_display(blk["n"])           # stepper → the real launch block size
         win_ck.set_hrir_display(cur_set["name"])     # pills → the set actually loaded at launch
         win_ck.set_comp_display(cur["comp"])         # comp segment → the launch compensation
+        win_ck.set_method_display(test["method"])    # method dropdown → the launch method
+        win_ck.set_exclusive_display(bool(args.exclusive))  # exclusive toggle → launch value
+        win_ck.set_hpeq_display(args.output_eq is not None)  # HP-EQ toggle → launch value
         cur["backend"] = _backend_of(main_rend["r"])  # the engine that actually built at launch
         win_ck.set_backend_display(cur["backend"])    # radio → real launch backend (not 'rust'),
         if args.gpu and cur["backend"] != "gpu":      # and warn if --gpu silently fell back
@@ -1270,7 +1333,7 @@ def main(argv=None) -> int:
                 recent_over = sum(1 for t in tuple(meter["over_ts"]) if now - t < 2.0)
                 if _watch["revert"] is not None:  # live-reversible watch window open
                     settle_t = _watch["t0"] + _REVERT_SETTLE_S
-                    if now >= settle_t:  # past the swap transient -> judge only sustained starvation
+                    if now >= settle_t:  # past the swap transient -> judge sustained starvation
                         since = sum(1 for t in tuple(meter["under_ts"]) if t > settle_t)
                         if since >= _REVERT_UNDERRUNS:    # still starving -> snap back to last-good
                             rv, kn = _watch["revert"], _watch["knob"]
@@ -1335,13 +1398,12 @@ def main(argv=None) -> int:
                     dropout_over_ts=tuple(meter["over_ts"]),
                     dropout_under_ts=tuple(meter["under_ts"]), now=now)
                 win_ck.set_test_state(t_on, t_world_az)  # reflect engine state on the radar
-                _cur_knobs = _SB.current_knobs(
-                    method=test["method"], backend=cur["backend"], block=blk["n"],
-                    cushion_blocks=cushion, exclusive=bool(args.exclusive),
-                    hrir=cur_set["name"], comp=cur["comp"], predict=cur["predict"],
-                    camera=cam_index, cam_w=cam_w, cam_h=cam_h, cam_fps=cam_fps,
-                    hp_eq=(args.output_eq is not None))
-                if _cur_knobs != _last_knobs and not q["stop"]:  # persist a change (atomic+durable)
+                # Auto-save direct changes (e.g. main-page Predict, DPG cockpit) — but NOT while a
+                # settings-dialog edit session is open: those changes are live-previewed and only
+                # persisted on Confirm (or discarded on Cancel). See _settings_begin/commit/cancel.
+                _cur_knobs = _knobs_now()
+                if (_cur_knobs != _last_knobs and not q["stop"]
+                        and _edit["snap"] is None):  # persist a change (atomic + durable)
                     _last_knobs = _cur_knobs
                     try:
                         settings_store.save(_cur_knobs)

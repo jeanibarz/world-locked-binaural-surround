@@ -660,6 +660,20 @@ class CockpitWindow:
         except Exception:  # noqa: BLE001
             pass
 
+    # These feed the web settings dialog's seed; the DPG cockpit shows method/exclusive/HP-EQ
+    # through its own live widgets, so here they are accepted and ignored (interface parity).
+    def set_method_display(self, m) -> None:
+        pass
+
+    def set_exclusive_display(self, on) -> None:
+        pass
+
+    def set_hpeq_display(self, on) -> None:
+        pass
+
+    def set_camera_display(self, i) -> None:
+        pass
+
     # ----------------------------------------------------- blind A/B
     def _blind_ensure(self):
         if self._blind is None:

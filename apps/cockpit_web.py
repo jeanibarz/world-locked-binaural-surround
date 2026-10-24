@@ -240,7 +240,8 @@ class WebCockpit:
         for name in ("predict", "recenter", "method", "backend", "block", "cushion", "exclusive",
                      "hrir", "hrir_blind", "comp", "camera", "cam_format", "place_test", "test",
                      "solo", "rotate", "quit", "loc_start", "loc_answer", "loc_stop",
-                     "blind_result", "reset_defaults"):
+                     "blind_result", "reset_defaults",
+                     "settings_begin", "settings_commit", "settings_cancel"):
             setattr(self, "on_" + name, (lambda *a, **k: None))
 
     # ---- seed ----
@@ -274,6 +275,15 @@ class WebCockpit:
 
     def set_camera_display(self, i):
         self._config["camera"] = int(i)
+
+    def set_method_display(self, m):
+        self._config["method"] = str(m)
+
+    def set_exclusive_display(self, on):
+        self._config["exclusive"] = bool(on)
+
+    def set_hpeq_display(self, on):
+        self._config["hp_eq"] = bool(on)
 
     def set_test_state(self, on, az):
         pass
@@ -310,6 +320,9 @@ class WebCockpit:
             "set_solo": lambda: self.on_solo(bool(args[0])),
             "set_rotate": lambda: self.on_rotate(bool(args[0])),
             "reset_defaults": self.on_reset_defaults,
+            "settings_begin": self.on_settings_begin,    # dialog opened: snapshot + defer saving
+            "settings_commit": self.on_settings_commit,  # Confirm: persist the previewed settings
+            "settings_cancel": self.on_settings_cancel,  # Cancel/close: restore the snapshot
             "blind_shuffle_start": lambda: self.toast(
                 "blind A/B - coming to its own panel", "info"),
             "window_close": self._close,
