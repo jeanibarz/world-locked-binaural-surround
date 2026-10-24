@@ -1,6 +1,8 @@
 # RFC: Make SYSVAD carry real rendered audio to the head-tracker (Track B data plane)
 
-**Status:** Draft (v2 — restructured after a 5-critic round falsified v1's premise)
+**Status:** **Validated end-to-end on host (v5)** — data plane is the **render→capture ring
+bridge** (a corrected Plane M); Plane T superseded. Real music world-locks through SYSVAD,
+VoiceMeeter-free.
 **Date:** 2026-10-24
 **Author:** Jean Ibarz (with Claude)
 
@@ -39,6 +41,44 @@
 > is retained only as a fallback / cheap VM fidelity gate. This does **not** skip Phase 0:
 > Plane T returns the render DMA's just-consumed window, so Q1 (does the real mix reach that
 > DMA?) is still the gate — the Phase-0 render-DMA dump **is** Plane T's go/no-go.
+>
+> **v5 note (implemented + validated end-to-end, 2026-10-24).** Phase 0 and both planes were
+> built and run on the host and VM (journals 77–80). The outcome rewrote the plane choice:
+>
+> - **Plane T was built and loads cleanly, but its premise does not hold.** Driving the
+>   render stream from the pull tick to return its consumed window breaks `audiodg`'s render
+>   path — the render stream must stay a normal (non-pull) timer stream for the engine to
+>   fill it. Plane T is therefore **superseded**, not the data plane. Its section/MDL
+>   machinery (`make_plane_t.py`) is **banked**.
+> - **Q1 resolved — direction-dependent.** In the **headless VM** the render DMA is silent
+>   regardless of config: `audiodg` with no real audio session renders silence into a
+>   DAC-less virtual endpoint (journal 79, ruled out mute/volume with `pycaw`). On the
+>   **host**, which has a real audio session, `audiodg` **does** deposit the real per-app mix
+>   into the device render DMA — **Q1 = yes on the host.** This retroactively explains every
+>   "empty DMA" reading in the investigation: the VM never put real audio there to read.
+> - **The data plane is the render→capture *ring bridge* (a corrected Plane M).** Per web
+>   research (journal 78: the MS-documented WaveRT loopback fix + the GPL OpenAudioCable
+>   `CVCable` pattern), the render stream's `WriteData` publishes its PCM into a device-wide
+>   byte ring, and the loopback pin's fill reads that ring **instead of** `GenerateSine`
+>   (silence on under-run). This is Plane M's *intent* — feed the loopback pin from the
+>   render stream — realized through the stream's **own writes**, not a cross-stream DMA
+>   scrape, so it carries none of Plane M's lifetime/lock hazards. Built from the MIT SYSVAD
+>   base by `make_ring_bridge.py` (idempotent patcher; `RingWrite`/`RingRead`/`RingEnsure`).
+> - **End-to-end validated on the host (journal 80).** Installed the ring build (no bugcheck,
+>   device OK), played real audio: the WASAPI render-loopback carries the **real rendered
+>   mix** (signal only where the content is, tracks content + per-app volume), at **correct
+>   pitch** — the transient "~7 % pitch" was a measurement artifact (the owner's concurrent
+>   music mixing into the probe; with music paused, three runs read a steady 500.0 Hz).
+>   **Owner listen test passed:** real music world-locks through SYSVAD with `--pull-sysvad`,
+>   **VoiceMeeter-free**; very few dropouts at 512-block / 20 ms cushion, fewer still at
+>   40 ms (consistent with the GIL-fix + cushion findings, journals 74–76).
+> - **D5 latency gate — informal pass, formal measurement is the one follow-on.** The owner
+>   confirms clean world-locked audio by ear; a QPC-stamped p50/p99 render→consumer
+>   measurement (B1-lat) was not run and remains the single open validation item.
+>
+> So the settled data plane is the **render→capture ring bridge**; Plane T and the SPSC ring
+> stay banked. The sections below are preserved as the design record that led here; read the
+> plane discussion through this note.
 
 ---
 
