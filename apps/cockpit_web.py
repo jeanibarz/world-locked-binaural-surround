@@ -44,7 +44,8 @@ def _deg(x):
 
 def view_to_state(diag, view, *, pose=None, rate_hz=0.0, cushion_ms=0.0, exclusive=False,
                   hrir_name="", comp="", hp_eq=True, predict_on=False, cam_fps=0.0,
-                  cam_w=0, cam_h=0, face_locked=False, facing_label="") -> dict:
+                  cam_w=0, cam_h=0, face_locked=False, facing_label="", head_deg=0.0,
+                  cal=None) -> dict:
     """Map one engine tick (a ``Diagnosis`` + its ``CockpitView`` + a little loop state) to the
     cockpit.js state dict. Pure; safe to unit-test."""
     segments = []
@@ -70,7 +71,8 @@ def view_to_state(diag, view, *, pose=None, rate_hz=0.0, cushion_ms=0.0, exclusi
         {"label": "Backend", "value": view.backend, "dot": "#4cd98a"},
         {"label": "Rendering", "value": view.method, "dot": "#4cd98a"},
         {"label": "Cushion", "dot": "#5b6678",
-         "value": f"{cushion_ms:.0f} ms · {'exclusive' if exclusive else 'shared'}"},
+         "value": f"{diag.cushion_blocks} blk · {cushion_ms:.0f} ms"
+                  f" · {'exclusive' if exclusive else 'shared'}"},
         {"label": "HRIR", "dot": "#5b6678", "value": hrir_val},
     ]
 
@@ -113,10 +115,16 @@ def view_to_state(diag, view, *, pose=None, rate_hz=0.0, cushion_ms=0.0, exclusi
         },
     }
     if pose is not None:
-        yaw = getattr(pose, "yaw", 0.0)
-        pitch, roll = getattr(pose, "pitch", 0.0), getattr(pose, "roll", 0.0)
-        state["pose"] = {"yaw": _deg(yaw), "pitch": _deg(pitch), "roll": _deg(roll),
-                         "yaw_deg": float(yaw)}
+        # Show the calibration-RELATIVE orientation (not the raw head pose) so Recenter visibly
+        # re-zeros the tiles and the radar. yaw comes from head_deg (the cal-relative azimuth the
+        # engine already derives); pitch/roll are the sign-applied deltas from the neutral cal.
+        if cal is not None:
+            rel_pitch = cal.pitch_sign * (getattr(pose, "pitch", 0.0) - cal.pitch0)
+            rel_roll = cal.roll_sign * (getattr(pose, "roll", 0.0) - cal.roll0)
+        else:
+            rel_pitch, rel_roll = getattr(pose, "pitch", 0.0), getattr(pose, "roll", 0.0)
+        state["pose"] = {"yaw": _deg(head_deg), "pitch": _deg(rel_pitch), "roll": _deg(rel_roll),
+                         "yaw_deg": float(head_deg)}
     return state
 
 
@@ -390,7 +398,7 @@ class WebCockpit:
     def update(self, view, *, camera_rgb=None, landmarks=None, pose=None, world_az=None,
                channels=None, facing_i=0, head_deg=0.0, source_az=None, diag=None,
                rate_hz=0.0, cushion_ms=0.0, predict=False, exclusive=False, cam_fps=0.0,
-               cam_w=0, cam_h=0, hrir_name="", comp="", **_ignored):
+               cam_w=0, cam_h=0, hrir_name="", comp="", cal=None, **_ignored):
         if diag is None:
             return
         facing = ""
@@ -399,15 +407,23 @@ class WebCockpit:
         state = view_to_state(
             diag, view, pose=pose, rate_hz=rate_hz, cushion_ms=cushion_ms, exclusive=exclusive,
             hrir_name=hrir_name, comp=comp, predict_on=predict, cam_fps=cam_fps, cam_w=cam_w,
-            cam_h=cam_h, face_locked=(pose is not None), facing_label=facing)
+            cam_h=cam_h, face_locked=(pose is not None), facing_label=facing,
+            head_deg=head_deg, cal=cal)
         self._broadcast({"type": "state", "state": state})
         if camera_rgb is not None:
-            self._encode_frame(camera_rgb)
+            self._encode_frame(camera_rgb, landmarks)
 
-    def _encode_frame(self, rgb):
+    def _encode_frame(self, rgb, landmarks=None):
         try:
             import cv2
             bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+            if landmarks is not None:
+                h, w = bgr.shape[:2]
+                for lm in landmarks:
+                    # the display frame is mirrored; landmarks are in the un-mirrored space
+                    x, y = int((1.0 - lm.x) * w), int(lm.y * h)
+                    if 0 <= x < w and 0 <= y < h:
+                        cv2.circle(bgr, (x, y), 1, (208, 208, 53), -1)  # cyan #35d0d0 (BGR)
             ok, buf = cv2.imencode(".jpg", bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
             if ok:
                 self._frame = buf.tobytes()

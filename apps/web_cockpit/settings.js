@@ -9,7 +9,6 @@
   }).catch(() => {});
 
   const BLOCKS = [256, 512, 1024, 2048];
-  const CUSHION_STEP = 10, CUSHION_MIN = 0, CUSHION_MAX = 500;
 
   // ---- lightweight dropdown popup (the design's "field ▾" opens this) ----
   function openMenu(anchor, options, onPick) {
@@ -84,18 +83,31 @@
     wireDropdown("set-method", () => cfg.methods || ["nearest", "timealign", "minphase", "notchwarp"], "set_method");
     wireSegment("set-backend", "set_backend");
 
-    // --- audio output ---
+    // --- audio output --- (cushion is defined in BLOCKS; ms is shown as a derived hint)
+    const sr = cfg.samplerate || 48000;
     let blockIdx = Math.max(0, BLOCKS.indexOf(cfg.block || 1024));
-    const showBlock = () => { $("block-val").textContent = String(BLOCKS[blockIdx]); $("block-ms").textContent = (1000 * BLOCKS[blockIdx] / (cfg.samplerate || 48000)).toFixed(1) + " ms per block"; };
-    $("block-minus").addEventListener("click", () => { if (blockIdx > 0) { blockIdx--; showBlock(); call("set_block", BLOCKS[blockIdx]); } });
-    $("block-plus").addEventListener("click", () => { if (blockIdx < BLOCKS.length - 1) { blockIdx++; showBlock(); call("set_block", BLOCKS[blockIdx]); } });
-    if (cfg.block) showBlock();
+    const blockMs = () => BLOCKS[blockIdx] / sr * 1000;
+    let cushBlk = Math.max(2, Math.round((cfg.cushion_ms != null ? cfg.cushion_ms : 60) / blockMs()));
 
-    let cushion = cfg.cushion_ms != null ? cfg.cushion_ms : 40;
-    const showCushion = () => { $("cushion-val").textContent = cushion + " ms"; };
-    $("cushion-minus").addEventListener("click", () => { cushion = Math.max(CUSHION_MIN, cushion - CUSHION_STEP); showCushion(); call("set_cushion", cushion); });
-    $("cushion-plus").addEventListener("click", () => { cushion = Math.min(CUSHION_MAX, cushion + CUSHION_STEP); showCushion(); call("set_cushion", cushion); });
-    showCushion();
+    const showCushion = () => {
+      $("cushion-val").textContent = cushBlk + " blk";
+      $("cushion-ms").textContent = Math.round(cushBlk * blockMs()) + " ms";
+    };
+    const showBlock = () => {
+      $("block-val").textContent = String(BLOCKS[blockIdx]);
+      $("block-ms").textContent = blockMs().toFixed(1) + " ms per block";
+      showCushion();  // block size changes the cushion's duration, so refresh its ms hint
+    };
+    $("block-minus").addEventListener("click", () => {
+      if (blockIdx > 0) { blockIdx--; showBlock(); call("set_block", BLOCKS[blockIdx]); }
+    });
+    $("block-plus").addEventListener("click", () => {
+      if (blockIdx < BLOCKS.length - 1) { blockIdx++; showBlock(); call("set_block", BLOCKS[blockIdx]); }
+    });
+    const applyCushion = () => { showCushion(); call("set_cushion", cushBlk * blockMs()); };
+    $("cushion-minus").addEventListener("click", () => { cushBlk = Math.max(2, cushBlk - 1); applyCushion(); });
+    $("cushion-plus").addEventListener("click", () => { cushBlk = Math.min(64, cushBlk + 1); applyCushion(); });
+    showBlock();
 
     wireToggle("exclusive-toggle", "set_exclusive");
 

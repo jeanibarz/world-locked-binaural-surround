@@ -58,9 +58,9 @@
       <div style="display:flex;flex-direction:column;gap:6px">
         <div class="row-between">
           <span class="field-label">Cushion</span>
-          <div class="stepper"><button type="button" class="stepper-btn" id="cushion-minus" aria-label="Decrease cushion">−</button><span class="stepper-val" id="cushion-val" style="width:76px">40 ms</span><button type="button" class="stepper-btn" id="cushion-plus" aria-label="Increase cushion">+</button></div>
+          <div style="display:flex;align-items:center;gap:12px"><span class="field-sub" id="cushion-ms">64 ms</span><div class="stepper"><button type="button" class="stepper-btn" id="cushion-minus" aria-label="Decrease cushion">−</button><span class="stepper-val" id="cushion-val" style="width:62px">6 blk</span><button type="button" class="stepper-btn" id="cushion-plus" aria-label="Increase cushion">+</button></div></div>
         </div>
-        <div class="note">Extra output buffer that protects against dropouts. It adds to latency.</div>
+        <div class="note">Extra output buffer, in blocks, that protects against dropouts. It adds to latency (shown in ms).</div>
       </div>
 
       <div style="display:flex;flex-direction:column;gap:6px">

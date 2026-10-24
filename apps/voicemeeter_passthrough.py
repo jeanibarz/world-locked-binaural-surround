@@ -1240,7 +1240,7 @@ def main(argv=None) -> int:
                               cushion_ms=cushion * blk["n"] / brir.samplerate * 1000.0,
                               predict=cur["predict"], exclusive=bool(args.exclusive),
                               cam_fps=cam_fps, cam_w=cam_w, cam_h=cam_h,
-                              hrir_name=cur_set["name"], comp=cur["comp"])
+                              hrir_name=cur_set["name"], comp=cur["comp"], cal=cal)
                 win_ck.render_frame()
         finally:
             win_ck.teardown()
