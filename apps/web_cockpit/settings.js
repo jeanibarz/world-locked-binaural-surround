@@ -147,6 +147,9 @@
       done = true;
       try { navigator.sendBeacon("/api/settings_cancel", new Blob(["[]"], { type: "application/json" })); } catch (e) { /* best effort */ }
     });
+
+    const sb = document.querySelector(".settings-body");  // reveal only once seeded with live values
+    if (sb) sb.style.visibility = "visible";              // (no flash of the HTML default values)
   }
 
   const parseFmt = (res, fps) => { const m = (res || "").match(/(\d+)\D+(\d+)/); const f = (fps || "").match(/(\d+)/); return [m ? +m[1] : 0, m ? +m[2] : 0, f ? +f[1] : 0]; };

@@ -1,4 +1,4 @@
-# binaural-headtracker
+# World-Locked Binaural Surround
 
 **A real-time, head-tracked binaural renderer for Windows that keeps a virtual
 surround sound stage fixed in the world while your head moves — so your brain

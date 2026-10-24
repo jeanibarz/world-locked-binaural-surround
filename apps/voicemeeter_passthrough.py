@@ -812,7 +812,7 @@ def main(argv=None) -> int:
     times: deque[float] = deque(maxlen=60)  # frame timestamps → tracker rate
     show_stats = False
     phase = 0.0
-    win = "Binaural head-tracker — world-lock passthrough"
+    win = "World-Locked Binaural Surround"
     if args.ui == "console":
         cv2.namedWindow(win)
     drag = {"on": False}
@@ -906,10 +906,10 @@ def main(argv=None) -> int:
 
         if args.ui == "web":
             import cockpit_web as CW
-            win_ck = CW.WebCockpit(title=f"world-lock passthrough — webcam {cam_index}")
+            win_ck = CW.WebCockpit(title=f"World-Locked Binaural Surround — webcam {cam_index}")
         else:
             import cockpit_view as CK
-            win_ck = CK.CockpitWindow(title=f"world-lock passthrough — webcam {cam_index}")
+            win_ck = CK.CockpitWindow(title=f"World-Locked Binaural Surround — webcam {cam_index}")
         q = {"stop": False, "restart": False}
         cur = {"backend": ("rust" if args.rust else "gpu" if args.gpu else "cpu"),
                "predict": args.predict,
@@ -1615,7 +1615,7 @@ def main(argv=None) -> int:
             buttons = [("Test", "T", test["on"]), ("Method", "M", False),
                        ("Stats", "S", False), ("Reload", "⏎", False), ("Quit", "Q", False)]
             canvas = C.compose(
-                frame, title=f"world-lock passthrough — webcam {cam_index}", live=live,
+                frame, title=f"World-Locked Binaural Surround — webcam {cam_index}", live=live,
                 live_color=live_col, pose=pose, landmarks=landmarks, lock=None,
                 world_az=world_az, channels=brir.channels, facing_i=nearest_i, head_deg=head_deg,
                 source_az=(test["world_az"] if test["on"] else None),
