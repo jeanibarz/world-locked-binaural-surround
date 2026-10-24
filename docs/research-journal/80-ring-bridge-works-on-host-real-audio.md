@@ -62,3 +62,14 @@ This is a fidelity tune, not a mechanism failure — real audio demonstrably flo
    owner's ears.
 3. Fold this into the RFC: the data plane is the **render→capture ring bridge** (settled + host-proven)
    — supersede Plane T; the pitch refinement is the remaining implementation detail.
+
+## Update — the "~7% pitch" was a measurement artifact; the ring is clean
+
+The owner was playing music into the same SYSVAD device during the first loopback test, so `audiodg`
+mixed it with the 500 Hz probe and my FFT "dominant" picked up the music (hence 463 Hz, then 49 Hz on
+a bass moment, etc.). With the music **paused**, three back-to-back measurements all read a rock-steady
+**dominant 500.0 Hz** (consumer ≈ 47.9 kfps, the ~0.2 % being wall-clock framing, not pitch). So there
+is **no pitch defect** — the ring bridge carries the real mix faithfully and at correct pitch. The data
+plane is done at the driver level: real system audio through the device's loopback, VoiceMeeter-free,
+correct pitch. Remaining is packaging + folding the ring into the RFC (supersede Plane T) and the
+owner's world-locked listen test.
