@@ -228,9 +228,12 @@
     if (location.protocol.indexOf("http") === 0) {
       connect(); startCamera();
       // remember the window size: report it (debounced) on resize so the engine reopens at this
-      // size next launch. outerWidth/Height is what Chrome's --window-size controls.
-      let wsT;
+      // size next launch. outerWidth/Height is what Chrome's --window-size controls. Arm only after
+      // startup settles, so Chrome's initial/DPI layout resize can't ratchet the saved size down.
+      let wsT, armed = false;
+      setTimeout(() => { armed = true; }, 1500);
       window.addEventListener("resize", () => {
+        if (!armed) return;
         clearTimeout(wsT);
         wsT = setTimeout(() => call("window_size", window.outerWidth, window.outerHeight), 700);
       });
