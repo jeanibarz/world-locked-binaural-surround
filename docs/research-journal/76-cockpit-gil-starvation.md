@@ -65,8 +65,16 @@ wrong suspect.
 - **Fix:** `sys.setswitchinterval(0.0005)` at the entry to the real-time section (next to `gc.freeze()`),
   so the GIL returns to the worker ~10× sooner. Process-global; harmless to the console/bench paths
   (no contention there).
-- **Pending:** owner re-tests `--ui cockpit --pull-sysvad` at a low cushion. If the cockpit now runs clean
-  near ~20–40 ms, lower the `--pull-sysvad` default (journal 75's 200 ms) back toward the console path and
-  close #109. If a residual periodic stall remains, the next lever is `render_dearpygui_frame` holding the
-  GIL across vsync — throttle the cockpit redraw rate (decouple it from the camera-paced loop), still no
-  rewrite.
+- **Confirmed (owner, host):** `--ui cockpit --pull-sysvad` is now **clean at `--latency-ms 20`** (which,
+  at block 2048, floors to a 2-block ≈ 85 ms cushion — see below). So the GIL fix fully resolved the
+  dropouts; the journal-75 200 ms special-case is obsolete. Reverted the `--pull-sysvad` cushion default
+  back to the shared **60 ms** (both paths), removed the underrun warning, and **closed #109** (the 9P-share
+  suspicion was wrong — it was the cockpit's GIL hold).
+- **Also learned (latency):** the cushion floors at `max(2, round(latency_ms·sr/block))` = **2 render
+  blocks**, so at block 2048 (42.7 ms) any `--latency-ms` below ~43 ms still yields ~85 ms. The real
+  head-move-to-ear floor is set by the **block size** (2·block), not the cushion knob: 1024 → 43 ms,
+  512 → 21 ms, 256 → 11 ms. Lowering `--block` (now that the GIL fix freed the headroom) is the latency
+  lever; the live cockpit block ± stepper makes it a no-restart experiment. In the single-clock pull path,
+  `--exclusive` is also safe again (journal 45's two-clock caveat doesn't apply) for a ~22 → 13 ms device
+  buffer. The next structural lever, if block/exclusive aren't enough, is `render_dearpygui_frame` holding
+  the GIL across vsync — throttle the cockpit redraw rate — still no rewrite.

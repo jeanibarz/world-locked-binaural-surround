@@ -196,13 +196,12 @@ def main(argv=None) -> int:
                         "ample headroom)")
     p.add_argument("--fade-ms", type=float, default=20.0)
     p.add_argument("--gain", type=float, default=1.0)
-    p.add_argument("--latency-ms", type=float, default=None,
+    p.add_argument("--latency-ms", type=float, default=60.0,
                    help="output FIFO cushion (ms). This is the dominant head-move-to-ear delay: "
                         "a head turn is heard ~this late, since the cushion of already-rendered "
-                        "audio drains first. Lower = snappier; raise if you get dropouts. "
-                        "Default depends on the path: 60 ms (VoiceMeeter), 200 ms (--pull-sysvad) "
-                        "— the pull path needs a deeper cushion on this host (journal 75). An "
-                        "explicit value always wins.")
+                        "audio drains first. Lower = snappier; raise if you get dropouts. Note the "
+                        "cushion floors at 2 render blocks, so below ~2x the --block duration this "
+                        "has no effect — lower --block to actually shrink the floor (journal 76).")
     p.add_argument("--min-cutoff", type=float, default=1.0)
     p.add_argument("--beta", type=float, default=0.3)
     p.add_argument("--yaw-sign", type=float, default=1.0)
@@ -257,21 +256,9 @@ def main(argv=None) -> int:
                         "Off by default; measure at a fixed --block/--latency-ms.")
     args = p.parse_args(argv)
     pull_mode = args.pull_sysvad  # Approach A: drive our SYSVAD device from the output clock
-
-    # Mode-aware FIFO-cushion default. The pull-SYSVAD path (single master clock, no resampler)
-    # measured clean only at ~200 ms on the Win10 host: 80/120 ms still underran, 150 ms was very
-    # rare, 200 ms clean (journal 75). The render worker stalls up to ~150 ms occasionally — too
-    # large for jitter, the prime suspect being code run live over the \\wsl.localhost 9P share —
-    # so the pull path needs a deeper cushion than the VoiceMeeter path until that stall is fixed.
-    # An explicit --latency-ms always wins; we only warn when it is below the known-underrun floor.
-    PULL_CUSHION_MS = 200.0
-    if args.latency_ms is None:
-        args.latency_ms = PULL_CUSHION_MS if pull_mode else 60.0
-    elif pull_mode and args.latency_ms < 150.0:
-        print(f"WARNING: --latency-ms {args.latency_ms:.0f} is below the pull-SYSVAD underrun "
-              f"floor (~150 ms on this host); expect dropouts. {PULL_CUSHION_MS:.0f} ms measured "
-              f"clean (journal 75). Raise it, or drop the flag to take the "
-              f"{PULL_CUSHION_MS:.0f} ms default.")
+    # Note: the pull path needed a 200 ms cushion in journal 75, but journal 76 found that was the
+    # cockpit starving the render worker on the GIL, not an intrinsic cost — fixed by the tighter
+    # GIL switch interval below, so both paths share the normal 60 ms default again (issue #109).
 
     brir = load_baked_brir(args.brir_dir)
 
