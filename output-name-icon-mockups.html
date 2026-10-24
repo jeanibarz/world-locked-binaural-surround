@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>App name + icon concepts</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0d1117; --panel:#151c28; --inset:#0d1117;
+  --border:#243044; --border2:#2a3547; --hair:#1f2a3b;
+  --text:#e6edf6; --text2:#d6deea; --muted:#b3bfd2; --muted2:#5b6678;
+  --cyan:#35d0d0; --amber:#ffb340; --green:#4cd98a; --red:#ff6b6b;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,sans-serif}
+.wrap{max-width:1100px;margin:0 auto;padding:30px 16px 70px}
+h1{font-size:21px;font-weight:600;margin:0 0 4px}
+.sub{color:var(--muted);font-size:13px;margin:0 0 26px;line-height:1.55;max-width:780px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:18px}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:20px;display:flex;gap:18px;align-items:flex-start}
+.card.hl{border-color:var(--cyan);box-shadow:0 0 0 1px var(--cyan) inset}
+/* app-icon tile */
+.tile{width:76px;height:76px;flex:none;border-radius:18px;background:
+  radial-gradient(120% 120% at 30% 20%, #1b2634 0%, #0c1119 100%);
+  border:1px solid var(--border2);display:flex;align-items:center;justify-content:center;
+  box-shadow:0 6px 18px rgba(0,0,0,.45)}
+.tile svg{width:46px;height:46px;display:block}
+.meta{min-width:0}
+.name{font-size:20px;font-weight:700;letter-spacing:-.01em;margin:2px 0 2px}
+.tag{font:500 12px 'JetBrains Mono',monospace;color:var(--cyan);margin:0 0 8px}
+.why{font-size:12.5px;color:var(--muted);line-height:1.55;margin:0}
+.note{font-size:11px;color:var(--muted2);margin:8px 0 0}
+.strokecy{stroke:var(--cyan)} .fillcy{fill:var(--cyan)} .fillw{fill:var(--text)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>App name + icon concepts</h1>
+  <p class="sub">The app world-locks a ring of virtual speakers around your head (webcam head-tracking →
+  stable 7.1 soundstage on headphones). The names lean on that idea — a <b>fixed reference</b> your sound
+  stays anchored to as you turn. Icons are drawn in the cockpit's cyan-on-dark style, app-tile sized.</p>
+  <div class="grid" id="grid"></div>
+</div>
+<script>
+// 48x48 icon artwork per concept (cyan #35d0d0 accent, white head/center where relevant)
+function ring(){ // speaker dots around a head
+  const dots = [[24,8],[37.9,16],[37.9,32],[24,40],[10.1,32],[10.1,16]]
+    .map(([x,y])=>`<circle cx="${x}" cy="${y}" r="2.4" class="fillcy"/>`).join("");
+  return `<svg viewBox="0 0 48 48" fill="none">
+    <circle cx="24" cy="24" r="16" class="strokecy" stroke-width="2"/>
+    ${dots}<circle cx="24" cy="24" r="4.4" class="fillw"/></svg>`;
+}
+function lodestar(){
+  return `<svg viewBox="0 0 48 48" fill="none">
+    <circle cx="24" cy="24" r="17" stroke="#2a3547" stroke-width="1.5"/>
+    <path d="M24 5 L27.5 20.5 L43 24 L27.5 27.5 L24 43 L20.5 27.5 L5 24 L20.5 20.5 Z" class="fillcy"/>
+    <circle cx="24" cy="24" r="2.6" class="fillw"/></svg>`;
+}
+function anchor(){
+  return `<svg viewBox="0 0 48 48" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="24" cy="9" r="3.2" class="strokecy" stroke-width="2.4"/>
+    <path d="M24 12.2 V40" class="strokecy" stroke-width="2.6"/>
+    <path d="M15 21 H33" class="strokecy" stroke-width="2.6"/>
+    <path d="M10 28 c0 8 6 12 14 12 c8 0 14-4 14-12" class="strokecy" stroke-width="2.6"/>
+    <path d="M10 28 l-2 4 M10 28 l4 1 M38 28 l2 4 M38 28 l-4 1" class="strokecy" stroke-width="2.2"/></svg>`;
+}
+function cardinal(){
+  return `<svg viewBox="0 0 48 48" fill="none">
+    <circle cx="24" cy="24" r="16.5" stroke="#2a3547" stroke-width="1.5"/>
+    <path d="M24 6 L28 24 L24 24 Z M24 42 L20 24 L24 24 Z M6 24 L24 20 L24 24 Z M42 24 L24 28 L24 24 Z" class="fillcy"/>
+    <path d="M24 6 L20 24 L24 24 Z M24 42 L28 24 L24 24 Z M6 24 L24 28 L24 24 Z M42 24 L24 20 L24 24 Z" fill="#1e86a0"/>
+    <circle cx="24" cy="24" r="3" class="fillw"/></svg>`;
+}
+function aura(){
+  return `<svg viewBox="0 0 48 48" fill="none">
+    <circle cx="24" cy="24" r="4.5" class="fillw"/>
+    <path d="M33 15 a13 13 0 0 1 0 18" class="strokecy" stroke-width="2.4" stroke-linecap="round"/>
+    <path d="M38.5 9.5 a21 21 0 0 1 0 29" class="strokecy" stroke-width="2.4" stroke-linecap="round" opacity=".6"/>
+    <path d="M15 15 a13 13 0 0 0 0 18" class="strokecy" stroke-width="2.4" stroke-linecap="round"/>
+    <path d="M9.5 9.5 a21 21 0 0 0 0 29" class="strokecy" stroke-width="2.4" stroke-linecap="round" opacity=".6"/></svg>`;
+}
+function steadstage(){
+  return `<svg viewBox="0 0 48 48" fill="none" stroke-linecap="round">
+    <path d="M7 32 H41" class="strokecy" stroke-width="2.6"/>
+    <circle cx="24" cy="32" r="4.6" class="fillw"/>
+    <path d="M24 27 V11" class="strokecy" stroke-width="2.2"/>
+    <path d="M16 18 a11 11 0 0 1 16 0" class="strokecy" stroke-width="2.4"/>
+    <circle cx="14" cy="32" r="2.4" class="fillcy"/><circle cx="34" cy="32" r="2.4" class="fillcy"/></svg>`;
+}
+
+const CONCEPTS = [
+  {name:"Halo", icon:ring, tag:"the ring, literally", hl:true,
+   why:"The ring of speakers around your head IS the product — and it's already the cockpit's centrepiece (\"world-locked ring\"). Premium, short, instantly memorable.",
+   note:"Shares a name with the game, but for a personal tool that reads as confident, not confusing."},
+  {name:"Lodestar", icon:lodestar, tag:"a fixed star to steer by", hl:false,
+   why:"A lodestar is the fixed reference you navigate by — exactly what your sound becomes when the world stays put as you turn your head. Elegant and a little poetic."},
+  {name:"Anchor", icon:anchor, tag:"sound, held in place", hl:false,
+   why:"The clearest one-word statement of what it does: the soundstage is anchored in the real world while you move. Grounded, confident, easy to say."},
+  {name:"Cardinal", icon:cardinal, tag:"fixed bearings", hl:false,
+   why:"Your speakers sit at fixed compass bearings that don't drift with your head. A compass-rose icon doubles as a nod to the radar/ring."},
+  {name:"Aura", icon:aura, tag:"a field of sound around you", hl:false,
+   why:"The surrounding field of sound that stays wrapped around you. Soft, immersive, binaural-flavoured (and nods to \"aural\")."},
+  {name:"Steadstage", icon:steadstage, tag:"a soundstage that holds still", hl:false,
+   why:"The most descriptive pick: a steadfast sound-stage. Coined, so it's yours alone and searchable, though less sleek than the single words."},
+];
+
+document.getElementById("grid").innerHTML = CONCEPTS.map(c => `
+  <div class="card ${c.hl?'hl':''}">
+    <div class="tile">${c.icon()}</div>
+    <div class="meta">
+      <div class="name">${c.name}</div>
+      <div class="tag">${c.tag}</div>
+      <p class="why">${c.why}</p>
+      ${c.note?`<p class="note">${c.note}</p>`:""}
+    </div>
+  </div>`).join("");
+</script>
+</body>
+</html>

@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Combined icon — Lodestar × Aura</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0d1117; --panel:#151c28; --inset:#0d1117;
+  --border:#243044; --border2:#2a3547; --hair:#1f2a3b;
+  --text:#e6edf6; --text2:#d6deea; --muted:#b3bfd2; --muted2:#5b6678;
+  --cyan:#35d0d0; --amber:#ffb340; --green:#4cd98a; --red:#ff6b6b;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,sans-serif}
+.wrap{max-width:1040px;margin:0 auto;padding:30px 16px 70px}
+h1{font-size:21px;font-weight:600;margin:0 0 4px}
+.sub{color:var(--muted);font-size:13px;margin:0 0 24px;line-height:1.55;max-width:760px}
+.hero{display:flex;gap:26px;align-items:center;background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:24px;margin-bottom:26px}
+.hero .big{width:120px;height:120px;flex:none;border-radius:28px;background:radial-gradient(120% 120% at 30% 20%, #1b2634 0%, #0c1119 100%);border:1px solid var(--border2);display:flex;align-items:center;justify-content:center;box-shadow:0 10px 30px rgba(0,0,0,.5)}
+.hero .big svg{width:78px;height:78px}
+.hero .sizes{display:flex;gap:14px;align-items:center}
+.chip{border-radius:12px;background:radial-gradient(120% 120% at 30% 20%, #1b2634 0%, #0c1119 100%);border:1px solid var(--border2);display:flex;align-items:center;justify-content:center}
+.chip.s48{width:48px;height:48px} .chip.s32{width:32px;height:32px} .chip.s20{width:20px;height:20px;border-radius:6px}
+.chip.s48 svg{width:30px;height:30px} .chip.s32 svg{width:20px;height:20px} .chip.s20 svg{width:13px;height:13px}
+.herotext{min-width:0}
+.herotext h2{margin:0 0 6px;font-size:15px}
+.herotext p{margin:0;color:var(--muted);font-size:12.5px;line-height:1.55}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(236px,1fr));gap:16px}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:18px;display:flex;gap:16px;align-items:center}
+.card.hl{border-color:var(--cyan);box-shadow:0 0 0 1px var(--cyan) inset}
+.tile{width:60px;height:60px;flex:none;border-radius:15px;background:radial-gradient(120% 120% at 30% 20%, #1b2634 0%, #0c1119 100%);border:1px solid var(--border2);display:flex;align-items:center;justify-content:center}
+.tile svg{width:38px;height:38px}
+.name{font-size:18px;font-weight:700;margin:0 0 2px}
+.why{font-size:12px;color:var(--muted);line-height:1.5;margin:0}
+.strokecy{stroke:var(--cyan)} .fillcy{fill:var(--cyan)} .fillw{fill:var(--text)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Combined icon — Lodestar × Aura</h1>
+  <p class="sub">Your pick: merge the two. A <b>fixed star</b> at the core (the reference your sound stays
+  locked to) wrapped in an <b>aura</b> of arcs (the surround field around you). Below, the same icon on a
+  few candidate names — the icon is settled; just choose the word.</p>
+
+  <div class="hero">
+    <div class="big" id="bighero"></div>
+    <div class="herotext">
+      <h2>The mark</h2>
+      <p>A four-point star core with a white centre, wrapped in a soft cyan aura glow and a thin halo
+      ring. Reads as a fixed star and as a field of sound around a point. Legible down to a favicon:</p>
+      <div class="sizes" style="margin-top:12px">
+        <span class="chip s48" id="c48"></span>
+        <span class="chip s32" id="c32"></span>
+        <span class="chip s20" id="c20"></span>
+        <span style="color:var(--muted2);font:500 11px 'JetBrains Mono',monospace">48 · 32 · 20 px</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid" id="grid"></div>
+</div>
+<script>
+function combined() {
+  return `<svg viewBox="0 0 48 48" fill="none">
+    <defs><radialGradient id="aur" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#35d0d0" stop-opacity=".60"/>
+      <stop offset="55%" stop-color="#35d0d0" stop-opacity=".16"/>
+      <stop offset="100%" stop-color="#35d0d0" stop-opacity="0"/>
+    </radialGradient></defs>
+    <circle cx="24" cy="24" r="23" fill="url(#aur)"/>
+    <circle cx="24" cy="24" r="15.5" class="strokecy" stroke-width="1.3" opacity=".4"/>
+    <path d="M24 7 L27 21 L41 24 L27 27 L24 41 L21 27 L7 24 L21 21 Z" class="fillcy"/>
+    <circle cx="24" cy="24" r="2.4" class="fillw"/>
+  </svg>`;
+}
+document.getElementById("bighero").innerHTML = combined();
+document.getElementById("c48").innerHTML = combined();
+document.getElementById("c32").innerHTML = combined();
+document.getElementById("c20").innerHTML = combined();
+
+const NAMES = [
+  {name:"Aurora", hl:true,
+   why:"The truest merge: a fixed celestial phenomenon that glows as a field around you — Lodestar + Aura in one word. Beautiful and brandable."},
+  {name:"Lodestar", hl:false,
+   why:"Keep pick #3's word (the fixed star to steer by); the aura just enriches its icon."},
+  {name:"Aura", hl:false,
+   why:"Keep pick #4's word (the field of sound around you); the star gives it a fixed anchor."},
+  {name:"Polaris", hl:false,
+   why:"The pole star — the one fixed point the whole sky turns around, now haloed by its aura."},
+];
+document.getElementById("grid").innerHTML = NAMES.map(n => `
+  <div class="card ${n.hl?'hl':''}">
+    <div class="tile">${combined()}</div>
+    <div><div class="name">${n.name}</div><p class="why">${n.why}</p></div>
+  </div>`).join("");
+</script>
+</body>
+</html>

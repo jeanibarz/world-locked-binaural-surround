@@ -51,21 +51,21 @@ def test_unknown_mode_rejected(capsys):
     assert "unknown mode" in capsys.readouterr().err
 
 
-def test_listen_defaults_to_cockpit_ui(stub):
+def test_listen_defaults_to_web_ui(stub):
     assert launch.main(["listen", "--brir-dir", "x"]) == 0
     argv = stub["argv"]
     assert argv[:2] == ["--brir-dir", "x"]  # forwarded verbatim, in order
-    assert argv[-2:] == ["--ui", "cockpit"]  # default appended
+    assert argv[-2:] == ["--ui", "web"]  # default appended
 
 
 def test_listen_respects_explicit_ui(stub):
-    assert launch.main(["listen", "--ui", "console"]) == 0
+    assert launch.main(["listen", "--ui", "web"]) == 0
     assert stub["argv"].count("--ui") == 1
     assert "cockpit" not in stub["argv"]
 
 
 def test_listen_respects_ui_equals_form(stub):
-    assert launch.main(["listen", "--ui=console"]) == 0
+    assert launch.main(["listen", "--ui=web"]) == 0
     assert "--ui" not in stub["argv"]  # the =form already satisfies it
     assert "cockpit" not in stub["argv"]
 
@@ -81,11 +81,11 @@ def test_test_mode_requires_hrir_sets(stub, capsys):
     assert "argv" not in stub  # the app was never dispatched
 
 
-def test_test_mode_forwards_hrir_sets_and_cockpit(stub):
+def test_test_mode_forwards_hrir_sets_and_web(stub):
     assert launch.main(["test", "--hrir-sets-dir", "sets"]) == 0
     argv = stub["argv"]
     assert "--hrir-sets-dir" in argv and "sets" in argv
-    assert argv[-2:] == ["--ui", "cockpit"]
+    assert argv[-2:] == ["--ui", "web"]
 
 
 def test_calibrate_forwards_untouched(stub):

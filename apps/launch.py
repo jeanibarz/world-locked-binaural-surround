@@ -5,16 +5,15 @@ This replaces the per-app ``launch_*.py`` / ``run_*.cmd`` zoo on the host
 apps with different flag presets. There is now one start script — the host's
 ``run.cmd`` (see ``host/run.cmd``) forwards here with a **mode** as its first argument:
 
-    py -3.12 apps/launch.py listen    [passthrough flags...]   # daily world-lock, cockpit UI
+    py -3.12 apps/launch.py listen    [passthrough flags...]   # daily world-lock, web cockpit
     py -3.12 apps/launch.py test      [passthrough flags...]   # + HRIR-set blind A/B & loc test
     py -3.12 apps/launch.py calibrate [calibration flags...]   # recenter / axis-sign check
     py -3.12 apps/launch.py latency   [sweep flags...]         # latency sweep (dev, headless)
 
 ``listen`` and ``test`` are the same engine (``voicemeeter_passthrough``): ``test`` is
 ``listen`` plus an ``--hrir-sets-dir`` so the cockpit exposes the RFC-0003 blind A/B and
-localization test over the owner's set + the dense-grid candidates. Both default to the
-**cockpit** UI (``--ui cockpit``); pass ``--ui console`` to override. Everything after the
-mode is forwarded verbatim to the target app's ``main()``, so every app flag still works.
+localization test over the owner's set + the dense-grid candidates. Both run the web cockpit
+(the only UI). Everything after the mode is forwarded verbatim to the target app's ``main()``.
 
 The module computes its own repo root from ``__file__`` and prepends ``src`` + ``apps`` to
 ``sys.path``, so it runs the WSL checkout's code straight off a ``\\\\wsl.localhost\\...``
@@ -37,7 +36,7 @@ for _p in (_ROOT / "apps", _ROOT / "src"):
 # mode -> (target app module, one-line help). The import is deferred to dispatch time so a
 # missing host-only dependency only bites the mode that needs it, not ``--help`` or a test.
 MODES: dict[str, str] = {
-    "listen": "daily world-lock passthrough (cockpit UI)",
+    "listen": "daily world-lock passthrough (web cockpit)",
     "test": "passthrough + HRIR-set blind A/B & localization test (needs --hrir-sets-dir)",
     "calibrate": "calibration GUI — recenter / axis-sign check",
     "latency": "latency sweep (headless dev benchmark)",
@@ -55,7 +54,7 @@ def _usage() -> str:
     lines += [f"  {m.ljust(width)}  {help_}" for m, help_ in MODES.items()]
     lines += [
         "",
-        "listen/test default to --ui cockpit (override with --ui console).",
+        "listen/test run the web cockpit (the only UI).",
         "test requires --hrir-sets-dir <dir of dense_*.sofa> (the host run.cmd supplies it).",
     ]
     return "\n".join(lines)
@@ -81,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
     if mode in ("listen", "test"):
         flags = list(rest)
         if not _has_flag(flags, "--ui"):
-            flags += ["--ui", "cockpit"]
+            flags += ["--ui", "web"]   # the web/native cockpit is the only UI now
         if mode == "test" and not _has_flag(flags, "--hrir-sets-dir"):
             print(
                 "[launch] 'test' mode needs --hrir-sets-dir <dir containing dense_*.sofa>\n"

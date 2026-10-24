@@ -312,10 +312,9 @@ def main(argv=None) -> int:
                         "concurrent voices so a moving source on a fine grid stays real-time")
     p.add_argument("--rotate-speed", type=float, default=45.0,
                    help="auto-rotation speed of the test source in deg/s (toggle with R)")
-    p.add_argument("--ui", choices=("console", "cockpit", "web"), default="console",
-                   help="front-end: 'console' = the OpenCV window (default); 'cockpit' = the "
-                        "native Dear PyGui cockpit (B6.12) — same engine, resizable, with live "
-                        "method/backend/predict/test controls. Needs the 'gui' extra (dearpygui).")
+    p.add_argument("--ui", choices=("web",), default="web",
+                   help="front-end: the web cockpit (HTTP server + browser/native window). The "
+                        "only UI; kept as a flag for forward compatibility.")
     p.add_argument("--log-fifo-fill", type=Path, default=None,
                    help="A0 diagnostic (RFC Track A): log output-FIFO fill vs time to this CSV, "
                         "then run `python -m binaural_headtracker.fifo_drift <csv>` to classify "
@@ -802,42 +801,9 @@ def main(argv=None) -> int:
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # freshest frame, don't trail buffered ones
     cam_w, cam_h, cam_fps = C.apply_camera_settings(
         cap, width=args.cam_width, height=args.cam_height, fps=args.cam_fps)
-    detect_ms = 0.0
     recent: deque[HeadPose] = deque(maxlen=20)
     pose_filter = PoseFilter(args.min_cutoff, args.beta)
-    predictor = PosePredictor() if args.predict else None
-    pred_hud = {"ms": 0.0}  # the horizon currently used, for the readout chip
     flip_az = args.flip_az
-    miss = 0  # consecutive failed camera reads (graceful degradation, B4.2)
-    times: deque[float] = deque(maxlen=60)  # frame timestamps → tracker rate
-    show_stats = False
-    phase = 0.0
-    win = "World-Locked Binaural Surround"
-    if args.ui == "console":
-        cv2.namedWindow(win)
-    drag = {"on": False}
-
-    def on_mouse(event, mx, my, flags, _param):  # noqa: ANN001  — click/drag the radar to move test
-        # Press starts a drag (and turns the test source on, stopping any auto-rotation);
-        # moving with the button held sweeps the source live; release ends the drag.
-        if event == cv2.EVENT_LBUTTONDOWN:
-            az = C.radar_az_at(mx, my)
-            if az is not None:
-                with lock:
-                    test["world_az"] = float(az)
-                    test["on"] = True
-                    test["rotate"] = False
-                drag["on"] = True
-        elif event == cv2.EVENT_MOUSEMOVE and drag["on"] and (flags & cv2.EVENT_FLAG_LBUTTON):
-            az = C.radar_az_at(mx, my, allow_outside=True)
-            if az is not None:
-                with lock:
-                    test["world_az"] = float(az)
-        elif event == cv2.EVENT_LBUTTONUP:
-            drag["on"] = False
-
-    if args.ui == "console":
-        cv2.setMouseCallback(win, on_mouse)
 
     # Capture = PyAudio WASAPI loopback (raw 7.1); output = sounddevice to the headphones
     # (blocksize=0 lets it pick the host-native buffer; the callbacks handle any frame count).
@@ -904,34 +870,30 @@ def main(argv=None) -> int:
         nonlocal cap
         from binaural_headtracker import cockpit as CM
 
-        if args.ui == "web":
-            import cockpit_web as CW
-            # reopen at the last window size the owner left (persisted on resize); fall back to the
-            # design default on first run / a bad file.
-            _win_path = _cfg_dir / "window.json"
-            _w0, _h0 = 1320, 864
-            try:
-                _wj = json.loads(_win_path.read_text(encoding="utf-8"))
-                if 600 <= int(_wj["w"]) <= 10000 and 400 <= int(_wj["h"]) <= 10000:
-                    _w0, _h0 = int(_wj["w"]), int(_wj["h"])
-            except (OSError, ValueError, KeyError, TypeError):
-                pass
-            win_ck = CW.WebCockpit(
-                title=f"World-Locked Binaural Surround — webcam {cam_index}", width=_w0, height=_h0)
+        import cockpit_web as CW
+        # reopen at the last window size the owner left (persisted on resize); fall back to the
+        # design default on first run / a bad file.
+        _win_path = _cfg_dir / "window.json"
+        _w0, _h0 = 1320, 864
+        try:
+            _wj = json.loads(_win_path.read_text(encoding="utf-8"))
+            if 600 <= int(_wj["w"]) <= 10000 and 400 <= int(_wj["h"]) <= 10000:
+                _w0, _h0 = int(_wj["w"]), int(_wj["h"])
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        win_ck = CW.WebCockpit(
+            title=f"World-Locked Binaural Surround — webcam {cam_index}", width=_w0, height=_h0)
 
-            def _save_window_size(w, h) -> None:  # noqa: ANN001
-                try:
-                    if 600 <= int(w) <= 10000 and 400 <= int(h) <= 10000:
-                        _win_path.parent.mkdir(parents=True, exist_ok=True)
-                        tmp = _win_path.with_suffix(".json.tmp")
-                        tmp.write_text(json.dumps({"w": int(w), "h": int(h)}), encoding="utf-8")
-                        os.replace(tmp, _win_path)
-                except (OSError, ValueError):
-                    pass
-            win_ck.on_window_size = _save_window_size
-        else:
-            import cockpit_view as CK
-            win_ck = CK.CockpitWindow(title=f"World-Locked Binaural Surround — webcam {cam_index}")
+        def _save_window_size(w, h) -> None:  # noqa: ANN001
+            try:
+                if 600 <= int(w) <= 10000 and 400 <= int(h) <= 10000:
+                    _win_path.parent.mkdir(parents=True, exist_ok=True)
+                    tmp = _win_path.with_suffix(".json.tmp")
+                    tmp.write_text(json.dumps({"w": int(w), "h": int(h)}), encoding="utf-8")
+                    os.replace(tmp, _win_path)
+            except (OSError, ValueError):
+                pass
+        win_ck.on_window_size = _save_window_size
         q = {"stop": False, "restart": False}
         cur = {"backend": ("rust" if args.rust else "gpu" if args.gpu else "cpu"),
                "predict": args.predict,
@@ -1512,186 +1474,10 @@ def main(argv=None) -> int:
 
     restart = False  # Reload key (Enter): tear down cleanly, then the launcher relaunches us
     try:
-        if args.ui in ("cockpit", "web"):
-            restart = _run_cockpit()
-            if _reset_req["v"]:  # loop has exited -> no auto-save can race the reset write
-                settings_store.reset()
-                print("settings: reset to defaults (reloading)")
-        while args.ui == "console":
-            if cb_error:
-                print(f"audio callback error: {cb_error[0]!r}")
-                break
-            ok, frame = cap.read()
-            if not ok:
-                # Camera lost: hold the last pose (audio keeps world-locking), keep the
-                # window + keys alive, and try to reopen periodically — don't spin blind.
-                miss += 1
-                if miss % 90 == 0:
-                    cap.release()
-                    cap = cv2.VideoCapture(cam_index)
-                lost = np.full((240, 520, 3), (28, 20, 16), np.uint8)
-                cv2.putText(lost, "camera lost - holding last pose (audio live)", (14, 110),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, MUTED, 1, cv2.LINE_AA)
-                cv2.putText(lost, "[Q] quit", (14, 150),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, FG, 1, cv2.LINE_AA)
-                cv2.imshow(win, lost)
-                if (cv2.waitKey(30) & 0xFF) in (ord("q"), 27):
-                    break
-                continue
-            miss = 0
-            now = time.monotonic()
-            times.append(now)
-            phase = (phase + 0.03) % 1.0
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)  # un-mirrored → real yaw sign
-            td = time.perf_counter()
-            result = detector.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
-            dms = (time.perf_counter() - td) * 1000.0
-            detect_ms = 0.9 * detect_ms + 0.1 * dms if detect_ms else dms
-            frame = cv2.flip(frame, 1)  # mirror for display only
-            pose = None
-            landmarks = result.face_landmarks[0] if result.face_landmarks else None
-            with lock:
-                cal = state["cal"]
-            if result.facial_transformation_matrixes:
-                yaw, pitch, roll = head_pose_from_matrix(
-                    np.asarray(result.facial_transformation_matrixes[0]))
-                pose = pose_filter.update(HeadPose(yaw, pitch, roll, now))
-                recent.append(pose)
-                # Orientation prediction (B8.6): extrapolate the pose forward by the measured
-                # pose-age-at-ear so the render matches the head when the sound is *heard*, not when
-                # the camera saw it — cancels the ~40 ms camera staleness. The audio steers on the
-                # predicted pose; the HUD still shows the real one.
-                pose_for_az = pose
-                if predictor is not None:
-                    predictor.update(pose)
-                    es = ear_probe.stats()
-                    predict_ms = (args.predict_ms if args.predict_ms > 0
-                                  else (es.p50 if es.n > 30 else 60.0))
-                    pred_hud["ms"] = predict_ms
-                    pose_for_az = predictor.predict(pose, predict_ms)
-                dirs = directions_for_pose(cal, pose_for_az, layout)
-            else:
-                dirs = layout.head_relative_directions()
-            if flip_az:
-                dirs = dirs.copy()
-                dirs[:, 0] = -dirs[:, 0]
-            if pose is not None:
-                with lock:
-                    state["az"] = dirs[:, 0].copy()
-                    state["pose_t"] = pose.t  # carry the capture time for the pose-age probe
-            nearest_i = nearest_front_channel(dirs)
-            head_deg = -float(dirs[c_idx][0])  # where the head faces in the world
-            # Experiment test source: advance any auto-rotation and update its head-relative az
-            # (a world-fixed source at world_az is heard at world_az + the head's own offset).
-            dt = (times[-1] - times[-2]) if len(times) >= 2 else 0.0
-            with lock:
-                if test["rotate"]:
-                    test["world_az"] = (test["world_az"] + args.rotate_speed * dt + 180.0) \
-                        % 360.0 - 180.0
-                test["az"] = float(test["world_az"]) + float(dirs[c_idx][0])
-
-            span = times[-1] - times[0]
-            rate = (len(times) - 1) / span if len(times) > 1 and span > 0 else 0.0
-            with fifo_lock:
-                fifo_fill = len(out_fifo)
-            # snapshot: out_cb may append concurrently (avoid "deque mutated during iteration")
-            recent_under = sum(1 for t in tuple(meter["under_ts"]) if now - t < 2.0)
-            recent_over = sum(1 for t in tuple(meter["over_ts"]) if now - t < 2.0)
-            out_lat_ms = float(getattr(out_ctx, "latency", 0.0) or 0.0) * 1000.0
-            out_lat["ms"] = out_lat_ms  # feed the worker's pose-age probe (it can't read out_ctx)
-            rlabel = main_rend["label"] + ("  · test ON" if test["on"] else "")
-            ear = ear_probe.stats()  # measured pose-age-at-ear distribution (B8.5)
-            diag = classify(
-                block_size=blk["n"], samplerate=brir.samplerate,
-                render_ms=meter["ms"], render_ms_peak=meter["peak"],
-                render_ms_test=(meter["test_ms"] if test["on"] else 0.0),
-                render_label=rlabel,
-                fifo_fill_blocks=fifo_fill, cushion_blocks=cushion,
-                output_latency_ms=out_lat_ms,
-                input_latency_ms=1000.0 * blk["n"] / brir.samplerate,
-                pose_rate_hz=rate, recent_underruns=recent_under,
-                recent_overflows=recent_over,
-                measured_pose_age_ms=(ear.p50 if ear.n else None),
-                measured_pose_age_p95_ms=ear.p95, measured_pose_age_p99_ms=ear.p99,
-                measured_pose_age_n=ear.n,
-                measured_stale_ms=stale_probe.stats().p50,
-                measured_queue_ms=queue_probe.stats().p50,
-                measured_device_ms=out_lat_ms,
-                detect_ms=detect_ms, camera_fps=cam_fps, cam_w=cam_w, cam_h=cam_h)
-
-            live = "TRACKING" if pose is not None else "NO FACE"
-            live_col = C.GOOD if pose is not None else C.MUTED
-            readout = [
-                ("rate", f"{rate:3.0f}Hz", C.GOOD if rate >= 20 else C.ACTIVE),
-                ("lat", f"~{diag.end_to_end_ms:.0f}ms", C.health_color(diag.health)),
-                ("facing", brir.channels[nearest_i] + ("  [flip]" if flip_az else ""), C.ACTIVE),
-            ]
-            if predictor is not None:
-                readout.append(("predict", f"{pred_hud['ms']:.0f}ms", C.GOOD))
-            if test["on"]:
-                # method now lives in the title-bar chip (shared by 7.1 + test), so the
-                # test readout only carries the source's position/mode
-                readout.append(("test", f"{test['world_az']:+.0f}\xb0"
-                                + ("  SOLO" if test["solo"] else "")
-                                + ("  rot" if test["rotate"] else ""), C.GOOD))
-            buttons = [("Test", "T", test["on"]), ("Method", "M", False),
-                       ("Stats", "S", False), ("Reload", "⏎", False), ("Quit", "Q", False)]
-            canvas = C.compose(
-                frame, title=f"World-Locked Binaural Surround — webcam {cam_index}", live=live,
-                live_color=live_col, pose=pose, landmarks=landmarks, lock=None,
-                world_az=world_az, channels=brir.channels, facing_i=nearest_i, head_deg=head_deg,
-                source_az=(test["world_az"] if test["on"] else None),
-                readout=readout, buttons=buttons, diagnosis=diag, method=test["method"],
-                show_stats=show_stats, audio_stats=True, rate_hz=rate, phase=phase)
-            cv2.imshow(win, canvas)
-            key = cv2.waitKey(1) & 0xFF
-            if key in (ord("q"), 27):
-                break
-            if key in (13, 10):  # Enter: reload — relaunch to pick up latest code (clean restart)
-                cv2.putText(canvas, "restarting...", (C.CAM_W + 20, 70),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, ACCENT, 1, cv2.LINE_AA)
-                cv2.imshow(win, canvas)
-                cv2.waitKey(1)
-                restart = True
-                break
-            if key == ord("s"):
-                show_stats = not show_stats
-            if key == ord("f"):
-                flip_az = not flip_az
-            if key == ord("t"):  # experiment layer: toggle the movable test source
-                with lock:
-                    test["on"] = not test["on"]
-            if key == ord("o"):  # solo: hear only the test source (mute the 7.1)
-                with lock:
-                    test["solo"] = not test["solo"]
-            if key == ord("r"):  # auto-rotate the test source around you
-                with lock:
-                    test["rotate"] = not test["rotate"]
-            if key in (ord("["), ord("]")):  # test level down / up
-                with lock:
-                    f = 0.8 if key == ord("[") else 1.25
-                    test["gain"] = float(np.clip(test["gain"] * f, 0.02, 4.0))
-            if key == ord("m"):  # cycle the SHARED method — rebuilds the 7.1 AND the test source
-                nxt = EXPERIMENT_METHODS[(EXPERIMENT_METHODS.index(test["method"]) + 1)
-                                         % len(EXPERIMENT_METHODS)]
-                cv2.putText(canvas, f"switching to {nxt} (building)...", (C.CAM_W + 20, 70),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, ACCENT, 1, cv2.LINE_AA)
-                cv2.imshow(win, canvas)
-                cv2.waitKey(1)
-                if nxt not in test_renderers:
-                    test_renderers[nxt] = build_test_renderer(nxt)
-                new_main, _ = build_main_renderer(nxt)  # dense-grid 7.1 for a synthesis method
-                new_label = render_label(new_main, nxt)
-                with lock:
-                    main_rend["r"] = new_main
-                    main_rend["label"] = new_label
-                    test["renderer"] = test_renderers[nxt]
-                    test["method"] = nxt
-            if key == ord("c") and recent:
-                new_cal = calibrate_neutral(list(recent), yaw_sign=args.yaw_sign,
-                                            pitch_sign=args.pitch_sign, roll_sign=args.roll_sign)
-                with lock:
-                    state["cal"] = new_cal
+        restart = _run_cockpit()
+        if _reset_req["v"]:  # loop exited -> no auto-save can race the reset write
+            settings_store.reset()
+            print("settings: reset to defaults (reloading)")
     finally:
         stop_worker.set()
         worker.join(timeout=1.0)
