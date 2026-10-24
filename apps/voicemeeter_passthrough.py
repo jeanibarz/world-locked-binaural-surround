@@ -911,6 +911,9 @@ def main(argv=None) -> int:
                 # lowering just lets the worker trim to the smaller max_backlog next cycle.
                 while len(out_fifo) < cushion:
                     out_fifo.appendleft((np.zeros((blk["n"], 2)), None, None))
+            # keep the settings dialog's seed in sync: it re-reads this on open, so a stale value
+            # would make a changed cushion appear to "snap back" when the dialog is reopened.
+            win_ck.set_cushion_display(nc * blk["n"] / brir.samplerate * 1000.0)
 
         def _set_block(n) -> None:  # noqa: ANN001  — render block size (frames), live
             """Swap the render block size without a restart. Rebuilds every renderer + the output EQ
@@ -939,6 +942,8 @@ def main(argv=None) -> int:
                     while len(out_fifo) < cushion:              # block shrank → top up to target
                         out_fifo.appendleft((np.zeros((n, 2)), None, None))
             win_ck.set_block_display(n)
+            # block size changes the cushion's ms-per-block, so refresh its displayed value too
+            win_ck.set_cushion_display(cushion * n / brir.samplerate * 1000.0)
 
         def _build_for_set(hs):
             """``(main_renderer, test_renderer, reason)`` for an HRIR set, at the current block
@@ -1140,10 +1145,15 @@ def main(argv=None) -> int:
             q["stop"] = True
 
         # live-reversible auto-revert (RFC rfc-crash-safe-settings v2): block/cushion are applied
-        # live, then watched for a short window — if the output FIFO starts starving, snap back to
-        # the last-good value so a too-aggressive setting can't leave the stream permanently broken.
-        _REVERT_WINDOW_S = 3.0
-        _REVERT_UNDERRUNS = 6
+        # live, then watched — if the output FIFO keeps starving, snap back to the last-good value so
+        # a too-aggressive setting can't leave the stream permanently broken. The watch IGNORES the
+        # first _REVERT_SETTLE_S: a block-size change rebuilds every renderer under the lock (losing
+        # their overlap tails) and a cushion change re-tops the FIFO, both of which cause a one-time
+        # burst of underruns at the swap that must NOT be read as "the new setting is bad". Only
+        # SUSTAINED starvation after that transient reverts.
+        _REVERT_SETTLE_S = 1.2    # swallow the swap/top-up transient
+        _REVERT_WINDOW_S = 4.0    # total watch window
+        _REVERT_UNDERRUNS = 8     # underruns AFTER settle that mean the stream genuinely can't hold
         _watch: dict = {"revert": None, "t0": 0.0, "knob": ""}
 
         def _arm_watch(knob: str, revert) -> None:  # noqa: ANN001
@@ -1259,15 +1269,17 @@ def main(argv=None) -> int:
                 recent_under = sum(1 for t in tuple(meter["under_ts"]) if now - t < 2.0)
                 recent_over = sum(1 for t in tuple(meter["over_ts"]) if now - t < 2.0)
                 if _watch["revert"] is not None:  # live-reversible watch window open
-                    since = sum(1 for t in tuple(meter["under_ts"]) if t > _watch["t0"])
-                    if since >= _REVERT_UNDERRUNS:        # change starved the stream -> snap back
-                        rv, kn = _watch["revert"], _watch["knob"]
-                        _watch["revert"] = None
-                        rv()
-                        win_ck.toast(f"{kn} change caused dropouts — reverted to last-good",
-                                     "error", seconds=5)
-                    elif now - _watch["t0"] >= _REVERT_WINDOW_S:  # survived -> accept the change
-                        _watch["revert"] = None
+                    settle_t = _watch["t0"] + _REVERT_SETTLE_S
+                    if now >= settle_t:  # past the swap transient -> judge only sustained starvation
+                        since = sum(1 for t in tuple(meter["under_ts"]) if t > settle_t)
+                        if since >= _REVERT_UNDERRUNS:    # still starving -> snap back to last-good
+                            rv, kn = _watch["revert"], _watch["knob"]
+                            _watch["revert"] = None
+                            rv()
+                            win_ck.toast(f"{kn} kept starving the output — reverted to last-good",
+                                         "error", seconds=5)
+                        elif now - _watch["t0"] >= _REVERT_WINDOW_S:  # held up -> accept the change
+                            _watch["revert"] = None
                 out_lat_ms = float(getattr(out_ctx, "latency", 0.0) or 0.0) * 1000.0
                 out_lat["ms"] = out_lat_ms
                 rlabel = main_rend["label"] + ("  · test ON" if t_on else "")
