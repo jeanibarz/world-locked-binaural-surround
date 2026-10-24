@@ -43,7 +43,9 @@ PANEL_Y = 324  # the wide latency panel under the camera/radar
 CONTROLS_H = 234  # height reserved below the scaled canvas for the four native controls rows
 MARGIN = 10       # window padding kept around the scaled canvas
 CTRL_FONT_PX = 25  # the native-widget font size (≈1.7× the old 15) — the strip was tiny vs panels
-CUSHION_MIN, CUSHION_MAX, CUSHION_STEP = 20, 120, 10  # output-cushion ± stepper range (ms)
+CUSHION_MIN, CUSHION_MAX, CUSHION_STEP = 20, 260, 10  # output-cushion ± stepper range (ms)
+# Ceiling reaches 260 so the ±stepper can represent (and exceed) the 200 ms --pull-sysvad default
+# without clamping it down to an underrunning value; the VoiceMeeter path still lives near 60 ms.
 
 
 def available() -> bool:
