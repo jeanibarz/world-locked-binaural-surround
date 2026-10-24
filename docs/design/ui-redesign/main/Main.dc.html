@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tidy layout</title>
+<script src="./vendor/react.js"></script>
+<script src="./vendor/react-dom.js"></script>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div style="width:1280px;height:820px;box-sizing:border-box;display:flex;flex-direction:column;background:#0d1117;font-family:Inter,system-ui,sans-serif;color:#e6edf6;overflow:hidden">
+
+  <!-- Title bar -->
+  <div style="height:36px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 12px 0 14px;background:#f1f3f6;color:#1d2530;font-size:13px">
+    <div style="display:flex;align-items:center;gap:10px"><span style="width:14px;height:14px;border-radius:3px;background:#35d0d0;display:inline-block"></span><span>world-lock passthrough — webcam 0</span></div>
+    <div style="display:flex;align-items:center;gap:22px;color:#5b6678">
+      <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M1 6h10" stroke="currentColor" stroke-width="1.2" fill="none"></path></svg>
+      <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect x="1.5" y="1.5" width="9" height="9" stroke="currentColor" stroke-width="1.2" fill="none"></rect></svg>
+      <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M1 1l10 10M11 1L1 11" stroke="currentColor" stroke-width="1.2" fill="none"></path></svg>
+    </div>
+  </div>
+
+  <div style="flex:1;min-height:0;box-sizing:border-box;padding:14px 16px 16px;display:flex;flex-direction:column;gap:12px">
+
+    <!-- Row 1: camera + health | ring stage | latency -->
+    <div style="height:580px;flex:none;display:grid;grid-template-columns:352px minmax(0,1fr) 340px;gap:12px">
+
+      <!-- Left column -->
+      <div style="display:flex;flex-direction:column;gap:12px;min-width:0">
+        <div style="position:relative;height:188px;flex:none;background:#0a0e14;border:1px solid #243044;border-radius:12px;overflow:hidden">
+          <svg width="100%" height="100%" viewBox="0 0 352 204" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Camera preview placeholder with face landmarks">
+            <rect width="352" height="204" fill="#10151d"></rect>
+            <path d="M0 0h352v48L0 26z" fill="#171d28"></path>
+            <ellipse cx="176" cy="106" rx="50" ry="66" fill="none" stroke="#35d0d0" stroke-width="1.5" stroke-dasharray="3 6" opacity=".7"></ellipse>
+            <g fill="#35d0d0" opacity=".75"><circle cx="157" cy="88" r="2"></circle><circle cx="195" cy="88" r="2"></circle><circle cx="176" cy="108" r="2"></circle><circle cx="165" cy="134" r="2"></circle><circle cx="176" cy="138" r="2"></circle><circle cx="187" cy="134" r="2"></circle></g>
+          </svg>
+          <div style="position:absolute;left:10px;top:10px;display:flex;align-items:center;gap:6px;background:rgba(13,17,23,.85);border:1px solid #2a3547;border-radius:999px;padding:4px 10px;font-size:12px;font-weight:600;color:#4cd98a"><span style="width:7px;height:7px;border-radius:50%;background:#4cd98a;display:inline-block"></span>Face locked</div>
+          <div style="position:absolute;right:10px;bottom:10px;font:500 11px 'JetBrains Mono',monospace;color:#d6deea;background:rgba(13,17,23,.85);border:1px solid #2a3547;border-radius:6px;padding:4px 8px">640×480 @ 30</div>
+        </div>
+        <div style="flex:1;background:#151c28;border:1px solid #243044;border-radius:12px;padding:12px 16px;display:flex;flex-direction:column;min-width:0">
+          <div style="font-size:12px;letter-spacing:.08em;color:#b3bfd2;font-weight:600;margin-bottom:4px">SYSTEM</div>
+          <sc-for list="{{health}}" as="h" hint-placeholder-count="6">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:4px 0;border-top:1px solid #1f2a3b">
+              <div style="display:flex;align-items:center;gap:9px;min-width:0"><span style="width:8px;height:8px;border-radius:50%;flex:none;background:{{h.dot}}"></span><span style="font-size:13px;color:#d6deea">{{h.label}}</span></div>
+              <div style="font:500 12px 'JetBrains Mono',monospace;color:#e6edf6;text-align:right">{{h.value}}</div>
+            </div>
+          </sc-for>
+          <div style="border-top:1px solid #1f2a3b;margin-top:6px;padding-top:12px;display:flex;flex-direction:column;gap:10px">
+            <div style="display:flex;flex-direction:column;gap:5px">
+              <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px"><span style="font-size:13px;color:#d6deea">Render load</span><span style="font:500 12px 'JetBrains Mono',monospace;color:#e6edf6">40% (peak 46%) · 21.3 ms/blk</span></div>
+              <div style="position:relative;box-sizing:border-box;height:9px;border-radius:999px;background:#0d1117;border:1px solid #2a3547"><div style="width:40%;height:100%;border-radius:999px;background:#4cd98a"></div><div style="position:absolute;left:46%;top:-4px;bottom:-4px;width:2px;background:#e6edf6"></div></div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:5px">
+              <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px"><span style="font-size:13px;color:#d6deea">Output buffer</span><span style="font:500 12px 'JetBrains Mono',monospace;color:#e6edf6">3 / 2 blk · steady</span></div>
+              <div style="position:relative;box-sizing:border-box;height:9px;border-radius:999px;background:#0d1117;border:1px solid #2a3547"><div style="width:75%;height:100%;border-radius:999px;background:#4cd98a"></div><div style="position:absolute;left:50%;top:-4px;bottom:-4px;width:2px;background:#e6edf6"></div></div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:5px">
+              <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px"><span style="font-size:13px;color:#d6deea">Dropouts, last 60 s</span><span style="font:500 12px 'JetBrains Mono',monospace;color:#4cd98a">0 over · 0 under</span></div>
+              <div style="position:relative;box-sizing:border-box;height:9px;border-radius:999px;background:#0d1117;border:1px solid #2a3547"><div style="width:0%;height:100%;border-radius:999px;background:#4cd98a"></div></div>
+            </div>
+          </div>
+          <div style="margin-top:auto;border-top:1px solid #1f2a3b;padding-top:10px;display:flex;align-items:center;justify-content:space-between;gap:10px">
+            <div style="display:flex;align-items:center;gap:10px"><button type="button" role="switch" aria-checked="false" aria-label="Predict head position" style="width:38px;height:22px;border-radius:999px;border:1px solid #3a475c;background:#0d1117;padding:0;position:relative"><span style="position:absolute;left:3px;top:3px;width:14px;height:14px;border-radius:50%;background:#b3bfd2"></span></button><span style="font-size:13px;color:#d6deea">Predict head position</span></div>
+            <button type="button" style="height:36px;padding:0 16px;border-radius:8px;border:1px solid #2a3547;background:transparent;color:#e6edf6;font:600 13px Inter,sans-serif">Settings…</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Ring stage -->
+      <div style="background:#151c28;border:1px solid #243044;border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;min-width:0">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <div style="display:flex;align-items:center;gap:12px"><div style="font-size:12px;letter-spacing:.08em;color:#b3bfd2;font-weight:600">WORLD-LOCKED RING</div><span style="font-size:12px;font-weight:600;color:#ffb340;background:rgba(255,179,64,.12);border-radius:999px;padding:3px 10px">Facing C</span></div>
+          <button type="button" style="height:34px;padding:0 16px;border-radius:8px;border:0;background:#ffb340;color:#2b1a02;font:700 13px Inter,sans-serif">Recenter</button>
+        </div>
+        <div style="flex:1;display:flex;align-items:center;justify-content:center;min-height:0">
+          <svg width="400" height="400" viewBox="0 0 320 320" role="img" aria-label="Speaker ring. The listener's head is turned 4 degrees left of the center speaker, which is the active speaker.">
+            <defs><radialGradient id="cone" gradientUnits="userSpaceOnUse" cx="160" cy="160" r="110"><stop offset="0" stop-color="#35d0d0" stop-opacity=".32"></stop><stop offset="1" stop-color="#35d0d0" stop-opacity=".07"></stop></radialGradient></defs>
+            <circle cx="160" cy="160" r="110" fill="none" stroke="#2a3547" stroke-width="1.5"></circle>
+            <circle cx="160" cy="160" r="73" fill="none" stroke="#222d3f" stroke-width="1"></circle>
+            <circle cx="160" cy="160" r="37" fill="none" stroke="#222d3f" stroke-width="1"></circle>
+            <path d="M160 160L160 50M160 160L105 64.7M160 160L215 64.7M160 160L56.6 197.6M160 160L263.4 197.6M160 160L105 255.3M160 160L215 255.3" fill="none" stroke="#2b384c" stroke-width="1" stroke-dasharray="4 5"></path>
+            <path d="M40 160H280M160 44V288" fill="none" stroke="#3a475c" stroke-width="1.2" stroke-dasharray="6 6"></path>
+            <g transform="rotate(-4 160 160)"><path d="M160 160L105 64.7A110 110 0 0 1 215 64.7Z" fill="url(#cone)" stroke="#35d0d0" stroke-opacity=".45" stroke-width="1"></path></g>
+            <g fill="#35d0d0" stroke="#151c28" stroke-width="2"><circle cx="105" cy="64.7" r="7"></circle><circle cx="215" cy="64.7" r="7"></circle><circle cx="56.6" cy="197.6" r="7"></circle><circle cx="263.4" cy="197.6" r="7"></circle><circle cx="105" cy="255.3" r="7"></circle><circle cx="215" cy="255.3" r="7"></circle></g>
+            <path d="M160 160L160 64" fill="none" stroke="#ffb340" stroke-width="1.6" stroke-dasharray="5 4"></path>
+            <circle cx="160" cy="50" r="17" fill="#ffb340" fill-opacity=".14"></circle>
+            <circle cx="160" cy="50" r="12" fill="none" stroke="#ffb340" stroke-width="1.6"></circle>
+            <circle cx="160" cy="50" r="7.5" fill="#ffb340" stroke="#151c28" stroke-width="2"></circle>
+            <g transform="rotate(-4 160 160) translate(160 160) scale(1.5) translate(-160 -160)" fill="#e6edf6" stroke="#151c28" stroke-width="1.5"><ellipse cx="148.5" cy="161" rx="2.6" ry="5.5"></ellipse><ellipse cx="171.5" cy="161" rx="2.6" ry="5.5"></ellipse><ellipse cx="160" cy="161" rx="10" ry="12"></ellipse><path d="M160 142L154.5 150H165.5Z"></path></g>
+            <g font-family="'JetBrains Mono',monospace" font-size="12" fill="#b3bfd2" text-anchor="middle">
+              <text x="160" y="13">FRONT</text>
+              <text x="160" y="29" fill="#ffb340" font-weight="700">C 0°</text>
+              <text x="84" y="48">L +30°</text><text x="236" y="48">R −30°</text>
+              <text x="50" y="222">SL +110°</text><text x="270" y="222">SR −110°</text>
+              <text x="100" y="280">RL +150°</text><text x="220" y="280">RR −150°</text>
+              <text x="160" y="312">BACK</text>
+              <text x="6" y="164" text-anchor="start">LEFT</text><text x="314" y="164" text-anchor="end">RIGHT</text>
+            </g>
+          </svg>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px">
+          <div style="background:#0d1117;border:1px solid #243044;border-radius:8px;padding:8px 12px;display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:12px;color:#b3bfd2;letter-spacing:.06em">YAW</span><span style="font:600 18px 'JetBrains Mono',monospace">+4°</span></div>
+          <div style="background:#0d1117;border:1px solid #243044;border-radius:8px;padding:8px 12px;display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:12px;color:#b3bfd2;letter-spacing:.06em">PITCH</span><span style="font:600 18px 'JetBrains Mono',monospace">−19°</span></div>
+          <div style="background:#0d1117;border:1px solid #243044;border-radius:8px;padding:8px 12px;display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:12px;color:#b3bfd2;letter-spacing:.06em">ROLL</span><span style="font:600 18px 'JetBrains Mono',monospace">+3°</span></div>
+        </div>
+      </div>
+
+      <!-- Latency -->
+      <div style="background:#151c28;border:1px solid #243044;border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;min-width:0">
+        <div style="font-size:12px;letter-spacing:.08em;color:#b3bfd2;font-weight:600">LATENCY · HEAD MOVE → EAR</div>
+        <div style="display:flex;align-items:baseline;gap:8px;margin-top:8px"><span style="font:700 52px/1 'JetBrains Mono',monospace">178</span><span style="font-size:15px;color:#b3bfd2">ms</span><span style="margin-left:auto;font-size:12px;font-weight:700;color:#06240f;background:#4cd98a;border-radius:999px;padding:3px 10px">GOOD</span></div>
+        <div style="font:400 12px 'JetBrains Mono',monospace;color:#b3bfd2;margin-top:6px">median · p95 186 · p99 194</div>
+        <div style="display:flex;height:26px;border-radius:6px;overflow:hidden;gap:2px;margin-top:14px">
+          <div style="flex:62 1 0;background:repeating-linear-gradient(135deg,#2a3547 0 6px,#1f2a3b 6px 12px);color:#d6deea;font:600 11px Inter,sans-serif;display:flex;align-items:center;padding-left:7px">~62</div>
+          <div style="flex:47 1 0;background:#ff6b6b;color:#2a0a0a;font:600 11px Inter,sans-serif;display:flex;align-items:center;padding-left:7px">47</div>
+          <div style="flex:47 1 0;background:#ffb340;color:#2b1a02;font:600 11px Inter,sans-serif;display:flex;align-items:center;padding-left:7px">47</div>
+          <div style="flex:22 1 0;background:#35d0d0;color:#06222a;font:600 11px Inter,sans-serif;display:flex;align-items:center;padding-left:7px">22</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 10px;margin-top:10px;font-size:12px;color:#d6deea">
+          <div style="display:flex;gap:7px;align-items:center"><span style="width:10px;height:10px;border-radius:2px;background:repeating-linear-gradient(135deg,#5b6678 0 3px,#2a3547 3px 6px)"></span>Capture (est.)</div>
+          <div style="display:flex;gap:7px;align-items:center"><span style="width:10px;height:10px;border-radius:2px;background:#ff6b6b"></span>Camera stale</div>
+          <div style="display:flex;gap:7px;align-items:center"><span style="width:10px;height:10px;border-radius:2px;background:#ffb340"></span>FIFO queue</div>
+          <div style="display:flex;gap:7px;align-items:center"><span style="width:10px;height:10px;border-radius:2px;background:#35d0d0"></span>Device (WASAPI)</div>
+        </div>
+        <div style="font-size:12px;color:#b3bfd2;margin:14px 0 6px">Distribution (ms)</div>
+        <div style="position:relative;flex:1;min-height:60px;border-bottom:1px solid #2a3547">
+          <div style="position:absolute;inset:0;display:flex;align-items:flex-end;gap:3px">
+            <sc-for list="{{bins}}" as="b" hint-placeholder-count="20"><div style="{{b.style}}"></div></sc-for>
+          </div>
+          <div style="position:absolute;left:48.7%;top:0;bottom:0;border-left:2px dashed #e6edf6"></div>
+          <div style="position:absolute;left:50%;top:-2px;font:600 11px 'JetBrains Mono',monospace;color:#e6edf6">p50</div>
+        </div>
+        <div style="display:flex;justify-content:space-between;font:400 11px 'JetBrains Mono',monospace;color:#b3bfd2;margin-top:5px"><span>100</span><span>180</span><span>260</span></div>
+        <div style="margin-top:12px;font-size:12px;line-height:1.45;color:#b3bfd2">Queue (47 ms) is the largest setting you can change: lower the cushion or block size.</div>
+      </div>
+    </div>
+
+    <!-- Row 3: experiments drawer -->
+    <div style="flex:1;min-height:0;box-sizing:border-box;background:#151c28;border:1px solid #243044;border-radius:12px;padding:0 16px 12px;display:flex;flex-direction:column">
+      <div style="display:flex;gap:4px;border-bottom:1px solid #243044;margin:0 -16px;padding:0 16px">
+        <button type="button" style="border:0;border-bottom:2px solid #35d0d0;background:transparent;color:#35d0d0;font:600 13px Inter,sans-serif;height:38px;padding:0 12px">Blind A/B</button>
+        <button type="button" style="border:0;border-bottom:2px solid transparent;background:transparent;color:#b3bfd2;font:500 13px Inter,sans-serif;height:38px;padding:0 12px">Localization test</button>
+        <button type="button" style="border:0;border-bottom:2px solid transparent;background:transparent;color:#b3bfd2;font:500 13px Inter,sans-serif;height:38px;padding:0 12px">Test sources</button>
+        <span style="margin-left:auto;align-self:center;font-size:12px;color:#b3bfd2">Status: idle</span>
+      </div>
+      <div style="flex:1;display:flex;align-items:center;gap:22px">
+        <div style="display:flex;align-items:center;gap:8px;font-size:13px">
+          <span style="display:flex;align-items:center;gap:8px;color:#06222a;background:#35d0d0;border-radius:999px;padding:6px 14px;font-weight:700"><span style="width:18px;height:18px;border-radius:50%;background:#06222a;color:#35d0d0;font-size:11px;display:flex;align-items:center;justify-content:center">1</span>Shuffle</span>
+          <span style="color:#b3bfd2">›</span>
+          <span style="color:#b3bfd2;border:1px solid #2a3547;border-radius:999px;padding:5px 13px">2 Compare</span>
+          <span style="color:#b3bfd2">›</span>
+          <span style="color:#b3bfd2;border:1px solid #2a3547;border-radius:999px;padding:5px 13px">3 Prefer</span>
+          <span style="color:#b3bfd2">›</span>
+          <span style="color:#b3bfd2;border:1px solid #2a3547;border-radius:999px;padding:5px 13px">4 Reveal</span>
+        </div>
+        <div style="margin-left:auto;display:flex;align-items:center;gap:10px">
+          <div style="display:flex;background:#0d1117;border:1px solid #2a3547;border-radius:10px;padding:3px;gap:3px"><button type="button" style="width:76px;height:44px;border:0;border-radius:8px;background:#1b2432;color:#e6edf6;font:700 16px Inter,sans-serif">A</button><button type="button" style="width:76px;height:44px;border:0;border-radius:8px;background:transparent;color:#d6deea;font:700 16px Inter,sans-serif">B</button></div>
+          <button type="button" style="height:44px;padding:0 20px;border-radius:10px;border:0;background:#35d0d0;color:#06222a;font:700 14px Inter,sans-serif">Shuffle and start</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":820}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const heights = [0,1,1,2,4,9,18,34,56,70,48,24,10,4,2,1,0,0,0,0];
+    const bins = heights.map((h, i) => ({
+      style: 'flex:1;height:' + Math.max(h, 1) + '%;border-radius:2px 2px 0 0;background:' + (i >= 8 && i <= 10 ? '#35d0d0' : '#2b6f78')
+    }));
+    const health = [
+      { label: 'Tracker rate', value: '21 Hz (cam 30)', dot: '#ffb340' },
+      { label: 'Detect time', value: '13 ms', dot: '#4cd98a' },
+      { label: 'Backend', value: 'rust', dot: '#4cd98a' },
+      { label: 'Rendering', value: 'timealign 10°', dot: '#4cd98a' },
+      { label: 'Cushion', value: '40 ms · shared', dot: '#5b6678' },
+      { label: 'HRIR', value: 'mine · DTF · HP EQ', dot: '#5b6678' }
+    ];
+    return { bins, health };
+  }
+}
+</script>
+</body>
+</html>
