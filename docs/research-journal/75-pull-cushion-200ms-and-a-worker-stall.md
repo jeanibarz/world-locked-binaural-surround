@@ -71,7 +71,8 @@ latency of a deeper cushion is largely compensated during motion — which is wh
   `±` stepper ceiling was raised (120 → 260 ms) so it can represent the new default without clamping it
   down into underrun. The owner's host `run_pull.cmd` should drop its baked `--latency-ms 20` (to inherit
   200) or set it to 200.
-- **Follow-up (opened):** investigate the ~150 ms render-worker stall — confirm the 9P-share hypothesis
+- **Follow-up (opened, [#109](https://github.com/jeanibarz/binaural-headtracker/issues/109)):**
+  investigate the ~150 ms render-worker stall — confirm the 9P-share hypothesis
   (e.g. stage the checkout on the host's local disk vs. run over UNC and compare the minimum clean
   cushion) so the pull path's cushion can come back down toward the VoiceMeeter path's ~60 ms.
 - PR #108's acceptance gate (clean world-locked sine, no `err 5`, no beeps) is **met** at the 200 ms
