@@ -67,3 +67,39 @@ The mechanism question is **settled** (ring bridge, per MS + OpenAudioCable). Th
 narrowed to a single, testable blocker — **why `audiodg` won't render into our endpoint's DMA** —
 with a clear isolation plan (stock-SYSVAD-+-ring control, default-device check, working-baseline
 install, pyaudiowpatch loopback test). That is the focused next session.
+
+## Update — the blocker is the VM audio harness, not the driver or the mechanism
+
+Isolated it further with the stock `SaveData` WAV (same bytes the ring uses), no rebuild:
+
+- Playing 500 Hz produced a fresh `STREAM_HOST_86.wav` (8ch, 6.3 s = the playback duration): so
+  `audiodg` **does** open and run a **host** render stream and `ReadBytes` fires — the render path is
+  alive. But the WAV is **all-zero (silent)**.
+- Matrix test — **every** SYSVAD output endpoint × {DirectSound, WASAPI} × {2ch, 8ch} → **silent DMA**
+  (the few WASAPI opens that failed are the known `usbTerminalGUID` PortAudio bug; all that opened
+  rendered silence). Meanwhile the playback callback pumps (~700 periods/7 s in earlier runs).
+
+So the stream runs and the client delivers samples, yet the device DMA is uniformly silent across
+**all** endpoints and APIs. That is not our driver (it would be endpoint-specific) and not the ring
+(the DMA is zero before the ring). It is the **VM audio harness**: the SYSVAD endpoints are almost
+certainly **muted / at zero volume** in this cloned VM (so `audiodg` zeroes the mix before the device
+DMA), or `audiodg`-in-a-VM renders silence for these virtual endpoints. **The VM cannot produce real
+audio into the device**, which retroactively explains why *every* data-plane probe (pull, non-pull,
+Plane T whole-DMA scan, ring) read zero — there was never real audio in the buffer to read, because
+nothing non-silent ever reached it in the VM.
+
+**Implication:** the ring bridge is validated as far as the VM allows — it builds, installs, loads
+(device OK, no bugcheck), and the render/capture plumbing runs. The one thing the VM can't give is a
+**non-silent render DMA**. True validation needs a setup where real audio actually reaches the device:
+1. **The host.** The owner's host DOES have real audio (Spotify et al. render a real mix into the
+   device). Installing the ring-bridge driver on the host and playing real audio is the decisive test
+   — but it is a host driver swap (journal-70 idle-first rule; replaces the working SYSVAD) and needs
+   the owner's audio/ears, so it is gated on explicit owner go-ahead.
+2. **Fix the VM endpoint volume/mute** (set the SYSVAD render endpoints to 100%/unmuted via the Core
+   Audio `IAudioEndpointVolume` API or a tool) and re-run the matrix; if a WAV then carries 500 Hz,
+   the ring bridge is proven in the VM with zero host risk.
+3. **Known-working baseline** (install OpenAudioCable or stock SYSVAD in the VM): if *its* DMA is also
+   silent, it confirms the VM harness, not any driver, is the blocker.
+
+Recommended order: **(2) fix VM volume** (cheap, zero host risk) → if it works, the ring is proven and
+only then consider **(1) the host install** for the real end-to-end + listen test.
