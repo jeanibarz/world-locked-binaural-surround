@@ -1,190 +1,257 @@
-# RFC: Crash-safe settings persistence (save / load / reset, BIOS-style fail-safe recovery)
+# RFC: Safe settings — persistence + apply-time validation (not crash recovery)
 
-**Status:** Draft
+**Status:** Draft (v2 — restructured after a 5-critic panel + a consensus attack falsified v1's premise
+from the source code)
 **Date:** 2026-10-24
 **Author:** Jean Ibarz (with Claude)
+
+> **v2 note (post-review).** v1 proposed a BIOS-style three-tier config (DEFAULTS / known_good /
+> pending) with a crash marker and a fail-count escalation ladder, on the premise that **a bad setting
+> manifests as a process crash**, detectable at the next startup. A 5-critic panel shredded the state
+> machine (the launcher doesn't auto-relaunch on a crash; `promote` cleared the marker so
+> post-promotion faults were invisible; `pending` was never loaded at startup; auto-revert re-poisoned
+> known_good; a crash usually means a *device vanished*, not a bad setting). Then a **consensus attack
+> read the engine source and falsified the premise itself**: for almost every risky setting, a bad
+> value does **not** crash the process — it is caught in-process, self-heals, degrades-but-stays-alive,
+> or exits cleanly with a message. So "detect the crash and recover at next boot" was solving a problem
+> that mostly doesn't exist, while being **structurally blind** to the one that does (a live setting
+> that degrades without crashing, e.g. a too-small block size → permanent xrun storm, where the process
+> never exits so a startup-marker never fires). Worse, v1's fix (add a crash-relaunch loop to
+> `run.cmd`) would have *created* a crash-loop hazard that doesn't exist today (exit-1 → `pause` can't
+> loop). **v2 reframes around apply-time validation + prevention**: make it structurally impossible for
+> a setting to take down the app, so there is nothing to "recover" from. Persistence then becomes a
+> simple atomic save/load. The full review is logged at the end.
 
 ---
 
 ## Problem
 
-The cockpit now exposes live settings — camera (device / resolution / fps), engine (method,
-backend), audio output (block size, cushion, exclusive device), HRIR filter + compensation,
-headphone EQ. Today they are ephemeral: set from launch flags, tweakable live, but **not saved**.
-The owner wants **save / load / reset-to-defaults**.
+The cockpit exposes live settings — camera (device / resolution / fps), engine (method, backend),
+audio output (block size, cushion, exclusive device), HRIR filter + compensation, headphone EQ. They
+are ephemeral today (launch flags; tweakable live; not saved). The owner wants **save / load /
+reset-to-defaults**, and — the real requirement — **a saved setting must never be able to render the
+app unusable** such that recovery requires knowing a config file exists and deleting it.
 
-But the real requirement is stronger and is the crux of this RFC: **a bad saved setting must never
-be able to brick the app.** Several settings can crash or hang the engine on apply or on the next
-launch — e.g. WASAPI **exclusive device** that the hardware refuses, a **block size** that overloads
-the render worker into a permanent xrun storm, a **GPU backend** that faults, a camera format the
-driver can't deliver. If such a setting is persisted and reloaded on startup, the app enters a
-**crash loop**, and the only escape today would be for the user to know the settings file exists,
-find it, and delete it. That is unacceptable.
+**What is the actual failure surface?** v1 assumed "bad setting ⇒ process crash ⇒ recover next boot."
+Reading `apps/voicemeeter_passthrough.py` and `host/run.cmd`, that is false for nearly every setting:
 
-This is exactly the problem a **PC BIOS** solves: persistent configuration **plus** a guarantee that
-no configuration a user enters can permanently prevent the machine from booting — via **fail-safe
-defaults**, a **boot-failure counter**, and **last-known-good** fallback. The same shape appears in
-**display mode-setting** ("keep these settings? reverting in 15 s") where the *inability to confirm*
-is the signal to revert ([game display-settings PR with 15 s auto-rollback + atomic versioned
-writes](https://github.com/12Mosch/factory/pull/290); [Windows custom-resolution Test
-countdown](https://us.ktcplay.com/blogs/support-tips/safe-mode-fix-monitor-unsupported-resolution)),
-and in network gear ([FortiGate config-confirmation revert
-timeout](https://infosecmonkey.com/configuration-confirmation-on-fortigate/)). BIOS vendors reportedly
-revert after a few failed boots into a stripped-down safe config
-([overview](https://www.artificialignorance.net/2026/08/system-posted-in-safe-mode.html)); Windows
-has the OS-level [Last Known Good
-Configuration](https://www.diskinternals.com/partition-recovery/last-known-good-configuration-on-windows10/).
+| Setting | What a bad value actually does | Source |
+|---|---|---|
+| backend (rust/gpu) | **Caught in-process**, falls back to CPU | `build_main_renderer` try/except (≈ lines 291, 302) |
+| block size | **Applies live, no restart**; too-small = missed deadlines = **xrun storm, process stays alive** | `_set_block` (≈ 864–876); callbacks swallow `BaseException` (≈ 587, 656) |
+| camera device / resolution / fps | OpenCV **clamps** to a supported mode; a dead read triggers release+reopen — **self-healing** | `apply_camera_settings`; camera-lost reopen (≈ 1120–1125, 1254–1261) |
+| exclusive device / loopback / HRIR / event handle | **`raise SystemExit(msg)` at init → exit 1**, a clean, catchable, synchronous failure with a message | ≈ lines 441, 447, 510 |
+| (any of the above) at runtime | render/output callbacks **catch `BaseException`** → "never crash the app" | ≈ 587, 656 |
+
+`host/run.cmd` loops **only** on exit code 97 (a user-pressed Reload); every other exit falls to
+`pause` with **no relaunch**. So the *current* behaviour on a bad init setting — exit 1, pause — is
+already safe (it cannot crash-loop; nothing relaunches it).
+
+Two true failure classes remain, and neither is a process crash:
+- **C-LIVE (degrade-but-alive):** a live setting that makes the running app bad without exiting — the
+  canonical case is a too-small block size → permanent xrun storm. v1's crash-marker is blind to this
+  (no exit ⇒ no marker ⇒ no revert; the user is stuck until they manually kill the app).
+- **C-INIT (clean fatal at startup):** a persisted setting that fails `SystemExit` on the next launch
+  (e.g. the exclusive device is now busy, the SOFA path is gone) → exit 1 → `pause`. Catchable and
+  synchronous, but today it *does* drop the user at a dead console with no automatic fallback.
+
+The only genuinely-uncatchable residual is **C-NATIVE**: a native driver **hang** on, e.g., WASAPI
+exclusive open or a wedged device (the code itself flags driver bugchecks as the real danger, ≈ line
+488). That is a tiny, specific surface — the one place isolation (a subprocess probe) earns its keep.
 
 ## Goals
 
-- **G1** — Persist settings; **load** them on startup; **reset to built-in defaults** from inside
-  the app (one click), never by editing/deleting a file.
-- **G2 — Secure by design: the app can never be bricked by its own settings.** Worst case it starts
-  on built-in defaults. No file knowledge is ever required to recover.
-- **G3** — A setting that crashes the app on apply or startup is **auto-quarantined** after a single
-  failed run; recovery is automatic (the user does nothing).
-- **G4** — **Crash loops are bounded:** repeated failures escalate the fallback (pending → last-known
-  -good → built-in defaults) so the app is always usable within a small, fixed number of restarts.
-- **G5** — Persistence is **atomic and corruption-resistant**; a crash mid-write or a mangled file
-  never wedges startup.
+- **G1** — Persist settings; load on startup; **reset to built-in defaults** from inside the app
+  (one click), never by editing/deleting a file.
+- **G2 — The app can never be made unusable by its own settings**, achieved **by construction**: no
+  setting-apply path and no settings-load path may be able to take the main process down or leave it
+  wedged. Worst case, a bad persisted value is ignored and the app runs on the default for that key.
+- **G3** — A setting that would fault is caught **at apply time** (or at load), rejected with a clear
+  message, and the previous value kept — **before** it affects the running app, not after a crash.
+- **G4** — No new crash-loop / relaunch machinery is introduced. The launcher's current
+  exit-1 → `pause` (no relaunch) stays; we do **not** add an auto-relaunch loop.
 
 ## Non-goals
 
-- Multiple named presets / profiles (future; this RFC is the single active config + its safety net).
-- Cloud sync or sharing config between machines.
-- Recovering from **code** bugs unrelated to settings. If the built-in defaults crash, that is a bug
-  to surface loudly, not a config to recover from (the safety net bottoms out at defaults and stops).
+- Named presets / profiles (future).
+- Cloud sync.
+- Surviving a true kernel bugcheck (a userspace design can't; the subprocess probe reduces the chance
+  of *triggering* one, nothing more).
+- A general crash-recovery framework. We are deliberately **not** building one — see Alternatives.
 
-## Design — three config tiers + a commit-on-stability protocol
+## Design
 
-Model the BIOS directly. **Three tiers**, in increasing trustworthiness:
+Three layers, in priority order. The first two deliver G2/G3 by construction; the third is a minimal
+honest backstop for the narrow residual.
 
-1. **DEFAULTS** — built into the code (today's launch defaults). Immutable, always available, cannot
-   be "bad". The ultimate fallback = BIOS *Load Fail-Safe Defaults*.
-2. **`known_good`** — the last config **proven to run stably**. Persisted at
-   `cockpit_config/known_good.json`. = BIOS *last-known-good*.
-3. **`pending`** — a config **being tried**, not yet proven. Persisted at
-   `cockpit_config/pending.json`, guarded by a **`boot_state`** marker holding `{trying: bool,
-   applied_at, fail_count, safe_mode}`.
+### A. Apply-time validation + prevention (the primary mechanism)
 
-### The state machine (crash = the revert trigger)
+Classify each setting key once, in a **key-descriptor table** (owned by the config schema), by how a
+bad value fails — `catchable` / `live-reversible` / `native-probe` — and route apply accordingly:
 
-**On startup** (`ConfigStore.on_startup() -> effective_config`):
-1. Read `boot_state`.
-2. **If `trying` is still set from the previous run** — the app applied `pending` and never reached
-   "stable" before it exited ⇒ `pending` is **suspect**. `fail_count += 1` and:
-   - `fail_count == 1` → load **`known_good`** (revert the suspect change). *One bad setting, reverted.*
-   - `fail_count >= 2` → **`known_good` itself is implicated** → load **DEFAULTS**, set `safe_mode`
-     (the UI shows a "started in safe mode — your settings were reset to defaults after repeated
-     failures" banner). *Crash loop stopped.*
-3. **If `trying` is clear** (last run exited cleanly) → load **`known_good`** (or DEFAULTS if none).
-4. **Write `trying = true` + the chosen config + `applied_at` to `boot_state` BEFORE applying it**, so
-   a crash *during* apply/startup is caught on the next launch.
+- **`catchable`** (backend, HRIR, comp, exclusive-open, output/loopback selection): wrap the apply in
+  `try/except`. On failure, **keep the current value**, do not mutate live state, and toast the reason
+  (the existing `backend_switch_note` / toast machinery). Crucially, **make engine *init* resilient
+  too**: the `SystemExit(msg)` paths (exclusive device busy, missing SOFA, loopback mismatch) become
+  *catch → fall back to the default for that key → toast*, instead of killing the process. This alone
+  converts the entire C-INIT class into a non-event (G2 for startup).
+- **`live-reversible`** (block size, cushion, method): these already apply live and are reversible in
+  process. Apply, then **watch health for a short window** (reuse the existing xrun/fifo/`cb_error`
+  signals): if the live change degrades the running app (sustained xrun storm, starved fifo) beyond a
+  threshold within the window, **auto-revert to the previous value in-process** and toast — no exit,
+  no restart. This is the ONLY correct way to catch C-LIVE (block-size xrun storm), which the v1
+  crash-marker could never see.
+- **`native-probe`** (WASAPI exclusive open, a camera format that can hang a driver): before committing
+  the value, **open it in a short-lived child process**; adopt the setting only if the child reports
+  success within a timeout. If the child hangs or dies, the parent **never adopts** the value and the
+  main process is never put at risk. This isolates the C-NATIVE residual without any persistent
+  machinery. (A true kernel bugcheck is out of scope; the probe only contains userspace hangs.)
 
-**At runtime:**
-- **A settings change** updates `pending`, persists it (atomic), and **resets the stability timer**
-  (the config is "unproven" again). `trying` stays set.
-- **Promotion** (`mark_stable`): once the app has run **stably for `T` seconds** (default 10 s) since
-  the last change — audio flowing, no fatal error, no sustained xrun storm — **promote `pending` →
-  `known_good`** (atomic), **clear `trying`**, reset `fail_count`. This is "boot succeeded ⇒ commit
-  last-known-good". After this, the current settings are safe even across a later hard crash.
-- The user may also **Save** explicitly (immediate promotion) and **Reset to defaults** (load
-  DEFAULTS, persist as the new `pending`, let it promote). Auto-promotion means **Save is rarely
-  needed** — the user just tweaks and it sticks once it's proven.
+Because every apply path is now catch / revert / probe, **a setting can't take the app down**, so
+there is nothing to recover from — the hard problems v1 fought (stability definition across process
+boundaries, escalation ladders, device-gone-vs-config-faulted, re-poisoning known_good) **do not
+arise**.
 
-**On clean shutdown / reload** (`mark_clean_exit`): clear `trying`. Crucially, the launcher's
-**exit-97 Reload is a clean exit** — clear `trying` before returning 97 so a reload is never counted
-as a crash.
+### B. Persistence (save / load / reset) — simple and atomic
 
-### Why this is secure by design (maps to the goals)
+- **One file**, `cockpit_config/settings.json`, holding only the **user-tweakable** keys (NOT host
+  identity: model/SOFA/BRIR/source paths and device *names* come from the launch profile / `run.cmd`
+  flags and are not persisted here — see precedence below). Schema-less beyond a flat key→value map.
+- **Write** atomically: `*.tmp`, `f.flush()`, `os.fsync()`, `os.replace()` (durable against power loss,
+  not just process crash). Writes happen on an explicit **Save** and/or a debounced auto-save after a
+  change settles (TBD; see open questions) — but persistence is decoupled from any "proof" ceremony.
+- **Load on startup**, then **validate each key through the same key-descriptor table** used at apply
+  time: an invalid / unsupported / now-failing value is dropped and the **default for that key** is
+  used (per-key fallback, with a toast listing what was dropped). A corrupt/unparseable file ⇒ treated
+  as absent ⇒ all defaults. This is exactly layer A applied at load time, so loading is as safe as
+  applying.
+- **Reset to defaults** = overwrite `settings.json` with DEFAULTS (atomic) + re-apply. **Scope is
+  explicit** in the UI: it resets audio/camera/engine/HRIR settings and does **not** touch the
+  head-tracking **calibration** (which is separate state) — the button/confirmation says so.
 
-- **G2/G3** — a setting that crashes on apply/startup leaves `trying` set ⇒ next launch reverts it
-  with zero user action.
-- **G4** — the fallback **strictly escalates** (pending → known_good → DEFAULTS) and DEFAULTS are
-  in-code and cannot be bad, so the app is usable within **≤ 2 restarts**, always. The launcher's
-  auto-relaunch (exit 97) becomes the recovery mechanism instead of a crash-loop amplifier.
-- **G1** — reset is an in-app button; recovery is automatic. A `--safe` launch flag / `COCKPIT_SAFE=1`
-  env var forces DEFAULTS as a deliberate escape hatch (the "hold a key at boot" equivalent), for the
-  rare case the user wants to force-reset without reaching the UI.
+**Config precedence** (resolves the boundary critic's finding): `DEFAULTS (in code)` < `launch profile
+(run.cmd flags: host assets + device names)` < `settings.json (user-tweakable keys)` < `--safe`. The
+launch profile supplies host identity; `settings.json` supplies only the user knobs; `--safe` /
+`COCKPIT_SAFE=1` forces DEFAULTS for the user knobs (keeping host identity) as a deliberate escape
+hatch that needs no file knowledge.
 
-### Crash detection mechanics
+### C. Minimal last-resort backstop (honest about the residual)
 
-- **"Crash" ≡ the `trying` marker is still present at the next startup.** This catches hard crashes,
-  **hangs** (the user force-kills), power loss, and a kill during apply — everything that matters,
-  without needing signal handlers to be reliable.
-- Distinguish **"crashed within the stability window"** (suspect the pending change) from **"ran fine,
-  then exited"** (clean, `trying` already cleared). The stability window uses a **monotonic** clock,
-  not wall-clock, so clock skew can't mis-promote.
-- A setting that is fine on apply but faults **later** (after promotion) → it is now in `known_good`,
-  so the next startup escalates known_good → DEFAULTS (one extra restart). `T` trades confidence
-  before promotion against how long good settings take to stick; 10 s covers apply-time + first-audio
-  faults, which is where almost all setting-induced crashes land.
+Layers A+B make bricking essentially impossible, but to be safe-by-construction against **any**
+uncatchable startup fault we didn't foresee, keep **one** tiny mechanism:
 
-### Atomic + corruption-resistant persistence (G5)
-
-- Every write is **`*.tmp` + `os.replace`** (atomic rename) — a crash mid-write never corrupts a tier.
-- Each file carries a schema **`version`** and is **validated on load**; unparseable or invalid ⇒
-  treated as **absent** ⇒ fall through to the next tier. Unknown keys are ignored (forward-compat);
-  missing keys fall back **per-key** to DEFAULTS (so adding a setting later doesn't invalidate a saved
-  config).
-- `known_good` and `pending` are **separate files** so a bad `pending` can never overwrite the proven
-  `known_good`.
-
-### Optional affordance for known-risky settings
-
-For a setting that is *expected* to sometimes fail hard (exclusive device), show a transient toast
-on apply — "trying exclusive output… will revert automatically if it fails" — so the auto-revert is
-*explained* rather than surprising. This is the display-resolution UX, but the **crash itself is the
-revert trigger**, so no blocking "Keep/Revert?" modal is needed (you can't answer a modal if the
-setting already froze the app).
+- A **`starting` marker** written (fsync) immediately before the risky part of init and cleared as
+  soon as the cockpit server is serving. If, at the next startup, the marker is **still set**, the last
+  start never reached a usable UI ⇒ **start with DEFAULTS for the user knobs this once** and surface a
+  one-line "started with default settings after the previous start didn't complete" banner. This
+  bottoms out at DEFAULTS in **one** step; it never escalates, never relaunches, never deletes the
+  user's `settings.json` (it's renamed to `settings.bad.json` so the values are recoverable).
+- **Marker semantics are fail-safe**: an unreadable/corrupt marker is treated as "still set" (suspect),
+  not clean. The clear happens on reaching the serving state, **not** from a `finally`/`atexit`/signal
+  handler (which would mask a real failure). A single-instance **lock file** in `cockpit_config/`
+  prevents a second launch from racing the marker.
+- **Honest launcher note:** because `run.cmd` does not relaunch non-97 exits, this backstop takes
+  effect on the user's **next launch**, not automatically mid-session. We do **not** add a relaunch
+  loop (G4). In practice layer A makes this backstop almost never fire, since init is resilient.
 
 ## Files to change
 
-- **`config_store.py`** (new): `ConfigStore` owning the three tiers + the marker. API:
-  `on_startup() -> dict`, `save_pending(cfg)`, `promote()`, `reset_to_defaults()`,
-  `mark_stable()`, `mark_clean_exit()`, plus atomic read/write + per-key validation against a
-  `DEFAULTS` schema.
-- **`voicemeeter_passthrough.py`**: on startup, derive the effective config via `ConfigStore` (instead
-  of raw flags); route each settings-hook change through `save_pending`; a **stability timer** in the
-  capture loop calls `mark_stable` after `T` s of no change + healthy audio; clean exit / exit-97 call
-  `mark_clean_exit`.
-- **Web API (`cockpit_web.py`)**: wire `settings_apply` → `promote`; `reset_defaults` →
-  `reset_to_defaults` + reload; broadcast a `safe_mode` banner when set. (`save`/`reset` already exist
-  as inert dispatch names — this gives them behavior.)
-- **Settings dialog**: "Apply" = save/promote now, "Reset to defaults" works, optional "running in
-  safe mode" banner.
-- Config dir: `cockpit_config/` next to the host assets (discoverable, not buried).
+- **`config_store.py`** (new, small): atomic `load()/save()/reset()`; the **key-descriptor table**
+  (key → default, type/range validator, failure-class `catchable|live-reversible|native-probe`);
+  per-key validation. Pure, unit-testable, no engine/audio dependency.
+- **`probe.py`** (new, tiny): `probe_native(key, value) -> ok` running the open in a child process.
+- **`voicemeeter_passthrough.py`**: make init resilient (catch the `SystemExit` config-failure paths →
+  per-key fallback + toast instead of exit); route each settings hook through the descriptor table
+  (catch / live-watch-revert / probe); write/clear the `starting` marker; resolve effective config via
+  `ConfigStore` + precedence.
+- **Web/UI**: Save, Reset-to-defaults (scoped), the two banners (per-key-dropped on load; default-fallback
+  backstop). Settings changes call **engine commands**, not the store directly.
 
 ## Edge cases
 
-- **First run** (no files): DEFAULTS; write `known_good` after the first stable window.
-- **Corrupt `known_good`**: fall to DEFAULTS (and overwrite once stable).
-- **Hang (not crash)**: user force-kills → `trying` still set → treated as a failed boot. ✓
-- **Exit-97 reload**: clear `trying` first → not a failure. ✓ (Load-bearing: miss this and every
-  reload looks like a crash and resets the user's settings.)
-- **Power loss during the stability window**: counted as one failure → revert to known_good. Mildly
-  annoying (loses an unproven tweak), never unsafe.
-- **Two instances**: single-instance assumption; lock the config dir, or last-writer-wins on promote.
-- **A setting that only crashes intermittently**: may promote then crash later → escalates on the
-  next boot. Bounded, still recovers; documented as the known residual.
+- **Too-small block → xrun storm**: caught by the `live-reversible` health-watch auto-revert (A). ✓ The
+  case v1 was blind to.
+- **Exclusive device now busy on next launch**: resilient init catches the `SystemExit` → falls back to
+  shared for that key + toast; app starts normally. ✓
+- **Missing SOFA / renamed HRIR path**: per-key validation at load drops it → default HRIR + toast. ✓
+- **Device unplugged at startup** (the socratic/failure-mode misattribution): a `catchable` open failure
+  ⇒ fall back + toast; it does **not** wipe `settings.json` (no crash-attribution logic exists to
+  misfire). ✓
+- **Native hang on exclusive open**: the subprocess probe times out → value not adopted. Kernel
+  bugcheck: out of scope (documented). 
+- **Corrupt settings.json / marker**: settings.json → absent → defaults; marker → suspect → defaults
+  this once. ✓
+- **Two instances**: lock file; second instance refuses rather than racing. ✓
+- **Power loss mid-write**: fsync + atomic rename → either old or new file, never garbage. ✓
 
 ## Alternatives considered
 
-1. **Plain settings file + "delete it to reset."** The exact failure mode the owner wants gone.
-   Rejected.
-2. **Modal "Keep / Revert?" dialog as the primary mechanism** (display-resolution style). Rejected as
-   primary: a setting that freezes the app also freezes the dialog, so no one can answer it. Kept only
-   as an *optional explanatory toast* for known-risky settings.
-3. **Dual full copies ("Dual BIOS").** Our three-tier scheme is the generalization: DEFAULTS live in
-   code, so we need only two persisted files (`known_good`, `pending`) instead of two full backups.
-4. **Trust a clean SIGTERM/atexit handler to mark success.** Rejected as the sole signal: hard
-   crashes and hangs skip handlers. "Marker still set at next startup = failure" is robust to both.
+1. **v1's three-tier crash-recovery state machine (DEFAULTS / known_good / pending + marker +
+   fail_count escalation).** Rejected: the consensus attack showed it solves a problem that mostly
+   doesn't exist (settings don't crash the process; they're caught/self-heal/exit-cleanly) while being
+   **blind to the one that does** (live degrade-but-alive). It also required a launcher crash-relaunch
+   loop that would *introduce* the crash-loop hazard it set out to bound. Its only sound parts (atomic
+   writes, fsync, single-instance, per-key validation, "reset doesn't touch calibration", host-profile
+   vs user-settings precedence) are kept here in a far smaller form.
+2. **Modal "Keep / Revert?" dialog (display-resolution style).** Rejected as primary: a live-degrade
+   doesn't block the UI, and a native hang can't answer a dialog. The `live-reversible` health-watch is
+   the non-modal equivalent; a toast explains risky applies.
+3. **No persistence, flags only (status quo).** Fails G1.
+4. **Validate only, no probe, no live-watch.** Fails C-LIVE (block xrun) and C-NATIVE (exclusive hang).
 
 ## Open questions
 
-- `T` (stability window) and `N` (fail_count → defaults): proposed 10 s and 2. Tune against how fast
-  real setting-induced faults surface (mostly < 2 s at apply / first audio).
-- Should per-setting "risk" be modeled (e.g. only exclusive-device gets the explanatory toast), or
-  treat all changes uniformly? Start uniform; add risk tags if needed.
-- Where exactly to detect "healthy audio" for `mark_stable` (no fatal callback error + fifo not
-  permanently starved) — reuse the existing xrun/health signals.
+- Health-watch window + thresholds for `live-reversible` auto-revert — reuse the exact xrun/fifo/
+  `cb_error` signals already in the loop; pick a window (a few seconds) and an xrun-rate threshold.
+- Auto-save vs explicit Save (debounce interval), and whether a live change persists immediately or
+  only after the health-watch window passes (lean: persist after it passes, so a reverted change isn't
+  saved).
+- Exact key-descriptor failure-class for each setting (draft table above; confirm `camera format`
+  really needs `native-probe` or is fully covered by OpenCV clamping — if clamping always succeeds, it
+  drops to `catchable`, shrinking the probe surface further).
+
+---
+
+## Critic feedback incorporated
+
+Round 1 — 5 critics (panel N=5, within cap): `failure-mode-analyst`, `boundary-critic`,
+`design-minimalist`, `socratic-challenger`, `state-machine-verifier`. **Converged after round 1: the
+consensus attack falsified v1's core premise from the source**, so the correct response was to
+restructure, not iterate (per the workflow).
+
+- **Launcher premise false** (failure-mode, verified in source; boundary; state-machine): `run.cmd`
+  relaunches only on exit 97; config faults exit 1 → `pause`. → v1's "automatic recovery via
+  auto-relaunch" deleted; v2 adds **no** relaunch loop (G4).
+- **`promote` cleared the marker → post-promotion faults invisible → unbounded** (state-machine C1):
+  dissolved — v2 has no promote/marker-at-startup recovery machine.
+- **Apply/Save promoted unproven configs; `pending` never loaded; auto-revert re-poisoned known_good**
+  (state-machine C2/C3, failure-mode P0-3/P0-4, boundary): dissolved by dropping the tier machine.
+- **"Crash" usually means a *device vanished*, not a bad setting** (socratic Q1, failure-mode P0-2):
+  v2 never attributes a fault to the config; device-open failures fall back per-key + toast and leave
+  `settings.json` intact.
+- **"Stable" must mean "audio actually rendered", and must cover camera** (socratic Q3/Q4,
+  state-machine m6): folded into the `live-reversible` health-watch; camera handled by clamping/probe
+  rather than an audio-only stability gate.
+- **Over-built machinery; cut persisted `pending`, the fail_count ladder, version/applied_at/safe_mode
+  record, two-instance note-as-assumption** (design-minimalist): adopted — v2 is one `settings.json` +
+  one `starting` marker + a descriptor table.
+- **Config precedence (host-profile vs user settings); reset scope (not calibration); fsync;
+  single-instance lock; banner on the common revert** (boundary, socratic Q2/Q10, state-machine
+  C5/P1-6): all incorporated.
+- **Quarantine oversold (no memory of the bad value)** (socratic Q7): dissolved — v2 *prevents* the bad
+  value from applying, so it can't loop; a rejected value is simply not adopted and is toasted.
+
+_Invocation-log entries:_
+- `design-experimenter` (post-round-1 empirical check): **satisfied by the consensus attack**, which
+  read `voicemeeter_passthrough.py` + `host/run.cmd` and classified each setting's actual failure mode
+  against source — the load-bearing empirical claim ("bad setting ⇒ crash") was falsified there, so no
+  separate probe was needed.
+- `general-purpose 2026-10-24: consensus-attack — shared blind spot found` (did NOT survive). The whole
+  panel inherited from the BIOS analogy the premise that a bad setting crashes the process and must be
+  recovered at next boot. The source shows otherwise (backend→CPU fallback; live block→xrun-not-crash;
+  camera clamps/self-heals; init faults exit cleanly; callbacks swallow BaseException). The converged
+  "add a crash-relaunch loop" fix would have manufactured the crash-loop hazard the RFC exists to
+  prevent. → **Incorporated (one revision):** v2 reframes to **apply-time validation + prevention**
+  (catch / live-watch-revert / subprocess-probe) with simple atomic persistence and a one-step DEFAULTS
+  backstop; the three-tier crash-recovery machine is moved to rejected-alternative #1. Triaged once; no
+  further rounds (the attack is a final input, not a gate).
