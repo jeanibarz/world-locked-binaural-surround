@@ -202,15 +202,35 @@
   window.cockpit = { applyState, setCameraFrame, toast };
 
   function connect() {
+    // Close the window when the backend is gone: if the SSE stays down past the grace window the
+    // engine was killed (e.g. single-instance replace), so this stale UI should not linger. A
+    // transient drop reconnects within the grace and is ignored. Chrome may block window.close()
+    // for some windows, so fall back to a clean "engine stopped" message.
+    let gone = null;
+    const alive = () => { if (gone) { clearTimeout(gone); gone = null; } };
+    const lost = () => {
+      if (gone) return;
+      gone = setTimeout(() => {
+        try { window.close(); } catch (_) { /* blocked */ }
+        try {
+          document.body.innerHTML =
+            '<div style="color:#b3bfd2;font:600 15px Inter,system-ui,sans-serif;background:#0d1117;' +
+            'height:100vh;display:flex;align-items:center;justify-content:center">' +
+            'Engine stopped — you can close this window.</div>';
+        } catch (_) { /* ignore */ }
+      }, 3000);
+    };
     try {
       const es = new EventSource("/events");
+      es.onopen = alive;
       es.onmessage = (e) => {
+        alive();
         let m; try { m = JSON.parse(e.data); } catch (_) { return; }
         if (m.type === "state") applyState(m.state);
         else if (m.type === "toast") toast(m.message, m.kind);
         else if (m.type === "drawer_status") { const d = $("drawer-status"); if (d) d.textContent = "Status: " + m.text; }
       };
-      es.onerror = () => {};  // EventSource auto-reconnects
+      es.onerror = lost;   // dropped; close if it doesn't recover within the grace
     } catch (_) { /* no live feed */ }
   }
   function startCamera() {
