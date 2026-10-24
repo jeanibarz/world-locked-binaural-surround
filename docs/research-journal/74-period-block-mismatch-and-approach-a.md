@@ -59,6 +59,34 @@ Applied to the cockpit (`apps/voicemeeter_passthrough.py`) as an **opt-in** `--p
 - teardown closes the handle and the streams; it **never** unloads/disables/`devcon`-restarts the driver
   (journal 70: that bugchecks with a stream open).
 
+## The real blocker to `--pull-sysvad`: the driver poisoned the event's DACL (Option B fix)
+
+Approach A fixes the *beeps*, but `--pull-sysvad` still could not start: the consumer's
+`CreateEvent("Global\KookrPullTick")` failed `err 5 (ACCESS_DENIED)`. Root cause: the device-pull driver
+created the named event with `IoCreateSynchronizationEvent`, which **creates** the object (with a
+SYSTEM-only DACL) if it does not yet exist. Whenever any Tablet stream entered RUN before the consumer
+started — e.g. a background app rendering to the Tablet endpoint, or the Windows audio engine keeping it
+warm — the driver won the race and created a SYSTEM-only object, and the consumer (even elevated) could
+no longer open it. Changing the default device didn't help, and the holder could not be reliably hunted
+each launch. Elevation can't fix it; only the driver can stop creating the object.
+
+**Fix (Option B, driver-side, no kernel primitive change):** the consumer always **creates**
+`KookrPullTick` with a permissive (NULL) DACL; the driver only ever **opens** it —
+`ZwOpenEvent(SYNCHRONIZE)` + `ObReferenceObjectByHandle(*ExEventObjectType)`, both exported by the Win10
+19045 kernel and both declared by `wdm.h` (no forward declaration needed; unlike the semaphore, whose
+create/open routines simply aren't exported). The pull thread opens the event lazily and, whenever ticks
+stop for one 100 ms watchdog period, releases its reference and re-opens — so it free-runs when no
+consumer exists and re-locks onto the consumer's *current* event across a restart, never onto a stale one.
+The thread owns the event's lifetime (it holds both an object reference and a handle, and releases both on
+the way out), so teardown is single-writer and race-free. Because the built `.sys` no longer imports
+`IoCreateSynchronizationEvent` at all, the `err 5` failure class is eliminated structurally, not by luck
+of ordering. Patch: `spikes/bpre-vm/make_device_pull.py` (the device-pull patcher).
+
+Host validation (Win10 19045, no reboot): all imports resolve on the live kernel; the driver loads
+`CM_PROB_NONE`; the bound kernel image is the Option B build; and with a Tablet render stream forced
+active *first*, the consumer's `CreateEvent` returns `err 0` (created fresh), never `err 5`. The device
+must be idle (no open stream) before the reinstall unloads the old `.sys` — journal 70's bugcheck rule.
+
 ## Operational notes learned this round
 
 - The `\\wsl.localhost` 9P share is per-interactive-session: it is **not** visible to the OpenSSH service
