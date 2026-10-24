@@ -80,9 +80,15 @@ class AlphaBetaPredictor:
 @dataclass
 class PredictorConfig:
     alpha: float = 0.35
-    beta: float = 0.08
-    max_horizon_ms: float = 120.0   # never extrapolate beyond this, however large the estimate
-    max_rate_dps: float = 400.0     # bound the step at this angular speed × horizon (overshoot)
+    # beta was 0.08: the velocity state then decayed too slowly on a dead stop, so the look-ahead
+    # lingered ~35 deg past the real angle after a fast turn (overshoot). 0.20 corrects velocity
+    # faster so the overshoot settles quickly, at a small cost in jitter sensitivity.
+    beta: float = 0.20
+    # max_horizon_ms was 120: it tracked the full head-move-to-ear latency, which the FIFO cushion
+    # inflates, pinning the horizon at the cap. Peak overshoot ~= turn-speed x horizon, so 80 ms
+    # roughly halves it while still compensating the irreducible camera+device staleness.
+    max_horizon_ms: float = 80.0    # never extrapolate beyond this, however large the estimate
+    max_rate_dps: float = 300.0     # bound the step at this angular speed × horizon (overshoot)
 
 
 class PosePredictor:
