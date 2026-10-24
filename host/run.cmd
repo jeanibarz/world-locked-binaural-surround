@@ -1,7 +1,7 @@
 @echo off
 setlocal
 REM ============================================================================
-REM  binaural-headtracker — THE single host start script.
+REM  world-locked-binaural-surround — THE single host start script.
 REM
 REM  Replaces the old launch_live/cockpit/sweep/passthrough.py + run*.cmd zoo.
 REM  One file, one argument = the mode:
@@ -37,7 +37,7 @@ shift
 goto collect
 :dispatch
 
-set "ROOT=\\wsl.localhost\Ubuntu-22.04\home\jean\git\binaural-headtracker"
+set "ROOT=\\wsl.localhost\Ubuntu-22.04\home\jean\git\world-locked-binaural-surround"
 set "LAUNCH=%ROOT%\apps\launch.py"
 
 REM --- host assets (kept next to this .cmd) + device config -------------------

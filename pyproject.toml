@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "binaural-headtracker"
+name = "world-locked-binaural-surround"
 version = "0.1.0"
 description = "Real-time, head-tracked, world-locked binaural renderer (Python prototype)."
 readme = "README.md"
