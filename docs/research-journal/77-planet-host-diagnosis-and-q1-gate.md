@@ -98,7 +98,40 @@ phase-locked by construction. **First build the Q1 dump (above); only on Q1=YES 
 2. Then implement Plane T, validate in the VM (B1-vm: dump==rendered bit-correct; silence on
    absence; repeated start/stop no bugcheck), and only then the host listen test (owner's ears).
 
-No kernel code committed here — this entry is the groundwork + decision record so the build phase
-starts from evidence, not a wrong premise. The host was left clean (registry overrides reverted,
-device `Status=OK`, probe scripts removed); the passthrough app was stopped during testing and
-should be relaunched with `run_pull.cmd`.
+## Update — Plane T implemented and compiles cleanly into the driver
+
+Proceeded (owner: "full autonomy") into the implementation:
+
+- **`make_plane_t.py`** (idempotent patcher, after `make_device_pull.py`): the render stream's
+  `PullAdvance` copies its just-consumed DMA window into a **user-created shared section**
+  `\BaseNamedObjects\KookrPullData` (Option-B ownership: consumer creates with a permissive DACL;
+  driver only opens). The pull thread maps + `MmProbeAndLockPages` it at PASSIVE, so the per-tick
+  `RtlCopyMemory` runs at DISPATCH on a locked system VA. seqlock + take-and-clear (zero the
+  consumed source → silence on under-run, D3). Applies cleanly against the host build-tree source
+  (anchors confirmed on a pulled copy before touching the tree; `.prePlaneT` backups left).
+- **`planet_consumer.py`**: creates the section + tick event, plays a known 500 Hz into SYSVAD,
+  ticks at the 10 ms period, reads the exported window, FFTs it (500 Hz → Q1=YES + Plane T works;
+  silence → Q1=NO).
+- **Build (EWDK, `apply_win10_compat.ps1`): `MSBUILD EXIT 0`, `TabletAudioSample.sys` built fresh**
+  (sha256 `6D368340…`). The Plane-T kernel C++ **compiles and links** — all **75 ntoskrnl imports
+  resolve on Win10** (the new `Zw*Section`/`Mm*`/section code among them), portcls/hal resolve.
+
+The build's `VERDICT: STILL MISSING -- not loadable` is the **pre-existing Win10 down-level compat**
+item (`lookaside still imported`, `wdfldr INIT/PAGE`; journal 68), orthogonal to Plane T (no
+lookaside in the change) — the loadable Win10 package is produced by `host_port_win10.ps1`, not this
+verify. So the compile milestone is clean; the remaining arc is **Win10 packaging → test-sign →
+install in `kookr-bpre-w10` → run `planet_consumer.py` → FFT (settles Q1 + Plane T) → host listen
+test (owner's ears)**.
+
+State left: host build tree has the Plane-T patch applied + a fresh unsigned `.sys` in the build
+output; the **installed/running driver is untouched** (build only, no install). `.prePlaneT` +
+`.preCompat` backups exist. Host otherwise clean; relaunch `run_pull.cmd` for audio.
+
+(Original groundwork below preserved — the diagnosis that got us here.)
+
+---
+
+No kernel code committed in the original entry — the groundwork + decision record so the build
+phase starts from evidence, not a wrong premise. The host was left clean (registry overrides
+reverted, device `Status=OK`, probe scripts removed); the passthrough app was stopped during testing
+and should be relaunched with `run_pull.cmd`.
