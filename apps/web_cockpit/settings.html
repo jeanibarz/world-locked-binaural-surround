@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Settings</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./style.css">
+<link rel="stylesheet" href="./settings.css">
+</head>
+<body>
+<!-- Settings dialog (560x1000). Faithful to docs/design/ui-redesign/settings/D-EngineSettings.dc.html.
+     settings.js populates the live options/values and wires the controls to the Python bridge. -->
+<div class="dialog">
+  <div class="dialog-titlebar"><span>Settings</span>
+    <svg class="x" id="settings-close" width="12" height="12" viewBox="0 0 12 12" aria-label="Close"><path d="M1 1l10 10M11 1L1 11" stroke="currentColor" stroke-width="1.2" fill="none"></path></svg>
+  </div>
+
+  <div class="settings-body">
+
+    <!-- Camera -->
+    <div class="section">
+      <div class="section-head">CAMERA</div>
+      <div class="field" id="set-camera"><span>webcam 0</span><span class="caret">▾</span></div>
+      <div class="grid2">
+        <div class="field" id="set-resolution"><span class="lbl">Resolution</span><span class="val">640×480 <span class="caret">▾</span></span></div>
+        <div class="field" id="set-fps"><span class="lbl">Frame rate</span><span class="val">30 fps <span class="caret">▾</span></span></div>
+      </div>
+      <div class="note">A higher frame rate lowers capture and stale latency, but the tracker has to keep up (currently 21 Hz).</div>
+    </div>
+
+    <!-- Engine -->
+    <div class="section divided">
+      <div class="section-head">ENGINE</div>
+      <div class="grid2">
+        <div class="field" id="set-method"><span>timealign</span><span class="caret">▾</span></div>
+        <div class="seg" id="set-backend">
+          <button type="button" class="seg-btn" data-v="cpu">cpu</button>
+          <button type="button" class="seg-btn active" data-v="rust">rust</button>
+          <button type="button" class="seg-btn" data-v="gpu">gpu</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Audio output -->
+    <div class="section divided" style="gap:14px">
+      <div class="section-head">AUDIO OUTPUT</div>
+
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <div class="row-between">
+          <span class="field-label">Block size</span>
+          <div style="display:flex;align-items:center;gap:12px"><span class="field-sub" id="block-ms">21.3 ms per block</span>
+            <div class="stepper"><button type="button" class="stepper-btn" id="block-minus" aria-label="Decrease block size">−</button><span class="stepper-val" id="block-val" style="width:62px">1024</span><button type="button" class="stepper-btn" id="block-plus" aria-label="Increase block size">+</button></div>
+          </div>
+        </div>
+        <div class="note">Smaller blocks lower latency but raise render load (currently 40%).</div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <div class="row-between">
+          <span class="field-label">Cushion</span>
+          <div class="stepper"><button type="button" class="stepper-btn" id="cushion-minus" aria-label="Decrease cushion">−</button><span class="stepper-val" id="cushion-val" style="width:76px">40 ms</span><button type="button" class="stepper-btn" id="cushion-plus" aria-label="Increase cushion">+</button></div>
+        </div>
+        <div class="note">Extra output buffer that protects against dropouts. It adds to latency.</div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <div class="row-between">
+          <span class="field-label">Exclusive device</span>
+          <button type="button" role="switch" aria-checked="false" class="switch-lg" id="exclusive-toggle" aria-label="Exclusive device"><span class="switch-knob"></span></button>
+        </div>
+        <div class="note">Takes exclusive control of the output device. Other apps lose audio while on.</div>
+      </div>
+    </div>
+
+    <!-- Spatial filter -->
+    <div class="section divided" style="gap:12px">
+      <div class="section-head">SPATIAL FILTER (HRIR)</div>
+      <div class="row-between gap16">
+        <span class="field-label">Filter</span>
+        <div class="field w280" id="set-hrir"><span>mine</span><span class="caret">▾</span></div>
+      </div>
+      <div class="row-between gap16">
+        <span class="field-label">Compensation</span>
+        <div class="seg w280" id="set-comp">
+          <button type="button" class="seg-btn" data-v="none">none</button>
+          <button type="button" class="seg-btn" data-v="ctf">CTF</button>
+          <button type="button" class="seg-btn active" data-v="dtf">DTF</button>
+        </div>
+      </div>
+      <div class="note">Compensation is applied on top of the selected filter.</div>
+    </div>
+
+    <!-- Headphone compensation -->
+    <div class="section divided" style="gap:12px">
+      <div class="row-between">
+        <div class="section-head">HEADPHONE COMPENSATION</div>
+        <button type="button" role="switch" aria-checked="true" class="switch-lg" id="hpeq-toggle" aria-label="Headphone compensation"><span class="switch-knob"></span></button>
+      </div>
+      <div class="field" id="set-hpmodel"><span>Sennheiser HD 600</span><span class="caret">▾</span></div>
+      <div class="note">Corrects the headphone's own frequency response. Pick your model, or switch off if your headphones are already equalized.</div>
+    </div>
+
+    <div class="settings-foot">
+      <button type="button" class="btn-text" id="reset-defaults">Reset to defaults</button>
+      <span class="spacer"></span>
+      <button type="button" class="btn-outline" id="settings-cancel">Cancel</button>
+      <button type="button" class="btn-apply" id="settings-apply">Apply</button>
+    </div>
+  </div>
+</div>
+</body>
+</html>
