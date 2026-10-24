@@ -38,6 +38,9 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import json
+import os
+import subprocess
 import threading
 import time
 from collections import deque
@@ -120,6 +123,65 @@ EXPERIMENT_METHODS = ("nearest", "timealign", "minphase", "notchwarp")
 # user re-running run.cmd. run_passthrough.cmd loops while it sees this exit code; any other
 # code (0 = quit) ends. Kept distinct from 0/1/signal codes. See AGENTS.md / journal 39.
 RESTART_EXIT_CODE = 97
+
+
+def _pid_is_live_python(pid: int) -> bool:
+    """Best-effort check that ``pid`` is a live Python process (guards single-instance against a
+    recycled PID before we terminate it)."""
+    if pid <= 0 or pid == os.getpid():
+        return False
+    try:
+        if os.name == "nt":
+            out = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
+                capture_output=True, text=True, timeout=5)
+            return "python" in out.stdout.lower()
+        os.kill(pid, 0)  # POSIX liveness probe
+        return True
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+
+
+def _terminate_pid(pid: int) -> None:
+    """Forcibly stop ``pid`` (and its children) so it releases the audio device, camera and port."""
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(pid), "/F", "/T"],
+                           capture_output=True, timeout=10)
+        else:
+            os.kill(pid, 15)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def ensure_single_instance(lock_path: Path) -> None:
+    """Guarantee one live engine: if a previous instance is recorded in ``lock_path`` and still
+    running, terminate it (so it frees the camera / FiiO / web port) before we claim the resources,
+    then record our own PID and arrange to clear it on exit. Replace-the-previous, by design."""
+    try:
+        prev_pid = int(json.loads(lock_path.read_text(encoding="utf-8")).get("pid", 0))
+    except (OSError, ValueError, TypeError, AttributeError):
+        prev_pid = 0
+    if _pid_is_live_python(prev_pid):
+        print(f"single-instance: replacing the previous cockpit (pid {prev_pid})")
+        _terminate_pid(prev_pid)
+        for _ in range(50):  # wait up to ~5 s for it to exit and release the devices
+            if not _pid_is_live_python(prev_pid):
+                break
+            time.sleep(0.1)
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path.write_text(json.dumps({"pid": os.getpid()}), encoding="utf-8")
+    except OSError:
+        return
+
+    def _release() -> None:
+        try:  # only clear the lock if it is still ours (not a replacement's)
+            if int(json.loads(lock_path.read_text(encoding="utf-8")).get("pid", 0)) == os.getpid():
+                lock_path.unlink(missing_ok=True)
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
+    atexit.register(_release)
 
 
 def _load_mono_loop(path: Path, target_sr: int) -> np.ndarray:
@@ -267,6 +329,7 @@ def main(argv=None) -> int:
     from pathlib import Path as _CfgPath
     from binaural_headtracker.config_store import ConfigStore as _ConfigStore
     _cfg_dir = (_CfgPath(args.model).parent if args.model else _CfgPath(".")) / "cockpit_config"
+    ensure_single_instance(_cfg_dir / ".instance.lock")  # replace any previous live engine first
     settings_store = _ConfigStore(_cfg_dir)
     saved_cfg, _dropped_keys, _settings_backstop = _SB.load_effective(settings_store, args)
     settings_store.mark_starting()  # cleared once audio is up (if the start never completes -> defaults)
@@ -1145,17 +1208,17 @@ def main(argv=None) -> int:
             q["restart"] = True
             q["stop"] = True
 
-        # live-reversible auto-revert (RFC rfc-crash-safe-settings v2): block/cushion are applied
-        # live, then watched — if the output FIFO keeps starving, snap back to the last-good value
-        # a too-aggressive setting can't leave the stream permanently broken. The watch IGNORES the
-        # first _REVERT_SETTLE_S: a block-size change rebuilds every renderer under the lock (losing
-        # their overlap tails) and a cushion change re-tops the FIFO, both of which cause a one-time
-        # burst of underruns at the swap that must NOT be read as "the new setting is bad". Only
-        # SUSTAINED starvation after that transient reverts.
-        _REVERT_SETTLE_S = 1.2    # swallow the swap/top-up transient
-        _REVERT_WINDOW_S = 4.0    # total watch window
-        _REVERT_UNDERRUNS = 8     # underruns AFTER settle that mean the stream genuinely can't hold
-        _watch: dict = {"revert": None, "t0": 0.0, "knob": ""}
+        # Starvation watch (advisory): block/cushion apply live; if the setting then keeps starving
+        # the output we TOAST a warning — we do NOT force-revert. The user can hear it, change it
+        # back, or hit Cancel (which already restores the pre-dialog snapshot); block/cushion only
+        # cause dropouts, never an unreachable UI, so a forced revert just fought the user on
+        # genuinely-marginal-but-usable depths. The watch IGNORES the first _STARVE_SETTLE_S: a
+        # block-size change rebuilds every renderer under the lock and a cushion change re-tops the
+        # FIFO, both a one-time swap burst that must NOT read as "the new setting is bad".
+        _STARVE_SETTLE_S = 1.2    # swallow the swap/top-up transient
+        _STARVE_WINDOW_S = 4.0    # stop watching after this if it settled
+        _STARVE_UNDERRUNS = 8     # underruns AFTER settle that mean the depth genuinely can't hold
+        _watch: dict = {"t0": 0.0, "knob": ""}
 
         # settings edit session (web dialog): changes apply live but are NOT persisted until the
         # user Confirms; Cancel restores the snapshot from when the dialog opened. ``snap`` non-None
@@ -1213,19 +1276,18 @@ def main(argv=None) -> int:
             _last_knobs = snap           # saved file already = last-confirmed, so persist nothing
             _edit["snap"] = None
 
-        def _arm_watch(knob: str, revert) -> None:  # noqa: ANN001
-            _watch["knob"], _watch["revert"], _watch["t0"] = knob, revert, time.monotonic()
+        def _arm_watch(knob: str) -> None:
+            _watch["knob"], _watch["t0"] = knob, time.monotonic()
 
         def _cushion_user(ms) -> None:  # noqa: ANN001 — settings-dialog cushion change (watched)
-            old_ms = cushion * blk["n"] / brir.samplerate * 1000.0
             _set_cushion(ms)
-            _arm_watch("Cushion", lambda: _set_cushion(old_ms))
+            _arm_watch("Cushion")
 
         def _block_user(n) -> None:  # noqa: ANN001 — settings-dialog block change (watched)
             old_n = blk["n"]
             _set_block(n)
             if blk["n"] != old_n:  # _set_block no-ops on unchanged/invalid sizes -> don't arm
-                _arm_watch("Block size", lambda: _set_block(old_n))
+                _arm_watch("Block size")
 
         win_ck.on_quit = lambda: q.__setitem__("stop", True)
         win_ck.on_reset_defaults = _reset_defaults
@@ -1331,18 +1393,17 @@ def main(argv=None) -> int:
                     fifo_fill = len(out_fifo)
                 recent_under = sum(1 for t in tuple(meter["under_ts"]) if now - t < 2.0)
                 recent_over = sum(1 for t in tuple(meter["over_ts"]) if now - t < 2.0)
-                if _watch["revert"] is not None:  # live-reversible watch window open
-                    settle_t = _watch["t0"] + _REVERT_SETTLE_S
+                if _watch["knob"]:  # a block/cushion change is being watched for starvation
+                    settle_t = _watch["t0"] + _STARVE_SETTLE_S
                     if now >= settle_t:  # past the swap transient -> judge sustained starvation
                         since = sum(1 for t in tuple(meter["under_ts"]) if t > settle_t)
-                        if since >= _REVERT_UNDERRUNS:    # still starving -> snap back to last-good
-                            rv, kn = _watch["revert"], _watch["knob"]
-                            _watch["revert"] = None
-                            rv()
-                            win_ck.toast(f"{kn} kept starving the output — reverted to last-good",
-                                         "error", seconds=5)
-                        elif now - _watch["t0"] >= _REVERT_WINDOW_S:  # held up -> accept the change
-                            _watch["revert"] = None
+                        if since >= _STARVE_UNDERRUNS:    # still starving -> warn (no revert)
+                            kn = _watch["knob"]
+                            _watch["knob"] = ""
+                            win_ck.toast(f"{kn} is starving the output — raise it or lower the "
+                                         f"block size", "error", seconds=6)
+                        elif now - _watch["t0"] >= _STARVE_WINDOW_S:  # settled -> stop watching
+                            _watch["knob"] = ""
                 out_lat_ms = float(getattr(out_ctx, "latency", 0.0) or 0.0) * 1000.0
                 out_lat["ms"] = out_lat_ms
                 rlabel = main_rend["label"] + ("  · test ON" if t_on else "")

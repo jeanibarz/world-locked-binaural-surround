@@ -11,17 +11,7 @@
      Dynamic values carry ids/data-hooks that cockpit.js updates from the live engine state; the markup
      ships with the mockup's sample values so the page renders identically when opened standalone. -->
 <div class="app">
-
-  <!-- Title bar -->
-  <div class="titlebar">
-    <div class="tb-left"><span class="tb-dot"></span><span id="tb-title">world-lock passthrough — webcam 0</span></div>
-    <div class="tb-ctl">
-      <svg class="tb-btn" data-win="min" width="12" height="12" viewBox="0 0 12 12" aria-label="Minimize"><path d="M1 6h10" stroke="currentColor" stroke-width="1.2" fill="none"></path></svg>
-      <svg class="tb-btn" data-win="max" width="12" height="12" viewBox="0 0 12 12" aria-label="Maximize"><rect x="1.5" y="1.5" width="9" height="9" stroke="currentColor" stroke-width="1.2" fill="none"></rect></svg>
-      <svg class="tb-btn" data-win="close" width="12" height="12" viewBox="0 0 12 12" aria-label="Close"><path d="M1 1l10 10M11 1L1 11" stroke="currentColor" stroke-width="1.2" fill="none"></path></svg>
-    </div>
-  </div>
-
+  <!-- No in-page title bar: the Chrome --app window frame is the only window chrome. -->
   <div class="content">
 
     <!-- Row 1: camera + system | ring stage | latency -->

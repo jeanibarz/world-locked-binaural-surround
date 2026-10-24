@@ -156,6 +156,14 @@
         const ln = $("hist-p50-line"); if (ln) ln.style.left = s.latency.p50_pct + "%";
         const lb = $("hist-p50-label"); if (lb) lb.style.left = s.latency.p50_pct + "%";
       }
+      if (s.latency.axis_lo != null && s.latency.axis_hi != null) {
+        const ax = document.querySelectorAll(".lat-axis span");  // keep labels on the real range
+        if (ax.length >= 3) {
+          ax[0].textContent = s.latency.axis_lo;
+          ax[1].textContent = Math.round((s.latency.axis_lo + s.latency.axis_hi) / 2);
+          ax[2].textContent = s.latency.axis_hi;
+        }
+      }
       if (s.latency.note) setText("lat-note", s.latency.note);
     }
     if (s.drawer_status) setText("drawer-status", s.drawer_status);
@@ -188,10 +196,6 @@
       abA.addEventListener("click", () => { abA.classList.add("ab-active"); abB.classList.remove("ab-active"); call("blind_play", "A"); });
       abB.addEventListener("click", () => { abB.classList.add("ab-active"); abA.classList.remove("ab-active"); call("blind_play", "B"); });
     }
-    document.querySelectorAll(".tb-btn").forEach((b) => b.addEventListener("click", () => {
-      call("window_" + b.dataset.win);               // min/max are server no-ops in a browser
-      if (b.dataset.win === "close") window.close();  // close button also closes this window
-    }));
   }
 
   // expose (for tests / manual injection)

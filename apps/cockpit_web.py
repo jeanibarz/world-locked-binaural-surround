@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import queue
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -116,6 +117,7 @@ def view_to_state(diag, view, *, pose=None, rate_hz=0.0, cushion_ms=0.0, exclusi
             "verdict": view.verdict,
             "verdict_level": _VERDICT_LEVEL.get(view.verdict.upper(), "good"),
             "segments": segments, "bins": bins, "p50_pct": round(p50_pct, 1),
+            "axis_lo": round(lo), "axis_hi": round(hi),  # histogram x-axis range (ms)
         },
     }
     if pose is not None:
@@ -227,7 +229,7 @@ class WebCockpit:
     """Drop-in for the DPG ``CockpitWindow``: serves the web UI and is driven by the engine loop."""
 
     def __init__(self, *, title: str = "world-lock passthrough",
-                 width: int = 1296, height: int = 836,
+                 width: int = 1320, height: int = 864,  # initial size; the app fills the window
                  port: int = 0, open_browser: bool = True):
         self.title, self._w, self._h, self._port = title, width, height, port
         self._open_browser = open_browser
@@ -237,6 +239,11 @@ class WebCockpit:
         self._frame = None                   # latest JPEG bytes (MJPEG)
         self._subs: list[queue.Queue] = []   # SSE client queues
         self._subs_lock = threading.Lock()
+        # autoquit: once a UI has connected, if every UI stays disconnected past the grace window
+        # (i.e. the owner closed the Chrome window), stop the engine instead of running headless.
+        self._ever_connected = False
+        self._last_empty: float | None = None
+        self._autoquit_grace_s = 4.0
         self._cameras: list[tuple[str, int]] = []
         self._hrir_names: list[str] = []
         self._config: dict = {}
@@ -344,12 +351,16 @@ class WebCockpit:
         q = queue.Queue(maxsize=4)
         with self._subs_lock:
             self._subs.append(q)
+            self._ever_connected = True
+            self._last_empty = None   # a UI is connected again -> cancel any pending autoquit
         return q
 
     def _unsubscribe(self, q):
         with self._subs_lock:
             if q in self._subs:
                 self._subs.remove(q)
+            if not self._subs:        # last UI gone -> start the autoquit grace countdown
+                self._last_empty = time.monotonic()
 
     def _broadcast(self, obj):
         msg = json.dumps(obj)
@@ -398,7 +409,21 @@ class WebCockpit:
             print(f"[web cockpit] open this in a browser: {self.url}", file=sys.stderr, flush=True)
 
     def running(self):
+        if not self._stop and self._autoquit_due():
+            print("web cockpit: UI window closed — shutting down the engine")
+            self.on_quit()        # run the normal quit side-effects (engine stop flag)
+            self._stop = True
         return not self._stop
+
+    def _autoquit_due(self) -> bool:
+        """True once a UI has connected and then every UI has been gone longer than the grace
+        window — i.e. the owner closed the window and we should stop rather than run headless."""
+        if not self._ever_connected:
+            return False
+        with self._subs_lock:
+            if self._subs or self._last_empty is None:
+                return False
+            return (time.monotonic() - self._last_empty) >= self._autoquit_grace_s
 
     def request_stop(self, *, restart=False):
         self._restart = restart or self._restart

@@ -11,7 +11,10 @@
 html,body{margin:0;background:var(--bg)}
 .mono{font-family:'JetBrains Mono',monospace}
 
-.app{width:1280px;height:820px;display:flex;flex-direction:column;background:var(--bg);
+/* Fill the browser window (Chrome --app frame is the only chrome now; no in-page titlebar).
+   The row-1 panels keep their size; the experiments drawer (flex:1) absorbs any extra height,
+   and the ring column (minmax(0,1fr)) absorbs extra width — so no empty gap, no right-truncation. */
+.app{width:100vw;height:100vh;min-width:900px;display:flex;flex-direction:column;background:var(--bg);
   font-family:Inter,system-ui,sans-serif;color:var(--text);overflow:hidden}
 
 /* Title bar */
