@@ -4,6 +4,10 @@
 surround sound stage fixed in the world while your head moves — so your brain
 learns to externalise the sound into real space.**
 
+![The binaural-headtracker cockpit in motion: as the listener's head turns left and right, the six virtual speakers of the world-locked ring stay fixed in place while the head icon and its facing cone rotate to follow the pose. The surrounding panels update live — camera face-lock, tracker and render health, head pose (yaw / pitch / roll), and head-move-to-ear latency.](docs/figures/cockpit-demo.gif)
+
+*The cockpit, live. Turn your head and the **world-locked ring** holds its speakers in place while the head, pose read-outs, load meters, and latency update in real time — the on-screen half of what the renderer is doing to the sound.*
+
 ## The idea in one paragraph
 
 Headphone surround normally rotates with your head: turn left, and the whole
