@@ -136,7 +136,9 @@
     // live in the engine). This is a separate window, so closing it must NOT quit the app.
     call("settings_begin");
     let done = false;
-    const finish = (how) => { if (done) return; done = true; call(how); window.close(); };
+    // IMPORTANT: await the POST before window.close() — closing the window aborts an in-flight
+    // fetch, so a non-awaited settings_commit would silently fail to persist.
+    const finish = async (how) => { if (done) return; done = true; await call(how); window.close(); };
     $("settings-apply").addEventListener("click", () => finish("settings_commit"));   // "Confirm"
     $("settings-cancel").addEventListener("click", () => finish("settings_cancel"));
     $("settings-close").addEventListener("click", () => finish("settings_cancel"));   // ✕ = discard
