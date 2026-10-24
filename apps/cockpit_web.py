@@ -9,7 +9,7 @@ Transport (all stdlib, so the UI runs in any browser and is inspectable):
     matching ``on_*`` engine hook (the same hooks the DPG window uses).
   * ``GET  /api/get_config`` — the dropdown options + current values for the settings dialog.
 
-``WebCockpit`` presents the SAME method surface as the DPG ``CockpitWindow`` (``setup`` / ``running``
+``WebCockpit`` has the SAME method surface as the DPG ``CockpitWindow`` (``setup`` / ``running``
 / ``update`` / ``render_frame`` / ``toast`` / ``set_*_display`` / ``on_*`` / ``teardown``), so the
 engine's capture loop drives it as a drop-in — the HTTP server runs in background threads while the
 loop stays on the main thread.
@@ -61,13 +61,17 @@ def view_to_state(diag, view, *, pose=None, rate_hz=0.0, cushion_ms=0.0, exclusi
     p50_pct = max(0.0, min(100.0, (diag.end_to_end_ms - lo) / span * 100.0))
 
     rate_dot = "#4cd98a" if rate_hz >= 20 else "#ffb340"
+    hrir_val = " · ".join(x for x in (hrir_name, comp.upper() if comp else "",
+                                      "HP EQ" if hp_eq else "") if x)
     health = [
-        {"label": "Tracker rate", "value": f"{rate_hz:.0f} Hz (cam {cam_fps:.0f})", "dot": rate_dot},
+        {"label": "Tracker rate", "dot": rate_dot,
+         "value": f"{rate_hz:.0f} Hz (cam {cam_fps:.0f})"},
         {"label": "Detect time", "value": f"{diag.detect_ms:.0f} ms", "dot": "#4cd98a"},
         {"label": "Backend", "value": view.backend, "dot": "#4cd98a"},
         {"label": "Rendering", "value": view.method, "dot": "#4cd98a"},
-        {"label": "Cushion", "value": f"{cushion_ms:.0f} ms · {'exclusive' if exclusive else 'shared'}", "dot": "#5b6678"},
-        {"label": "HRIR", "value": " · ".join(x for x in (hrir_name, comp.upper() if comp else "", "HP EQ" if hp_eq else "") if x), "dot": "#5b6678"},
+        {"label": "Cushion", "dot": "#5b6678",
+         "value": f"{cushion_ms:.0f} ms · {'exclusive' if exclusive else 'shared'}"},
+        {"label": "HRIR", "dot": "#5b6678", "value": hrir_val},
     ]
 
     hname = getattr(getattr(diag, "health", None), "name", "OK").upper()
@@ -76,12 +80,17 @@ def view_to_state(diag, view, *, pose=None, rate_hz=0.0, cushion_ms=0.0, exclusi
         "pct": round(max(0.0, min(1.0, diag.render_load)) * 100),
         "peak_pct": round(max(0.0, min(1.0, diag.render_load_peak)) * 100),
         "level": hlvl,
-        "text": f"{diag.render_load * 100:.0f}% (peak {diag.render_load_peak * 100:.0f}%) · {diag.block_ms:.1f} ms/blk",
+        "text": f"{diag.render_load * 100:.0f}% (peak {diag.render_load_peak * 100:.0f}%)"
+                f" · {diag.block_ms:.1f} ms/blk",
     }
     buf_frac = (diag.fifo_fill_blocks / (2 * diag.cushion_blocks)) if diag.cushion_blocks else 0.0
     buf_ok = diag.fifo_fill_blocks >= max(1.0, diag.cushion_blocks - 0.5)
-    buffer = {"pct": round(max(0.0, min(1.0, buf_frac)) * 100), "level": "good" if buf_ok else "warn",
-              "text": f"{diag.fifo_fill_blocks:.0f} / {diag.cushion_blocks} blk · {'steady' if buf_ok else 'low'}"}
+    buffer = {
+        "pct": round(max(0.0, min(1.0, buf_frac)) * 100),
+        "level": "good" if buf_ok else "warn",
+        "text": f"{diag.fifo_fill_blocks:.0f} / {diag.cushion_blocks} blk"
+                f" · {'steady' if buf_ok else 'low'}",
+    }
     dropped = diag.recent_underruns + diag.recent_overflows
     dropouts = {"text": f"{diag.recent_overflows} over · {diag.recent_underruns} under",
                 "pct": min(100, dropped * 20), "color": "#ff6b6b" if dropped else "#4cd98a"}
@@ -98,18 +107,21 @@ def view_to_state(diag, view, *, pose=None, rate_hz=0.0, cushion_ms=0.0, exclusi
         "latency": {
             "ms": view.headline_ms,
             "detail": ("median · " + view.detail) if view.measured else view.detail,
-            "verdict": view.verdict, "verdict_level": _VERDICT_LEVEL.get(view.verdict.upper(), "good"),
+            "verdict": view.verdict,
+            "verdict_level": _VERDICT_LEVEL.get(view.verdict.upper(), "good"),
             "segments": segments, "bins": bins, "p50_pct": round(p50_pct, 1),
         },
     }
     if pose is not None:
-        yaw, pitch, roll = getattr(pose, "yaw", 0.0), getattr(pose, "pitch", 0.0), getattr(pose, "roll", 0.0)
-        state["pose"] = {"yaw": _deg(yaw), "pitch": _deg(pitch), "roll": _deg(roll), "yaw_deg": float(yaw)}
+        yaw = getattr(pose, "yaw", 0.0)
+        pitch, roll = getattr(pose, "pitch", 0.0), getattr(pose, "roll", 0.0)
+        state["pose"] = {"yaw": _deg(yaw), "pitch": _deg(pitch), "roll": _deg(roll),
+                         "yaw_deg": float(yaw)}
     return state
 
 
 class _Handler(BaseHTTPRequestHandler):
-    wc: "WebCockpit" = None  # set by the factory
+    wc: WebCockpit = None  # set by the factory
 
     def log_message(self, *a):  # silence the default stderr access log
         pass
@@ -167,7 +179,9 @@ class _Handler(BaseHTTPRequestHandler):
                 try:
                     msg = q.get(timeout=1.0)
                 except queue.Empty:
-                    self.wfile.write(b": ping\n\n"); self.wfile.flush(); continue
+                    self.wfile.write(b": ping\n\n")
+                    self.wfile.flush()
+                    continue
                 self.wfile.write(b"data: " + msg.encode() + b"\n\n")
                 self.wfile.flush()
         except Exception:  # noqa: BLE001 — client went away
@@ -189,7 +203,9 @@ class _Handler(BaseHTTPRequestHandler):
                     last = frame
                     self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\n"
                                      b"Content-Length: " + str(len(frame)).encode() + b"\r\n\r\n")
-                    self.wfile.write(frame); self.wfile.write(b"\r\n"); self.wfile.flush()
+                    self.wfile.write(frame)
+                    self.wfile.write(b"\r\n")
+                    self.wfile.flush()
                 _t.sleep(0.02)
         except Exception:  # noqa: BLE001
             pass
@@ -198,7 +214,8 @@ class _Handler(BaseHTTPRequestHandler):
 class WebCockpit:
     """Drop-in for the DPG ``CockpitWindow``: serves the web UI and is driven by the engine loop."""
 
-    def __init__(self, *, title: str = "world-lock passthrough", width: int = 1296, height: int = 836,
+    def __init__(self, *, title: str = "world-lock passthrough",
+                 width: int = 1296, height: int = 836,
                  port: int = 0, open_browser: bool = True):
         self.title, self._w, self._h, self._port = title, width, height, port
         self._open_browser = open_browser
@@ -214,12 +231,17 @@ class WebCockpit:
         self.url = ""
         for name in ("predict", "recenter", "method", "backend", "block", "cushion", "exclusive",
                      "hrir", "hrir_blind", "comp", "camera", "cam_format", "place_test", "test",
-                     "solo", "rotate", "quit", "loc_start", "loc_answer", "loc_stop", "blind_result"):
+                     "solo", "rotate", "quit", "loc_start", "loc_answer", "loc_stop",
+                     "blind_result"):
             setattr(self, "on_" + name, (lambda *a, **k: None))
 
     # ---- seed ----
-    def set_cameras(self, cams): self._cameras = list(cams)
-    def set_hrir_sets(self, names): self._hrir_names = list(names)
+    def set_cameras(self, cams):
+        self._cameras = list(cams)
+
+    def set_hrir_sets(self, names):
+        self._hrir_names = list(names)
+
     def config(self):
         return {"cameras": self._cameras, "hrir": self._hrir_names,
                 "methods": ["nearest", "timealign", "minphase", "notchwarp"],
@@ -227,41 +249,68 @@ class WebCockpit:
                 "framerates": ["default", "30 fps", "60 fps"], "samplerate": 48000, **self._config}
 
     # ---- display setters (feed the config the settings dialog seeds from) ----
-    def set_block_display(self, n): self._config["block"] = int(n)
-    def set_cushion_display(self, ms): self._config["cushion_ms"] = float(ms)
-    def set_backend_display(self, b): self._config["backend"] = str(b)
-    def set_hrir_display(self, n): self._config["hrir_name"] = str(n)
-    def set_comp_display(self, c): self._config["comp"] = str(c)
-    def set_camera_display(self, i): self._config["camera"] = int(i)
-    def set_test_state(self, on, az): pass
-    def set_loc_status(self, text): self._broadcast({"type": "drawer_status", "text": text})
-    def set_loc_active(self, on): pass
+    def set_block_display(self, n):
+        self._config["block"] = int(n)
+
+    def set_cushion_display(self, ms):
+        self._config["cushion_ms"] = float(ms)
+
+    def set_backend_display(self, b):
+        self._config["backend"] = str(b)
+
+    def set_hrir_display(self, n):
+        self._config["hrir_name"] = str(n)
+
+    def set_comp_display(self, c):
+        self._config["comp"] = str(c)
+
+    def set_camera_display(self, i):
+        self._config["camera"] = int(i)
+
+    def set_test_state(self, on, az):
+        pass
+
+    def set_loc_status(self, text):
+        self._broadcast({"type": "drawer_status", "text": text})
+
+    def set_loc_active(self, on):
+        pass
 
     # ---- control dispatch (POST /api/<name>) ----
+    def _close(self):
+        self.on_quit()
+        self.request_stop()
+
     def dispatch(self, name: str, args: list):
+        """Route a POST /api/<name> control event to the matching engine hook. Unknown or
+        intentionally-inert names (ready, set_drawer_tab, blind_play, settings_apply, …) no-op."""
+        table = {
+            "set_predict": lambda: self.on_predict(bool(args[0])),
+            "recenter": self.on_recenter,
+            "set_method": lambda: self.on_method(str(args[0])),
+            "set_backend": lambda: self.on_backend(str(args[0])),
+            "set_block": lambda: self.on_block(int(args[0])),
+            "set_cushion": lambda: self.on_cushion(float(args[0])),
+            "set_exclusive": lambda: self.on_exclusive(bool(args[0])),
+            "set_hrir": lambda: self.on_hrir(str(args[0])),
+            "set_comp": lambda: self.on_comp(str(args[0])),
+            "set_camera": lambda: self.on_camera(int(args[0])),
+            "set_cam_format": lambda: self.on_cam_format(
+                (int(args[0]), int(args[1]), int(args[2]))),
+            "place_test": lambda: self.on_place_test(float(args[0])),
+            "set_test": lambda: self.on_test(bool(args[0])),
+            "set_solo": lambda: self.on_solo(bool(args[0])),
+            "set_rotate": lambda: self.on_rotate(bool(args[0])),
+            "blind_shuffle_start": lambda: self.toast(
+                "blind A/B - coming to its own panel", "info"),
+            "window_close": self._close,
+        }
+        fn = table.get(name)
+        if fn is None:
+            return
         try:
-            if name == "set_predict": self.on_predict(bool(args[0]))
-            elif name == "recenter": self.on_recenter()
-            elif name == "set_method": self.on_method(str(args[0]))
-            elif name == "set_backend": self.on_backend(str(args[0]))
-            elif name == "set_block": self.on_block(int(args[0]))
-            elif name == "set_cushion": self.on_cushion(float(args[0]))
-            elif name == "set_exclusive": self.on_exclusive(bool(args[0]))
-            elif name == "set_hrir": self.on_hrir(str(args[0]))
-            elif name == "set_comp": self.on_comp(str(args[0]))
-            elif name == "set_camera": self.on_camera(int(args[0]))
-            elif name == "set_cam_format": self.on_cam_format((int(args[0]), int(args[1]), int(args[2])))
-            elif name == "place_test": self.on_place_test(float(args[0]))
-            elif name == "set_test": self.on_test(bool(args[0]))
-            elif name == "set_solo": self.on_solo(bool(args[0]))
-            elif name == "set_rotate": self.on_rotate(bool(args[0]))
-            elif name == "set_drawer_tab": pass
-            elif name == "blind_play": pass
-            elif name == "blind_shuffle_start": self.toast("blind A/B — coming to its own panel", "info")
-            elif name in ("settings_apply", "reset_defaults", "ready", "set_hpeq", "set_hp_model"): pass
-            elif name in ("window_close", "window_min", "window_max"):
-                if name == "window_close": self.on_quit(); self.request_stop()
-        except Exception as exc:  # noqa: BLE001 — a bad control event must not crash the server
+            fn()
+        except Exception as exc:  # noqa: BLE001 - a bad control event must not crash the server
             self.toast(f"control error: {exc}", "error")
 
     # ---- SSE plumbing ----
@@ -314,7 +363,8 @@ class WebCockpit:
                 break
         try:
             if chrome:
-                subprocess.Popen([chrome, f"--app={self.url}", f"--window-size={self._w},{self._h}"])
+                subprocess.Popen([chrome, f"--app={self.url}",
+                                  f"--window-size={self._w},{self._h}"])
             else:
                 import webbrowser
                 webbrowser.open(self.url)
