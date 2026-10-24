@@ -90,6 +90,10 @@ def view_to_state(diag, view, *, pose=None, rate_hz=0.0, cushion_ms=0.0, exclusi
     buffer = {
         "pct": round(max(0.0, min(1.0, buf_frac)) * 100),
         "level": "good" if buf_ok else "warn",
+        # block counts for the cell meter: one cell per FIFO block, capacity = 2x the cushion
+        "fill_blocks": round(diag.fifo_fill_blocks),
+        "cushion_blocks": int(diag.cushion_blocks),
+        "capacity": max(2, 2 * int(diag.cushion_blocks)),
         "text": f"{diag.fifo_fill_blocks:.0f} / {diag.cushion_blocks} blk"
                 f" · {'steady' if buf_ok else 'low'}",
     }

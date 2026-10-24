@@ -23,6 +23,41 @@
     setTimeout(() => t.remove(), 5000);
   }
 
+  // ---- output-buffer cell meter ---------------------------------------------
+  // One cell per FIFO block (capacity = 2x cushion). Margin cells (1..cushion) are green when full
+  // and red when empty (the underfill alarm); headroom cells are cyan spare, amber in the top ~25%
+  // of capacity nearest the overflow edge. A cyan line marks the target (= cushion). Rebuilds the
+  // row only when the cell count changes (cushion/block change); otherwise just re-classes cells.
+  function renderBufferCells(b) {
+    const host = $("buffer-cells");
+    if (!host) return;
+    const cush = Math.max(1, b.cushion_blocks || 0);
+    const cap = Math.max(2, b.capacity || 2 * cush);
+    const fill = Math.max(0, Math.min(cap, b.fill_blocks || 0));
+    const amberFrom = cap - Math.max(1, Math.round(cap * 0.25));
+    let row = host.querySelector(".buf-cells");
+    if (!row || row.childElementCount !== cap) {
+      host.innerHTML = "";
+      row = document.createElement("div");
+      row.className = "buf-cells";
+      for (let i = 0; i < cap; i++) row.appendChild(document.createElement("div"));
+      host.appendChild(row);
+      const tick = document.createElement("div");
+      tick.className = "buf-tick";
+      tick.style.left = (cush / cap * 100) + "%";   // target boundary (margin | headroom)
+      host.appendChild(tick);
+    }
+    const cells = row.children;
+    for (let i = 0; i < cap; i++) {
+      const on = i < fill, margin = i < cush;
+      let cls = "buf-cell";
+      if (margin) cls += on ? " f-margin" : " f-alarm";
+      else if (on) cls += (i >= amberFrom) ? " f-amber" : " f-cyan";
+      if (i === cush) cls += " f-divide";
+      cells[i].className = cls;
+    }
+  }
+
   // ---- histogram -------------------------------------------------------------
   function buildHistogram(heights, p50pct) {
     const host = $("histogram");
@@ -83,7 +118,7 @@
       const f = $("render-load-fill"); if (f) { f.style.width = (s.render_load.pct || 0) + "%"; f.className = "bar-fill " + (s.render_load.level || "good"); }
       const p = $("render-load-peak"); if (p && s.render_load.peak_pct != null) p.style.left = s.render_load.peak_pct + "%";
     }
-    if (s.buffer) { setText("buffer-txt", s.buffer.text); const f = $("buffer-fill"); if (f) { f.style.width = (s.buffer.pct || 0) + "%"; f.className = "bar-fill " + (s.buffer.level || "good"); } }
+    if (s.buffer) { setText("buffer-txt", s.buffer.text); renderBufferCells(s.buffer); }
     if (s.dropouts) { const t = $("dropouts-txt"); if (t) { t.textContent = s.dropouts.text; t.style.color = s.dropouts.color || "#4cd98a"; } const f = $("dropouts-fill"); if (f) f.style.width = (s.dropouts.pct || 0) + "%"; }
 
     // predict toggle
@@ -185,6 +220,7 @@
   document.addEventListener("DOMContentLoaded", () => {
     wire();
     buildHistogram(SAMPLE.bins, null);  // sample histogram so the page matches the design before data
+    renderBufferCells({ fill_blocks: 7, cushion_blocks: 6, capacity: 12 });  // sample buffer meter
     if (location.protocol.indexOf("http") === 0) { connect(); startCamera(); }  // live feed when served
   });
 })();

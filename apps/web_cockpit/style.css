@@ -62,6 +62,18 @@ html,body{margin:0;background:var(--bg)}
 .bar-fill{height:100%;border-radius:999px;background:var(--green)}
 .bar-fill.warn{background:var(--amber)} .bar-fill.bad{background:var(--red)}
 .bar-peak{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--text)}
+/* Output-buffer cell meter (one cell per FIFO block, capacity = 2x cushion). Margin cells
+   (1..cushion) are green when full / red when empty (underfill alarm); headroom cells are cyan
+   spare, amber in the top ~25% nearest the 2x overflow edge. A cyan line marks the target. */
+.buf-cells-wrap{position:relative;height:9px}
+.buf-cells{display:flex;gap:2px;height:9px}
+.buf-cell{flex:1;min-width:2px;border-radius:2px;background:var(--inset);border:1px solid var(--border2)}
+.buf-cell.f-margin{background:var(--green);border-color:transparent}
+.buf-cell.f-alarm{background:rgba(255,107,107,.18);border-color:var(--red)}
+.buf-cell.f-cyan{background:rgba(53,208,208,.5);border-color:transparent}
+.buf-cell.f-amber{background:var(--amber);border-color:transparent}
+.buf-cell.f-divide{margin-left:6px}
+.buf-tick{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--cyan);border-radius:1px;transform:translateX(-50%);pointer-events:none}
 .system-foot{margin-top:auto;border-top:1px solid var(--hair);padding-top:10px;display:flex;align-items:center;justify-content:space-between;gap:10px}
 .predict-wrap{display:flex;align-items:center;gap:10px}
 .switch-label{font-size:13px;color:var(--text2)}
