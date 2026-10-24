@@ -136,6 +136,22 @@ class CockpitWindow:
         self.on_block = lambda n: None        # render block size (frames) — the ± stepper, live
         self.on_predict = lambda on: None
         self.on_exclusive = lambda on: None
+        # Camera picker (settings panel). ``set_cameras`` seeds the list BEFORE ``setup``; the two
+        # combos fire ``on_camera(index)`` / ``on_cam_format((w, h, fps))``, which the live app
+        # applies on its capture thread. A format of (0, 0, 0) means "leave the driver default".
+        self.on_camera = lambda index: None
+        self.on_cam_format = lambda spec: None
+        self._cam_combo = "ck_cam"
+        self._cam_fmt_combo = "ck_camfmt"
+        self._cameras: list[tuple[str, int]] = []   # (label, cv2 index); seeded by set_cameras
+        self._cam_formats: list[tuple[str, tuple[int, int, int]]] = [
+            ("default", (0, 0, 0)),
+            ("320x240 . 60", (320, 240, 60)),
+            ("640x480 . 30", (640, 480, 30)),
+            ("640x480 . 60", (640, 480, 60)),
+            ("848x480 . 30", (848, 480, 30)),
+            ("1280x720 . 30", (1280, 720, 30)),
+        ]
         self.on_test = lambda on: None        # movable test source on/off (the console's T)
         self.on_solo = lambda on: None        # hear only the test source (O)
         self.on_rotate = lambda on: None      # auto-rotate the test source (R)
@@ -265,6 +281,25 @@ class CockpitWindow:
                 qt = dpg.add_button(label="Quit", width=90, height=40,
                                     callback=lambda: self.on_quit())
                 dpg.bind_item_theme(qt, self._th["btn_quit"])
+            with dpg.group(horizontal=True):   # row 1b — camera picker (device + resolution/fps)
+                with dpg.child_window(auto_resize_x=True, auto_resize_y=True, border=True) as s:
+                    dpg.bind_item_theme(s, self._th["section"])
+                    with dpg.group(horizontal=True):
+                        cl = dpg.add_text("CAMERA", color=_c(M.ACCENT))
+                        with dpg.tooltip(cl):
+                            dpg.add_text("Switch the tracking camera and its resolution/fps live.\n"
+                                         "Lower resolution often unlocks a higher fps (the real\n"
+                                         "latency lever); watch 'rate' + the camera panel after a\n"
+                                         "switch. 'default' leaves the driver's own format.")
+                        cam_labels = [c[0] for c in self._cameras] or ["Camera 0"]
+                        dpg.add_combo(cam_labels, default_value=cam_labels[0], width=150,
+                                      tag=self._cam_combo,
+                                      callback=lambda s, a: self._pick_camera(a))
+                        dpg.add_text("format", color=_c(M.MUTED))
+                        dpg.add_combo([f[0] for f in self._cam_formats],
+                                      default_value=self._cam_formats[0][0], width=140,
+                                      tag=self._cam_fmt_combo,
+                                      callback=lambda s, a: self._pick_cam_format(a))
             with dpg.group(horizontal=True):   # row 2 — the test group only
                 with dpg.child_window(auto_resize_x=True, auto_resize_y=True, border=True) as s:
                     dpg.bind_item_theme(s, self._th["section"])
@@ -366,6 +401,35 @@ class CockpitWindow:
     def _set_predict(self, on: bool) -> None:
         self._predict = on
         self.on_predict(on)
+
+    # -------------------------------------------------- camera picker
+    def set_cameras(self, cams: list[tuple[str, int]]) -> None:
+        """Seed the camera combo (list of ``(label, cv2 index)``) BEFORE ``setup`` is called."""
+        self._cameras = list(cams)
+
+    def _pick_camera(self, label: str) -> None:
+        for lbl, idx in self._cameras:
+            if lbl == label:
+                self.on_camera(idx)
+                return
+
+    def _pick_cam_format(self, label: str) -> None:
+        for lbl, spec in self._cam_formats:
+            if lbl == label:
+                self.on_cam_format(spec)
+                return
+
+    def set_camera_display(self, index: int) -> None:
+        """Snap the camera combo to ``index`` (e.g. revert when a requested camera won't open)."""
+        label = next((lbl for lbl, idx in self._cameras if idx == index), None)
+        if label is None:
+            return
+        try:
+            import dearpygui.dearpygui as dpg
+            if dpg.does_item_exist(self._cam_combo):
+                dpg.set_value(self._cam_combo, label)
+        except Exception:  # noqa: BLE001
+            pass
 
     def set_cushion_display(self, ms: float) -> None:
         """Seed the cushion stepper with the engine's actual launch value (it isn't the default)."""

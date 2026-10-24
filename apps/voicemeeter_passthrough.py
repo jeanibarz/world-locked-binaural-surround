@@ -791,7 +791,7 @@ def main(argv=None) -> int:
         diagnostics are computed exactly as the console loop does; the result feeds the cockpit's
         view-model, and the cockpit's control hooks mutate the live engine state (method, backend,
         predict, the test source placed/dragged on the radar, recenter). Returns True to reload."""
-        nonlocal cap
+        nonlocal cap, cam_index, cam_w, cam_h, cam_fps
         import cockpit_view as CK
 
         from binaural_headtracker import cockpit as CM
@@ -801,6 +801,18 @@ def main(argv=None) -> int:
         cur = {"backend": ("rust" if args.rust else "gpu" if args.gpu else "cpu"),
                "predict": args.predict, "comp": "ctf"}
         predictor_ck = PosePredictor()
+        # Live camera switch (settings panel). The combos only record a request + raise ``dirty``;
+        # the capture loop below performs the cv2 open/release on its own thread (open can block
+        # ~0.1-0.5 s — audio keeps world-locking on the last pose meanwhile).
+        cam_req = {"index": cam_index, "w": args.cam_width, "h": args.cam_height,
+                   "fps": args.cam_fps, "dirty": False}
+
+        def _set_camera(index) -> None:  # noqa: ANN001
+            cam_req["index"] = int(index); cam_req["dirty"] = True
+
+        def _set_cam_format(spec) -> None:  # noqa: ANN001  — (w, h, fps); 0 = driver default
+            cam_req["w"], cam_req["h"], cam_req["fps"] = (int(x) for x in spec)
+            cam_req["dirty"] = True
 
         def _recenter() -> None:
             if recent:
@@ -1090,6 +1102,8 @@ def main(argv=None) -> int:
         win_ck.on_rotate = _tog("rotate")
         win_ck.on_place_test = _place
         win_ck.on_predict = lambda on: cur.__setitem__("predict", bool(on))
+        win_ck.on_camera = _set_camera
+        win_ck.on_cam_format = _set_cam_format
         win_ck.on_hrir = _set_hrir
         win_ck.on_hrir_blind = lambda n: _set_hrir(n, announce=False)
         win_ck.on_comp = _set_comp
@@ -1098,7 +1112,15 @@ def main(argv=None) -> int:
         win_ck.on_loc_stop = _loc_stop
         win_ck.on_blind_result = _blind_result
         win_ck.set_hrir_sets([s.name for s in hrir_sets])   # seed the pills BEFORE setup()
+        try:
+            _cams = probe_cameras()
+        except Exception:  # noqa: BLE001 — probing must never block the cockpit from opening
+            _cams = []
+        if cam_index not in _cams:
+            _cams = sorted(set(_cams) | {cam_index})         # always include the one in use
+        win_ck.set_cameras([(f"Camera {i}", i) for i in _cams])   # seed the picker BEFORE setup()
         win_ck.setup()
+        win_ck.set_camera_display(cam_index)         # combo → the camera actually open at launch
         win_ck.set_cushion_display(args.latency_ms)  # slider → the real launch cushion, not 60
         win_ck.set_block_display(blk["n"])           # stepper → the real launch block size
         win_ck.set_hrir_display(cur_set["name"])     # pills → the set actually loaded at launch
@@ -1117,6 +1139,28 @@ def main(argv=None) -> int:
                 if cb_error:
                     print(f"audio callback error: {cb_error[0]!r}")
                     break
+                if cam_req["dirty"]:   # live camera / resolution switch from the settings panel
+                    cam_req["dirty"] = False
+                    ni, nw, nh, nf = cam_req["index"], cam_req["w"], cam_req["h"], cam_req["fps"]
+                    ncap = cv2.VideoCapture(ni)
+                    if ncap.isOpened():
+                        ncap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                        cam_w, cam_h, cam_fps = C.apply_camera_settings(
+                            ncap, width=nw, height=nh, fps=nf)
+                        try:
+                            cap.release()
+                        except Exception:  # noqa: BLE001
+                            pass
+                        cap, cam_index = ncap, ni
+                        recent.clear()          # drop poses captured by the previous camera
+                        detect_ms = 0.0
+                        miss = 0
+                        win_ck.toast(
+                            f"camera {ni} . {cam_w}x{cam_h} @ {cam_fps:.0f}fps", "info")
+                    else:
+                        ncap.release()
+                        win_ck.set_camera_display(cam_index)  # snap combo back to the live camera
+                        win_ck.toast(f"camera {ni} failed to open", "error")
                 ok, frame = cap.read()
                 if not ok:  # camera lost — hold the last pose (audio keeps world-locking)
                     miss += 1
