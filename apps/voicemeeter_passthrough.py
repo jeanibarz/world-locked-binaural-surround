@@ -757,6 +757,17 @@ def main(argv=None) -> int:
     import gc
     gc.collect()
     gc.freeze()
+    # Tighten the GIL hand-off so the real-time render worker is never starved by a GIL-greedy
+    # thread. The convolution itself runs GIL-free (rust/src/lib.rs `py.allow_threads`), but the
+    # worker still needs the GIL for its per-block Python glue — and in `--ui cockpit` the main
+    # thread repaints the whole Dear PyGui canvas every frame (hundreds of `dpg.draw_*` calls),
+    # holding the GIL. At CPython's default 5 ms switch interval the worker waited up to 5 ms for
+    # the GIL each time it needed it, several times per block, compounding into ~150 ms stalls that
+    # only a huge FIFO cushion could mask (console was clean at 20 ms; cockpit needed ~200 ms —
+    # journal 76). A 0.5 ms interval hands the GIL back ~10x sooner, so the cockpit no longer forces
+    # a deep cushion. Process-global and harmless to the console/bench paths (no contention there).
+    import sys
+    sys.setswitchinterval(0.0005)
     worker = threading.Thread(target=render_worker, name="render", daemon=True)
     worker.start()
     in_stream.start_stream()
