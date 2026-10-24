@@ -107,8 +107,8 @@
     wireToggle("hpeq-toggle", "set_hpeq");
     if (cfg.hp_models) wireDropdown("set-hpmodel", () => cfg.hp_models, "set_hp_model");
 
-    // --- footer ---
-    const close = () => call("window_close");
+    // --- footer --- (this is a separate window; closing it must NOT quit the app)
+    const close = () => window.close();
     $("settings-close").addEventListener("click", close);
     $("settings-cancel").addEventListener("click", close);
     $("settings-apply").addEventListener("click", () => { call("settings_apply"); close(); });

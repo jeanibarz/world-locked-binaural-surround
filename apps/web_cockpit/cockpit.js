@@ -140,7 +140,7 @@
       const on = pt.getAttribute("aria-checked") !== "true";
       pt.setAttribute("aria-checked", on ? "true" : "false"); call("set_predict", on);
     });
-    const sb = $("settings-btn"); if (sb) sb.addEventListener("click", () => call("open_settings"));
+    const sb = $("settings-btn"); if (sb) sb.addEventListener("click", () => window.open("/settings.html", "cockpit-settings", "width=576,height=1012"));
     const rc = $("recenter-btn"); if (rc) rc.addEventListener("click", () => call("recenter"));
     const ss = $("shuffle-start"); if (ss) ss.addEventListener("click", () => call("blind_shuffle_start"));
 
@@ -153,7 +153,10 @@
       abA.addEventListener("click", () => { abA.classList.add("ab-active"); abB.classList.remove("ab-active"); call("blind_play", "A"); });
       abB.addEventListener("click", () => { abB.classList.add("ab-active"); abA.classList.remove("ab-active"); call("blind_play", "B"); });
     }
-    document.querySelectorAll(".tb-btn").forEach((b) => b.addEventListener("click", () => call("window_" + b.dataset.win)));
+    document.querySelectorAll(".tb-btn").forEach((b) => b.addEventListener("click", () => {
+      call("window_" + b.dataset.win);               // min/max are server no-ops in a browser
+      if (b.dataset.win === "close") window.close();  // close button also closes this window
+    }));
   }
 
   // expose (for tests / manual injection)
