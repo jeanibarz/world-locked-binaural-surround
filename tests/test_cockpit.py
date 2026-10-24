@@ -86,16 +86,18 @@ def _diag(**over):
     return classify(**base)
 
 
-def test_build_view_measured_has_three_components():
+def test_build_view_measured_has_four_components():
     diag = _diag(measured_pose_age_ms=35.0, measured_pose_age_p95_ms=50.0,
                  measured_pose_age_p99_ms=62.0, measured_pose_age_n=200,
                  measured_stale_ms=22.0, measured_queue_ms=13.0, measured_device_ms=13.0)
     v = C.build_view(diag, latency_samples=[30, 35, 40, 48, 60], rate_hz=58.0,
                      method="nearest", backend="rust", facing_label="FL")
     assert v.measured is True
-    assert len(v.components) == 3
-    assert [c.label for c in v.components] == ["stale", "queue", "device"]
-    assert v.components[0].ms == pytest.approx(22.0)
+    # the camera front (estimated) is now shown first, so the waterfall sums to the headline
+    assert len(v.components) == 4
+    assert [c.label for c in v.components] == ["capture", "stale", "queue", "device"]
+    assert v.components[0].ms == pytest.approx(1000.0 / 58.0, abs=0.1)  # 1 frame at 58 Hz
+    assert v.components[1].ms == pytest.approx(22.0)                     # stale
     assert "n=200" in v.detail
 
 

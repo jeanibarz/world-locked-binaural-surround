@@ -299,6 +299,9 @@ def build_view(
         detail = (f"p95 {diag.pose_age_p95_ms:.0f} · p99 {diag.pose_age_p99_ms:.0f} ms"
                   f" · n={diag.pose_age_n}")
         components = (
+            # camera front (estimated, hence MUTED) + the three measured parts — together these
+            # now sum to the head-move-to-ear headline, so the waterfall adds up.
+            LatencyComponent("capture", diag.pose_interval_ms, MUTED),
             LatencyComponent("stale", diag.pose_age_stale_ms, BAD),
             LatencyComponent("queue", diag.pose_age_queue_ms, ACTIVE),
             LatencyComponent("device", diag.pose_age_device_ms, ACCENT),
