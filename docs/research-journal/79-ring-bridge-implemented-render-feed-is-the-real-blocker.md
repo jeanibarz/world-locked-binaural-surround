@@ -103,3 +103,32 @@ nothing non-silent ever reached it in the VM.
 
 Recommended order: **(2) fix VM volume** (cheap, zero host risk) → if it works, the ring is proven and
 only then consider **(1) the host install** for the real end-to-end + listen test.
+
+## Update 2 — volume ruled out; the VM audio engine renders silence, period
+
+Installed `pycaw` and set **all 8 SYSVAD endpoints to vol=1.00, mute=0** (confirmed read-back), then
+re-ran the matrix: **still silent across every endpoint × API**. So it is **not** mute/volume. The
+conclusion is firm: **`audiodg` in this headless Hyper-V VM does not transfer the client's samples
+into the virtual device's render DMA** — it opens and runs the render stream (a silent WAV is written
+for the full playback duration) but renders silence. A VM with no real audio hardware/session simply
+does not drive the engine to produce real output into a virtual endpoint. **The VM cannot validate
+the render-DMA / loopback data path at all** — which retroactively explains *every* zero in this
+investigation (pull, non-pull, Plane-T whole-DMA scan, ring): there was never non-silent audio in the
+buffer because the VM never put any there.
+
+**So the only place to validate real passthrough is the host**, where real audio demonstrably flows
+into the device (the owner's Spotify etc. produced the tone-loopback earlier; a real audio session
+exists). The decisive test is: **install the ring-bridge driver on the host, play real audio, confirm
+the loopback carries it** (and then the world-locked listen test). That is:
+- a **host driver swap** (journal-70 idle-first rule; temporarily replaces the PR-#108 SYSVAD build
+  the owner runs — reversible by reinstalling it),
+- with a small residual **BSOD risk** inherent to any kernel-driver install, and
+- it needs the **owner's audio + ears** to confirm the end result.
+
+Because that is materially riskier and more intrusive than the VM work (it touches the owner's main
+machine's audio driver), it is **gated on the owner's explicit go-ahead**, not done autonomously.
+
+**Net of the whole arc:** the data-plane mechanism is **settled and built** (render→capture ring
+bridge, per MS + OpenAudioCable; compiles, Win11-signs, installs, loads clean, no bugcheck). The VM
+cannot prove it carries real audio because the VM engine renders silence. The one remaining action is
+the host install + real-audio test — the owner's call.
