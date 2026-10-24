@@ -906,7 +906,29 @@ def main(argv=None) -> int:
 
         if args.ui == "web":
             import cockpit_web as CW
-            win_ck = CW.WebCockpit(title=f"World-Locked Binaural Surround — webcam {cam_index}")
+            # reopen at the last window size the owner left (persisted on resize); fall back to the
+            # design default on first run / a bad file.
+            _win_path = _cfg_dir / "window.json"
+            _w0, _h0 = 1320, 864
+            try:
+                _wj = json.loads(_win_path.read_text(encoding="utf-8"))
+                if 600 <= int(_wj["w"]) <= 10000 and 400 <= int(_wj["h"]) <= 10000:
+                    _w0, _h0 = int(_wj["w"]), int(_wj["h"])
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
+            win_ck = CW.WebCockpit(
+                title=f"World-Locked Binaural Surround — webcam {cam_index}", width=_w0, height=_h0)
+
+            def _save_window_size(w, h) -> None:  # noqa: ANN001
+                try:
+                    if 600 <= int(w) <= 10000 and 400 <= int(h) <= 10000:
+                        _win_path.parent.mkdir(parents=True, exist_ok=True)
+                        tmp = _win_path.with_suffix(".json.tmp")
+                        tmp.write_text(json.dumps({"w": int(w), "h": int(h)}), encoding="utf-8")
+                        os.replace(tmp, _win_path)
+                except (OSError, ValueError):
+                    pass
+            win_ck.on_window_size = _save_window_size
         else:
             import cockpit_view as CK
             win_ck = CK.CockpitWindow(title=f"World-Locked Binaural Surround — webcam {cam_index}")

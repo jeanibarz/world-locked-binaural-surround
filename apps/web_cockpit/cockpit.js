@@ -225,6 +225,15 @@
     wire();
     buildHistogram(SAMPLE.bins, null);  // sample histogram so the page matches the design before data
     renderBufferCells({ fill_blocks: 7, cushion_blocks: 6, capacity: 12 });  // sample buffer meter
-    if (location.protocol.indexOf("http") === 0) { connect(); startCamera(); }  // live feed when served
+    if (location.protocol.indexOf("http") === 0) {
+      connect(); startCamera();
+      // remember the window size: report it (debounced) on resize so the engine reopens at this
+      // size next launch. outerWidth/Height is what Chrome's --window-size controls.
+      let wsT;
+      window.addEventListener("resize", () => {
+        clearTimeout(wsT);
+        wsT = setTimeout(() => call("window_size", window.outerWidth, window.outerHeight), 700);
+      });
+    }
   });
 })();

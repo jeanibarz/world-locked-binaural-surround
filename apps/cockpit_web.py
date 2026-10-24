@@ -251,7 +251,7 @@ class WebCockpit:
         for name in ("predict", "recenter", "method", "backend", "block", "cushion", "exclusive",
                      "hrir", "hrir_blind", "comp", "camera", "cam_format", "place_test", "test",
                      "solo", "rotate", "quit", "loc_start", "loc_answer", "loc_stop",
-                     "blind_result", "reset_defaults",
+                     "blind_result", "reset_defaults", "window_size",
                      "settings_begin", "settings_commit", "settings_cancel"):
             setattr(self, "on_" + name, (lambda *a, **k: None))
 
@@ -331,6 +331,7 @@ class WebCockpit:
             "set_solo": lambda: self.on_solo(bool(args[0])),
             "set_rotate": lambda: self.on_rotate(bool(args[0])),
             "reset_defaults": self.on_reset_defaults,
+            "window_size": lambda: self.on_window_size(int(args[0]), int(args[1])),
             "settings_begin": self.on_settings_begin,    # dialog opened: snapshot + defer saving
             "settings_commit": self.on_settings_commit,  # Confirm: persist the previewed settings
             "settings_cancel": self.on_settings_cancel,  # Cancel/close: restore the snapshot
