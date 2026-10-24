@@ -21,3 +21,6 @@ models/
 .vscode/
 .ruff_cache/
 rust/target/
+
+# Runtime crash-safe settings store (RFC rfc-crash-safe-settings) — user-local, never committed
+cockpit_config/

@@ -260,6 +260,21 @@ def main(argv=None) -> int:
                         "the queue term as clock skew (A1 resampler) vs jitter/burst (Track B). "
                         "Off by default; measure at a fixed --block/--latency-ms.")
     args = p.parse_args(argv)
+
+    # --- crash-safe settings (RFC rfc-crash-safe-settings v2): overlay persisted user-knobs onto the
+    # launch flags (settings win; host identity is untouched), with a one-step DEFAULTS backstop. ---
+    import settings_binding as _SB
+    from pathlib import Path as _CfgPath
+    from binaural_headtracker.config_store import ConfigStore as _ConfigStore
+    _cfg_dir = (_CfgPath(args.model).parent if args.model else _CfgPath(".")) / "cockpit_config"
+    settings_store = _ConfigStore(_cfg_dir)
+    saved_cfg, _dropped_keys, _settings_backstop = _SB.load_effective(settings_store, args)
+    settings_store.mark_starting()  # cleared once audio is up (if the start never completes -> defaults)
+    if _dropped_keys:
+        print(f"settings: dropped invalid keys {_dropped_keys} (using defaults for them)")
+    if _settings_backstop:
+        print("settings: previous start did not complete — started with DEFAULTS; "
+              f"your settings were moved to {settings_store.bad_path}")
     pull_mode = args.pull_sysvad  # Approach A: drive our SYSVAD device from the output clock
     # Note: the pull path needed a 200 ms cushion in journal 75, but journal 76 found that was the
     # cockpit starving the render worker on the GIL, not an intrinsic cost — fixed by the tighter
@@ -369,6 +384,8 @@ def main(argv=None) -> int:
     hrir_sets = discover_sets(args.hrir_sets_dir)
     sets_by_name = {s.name: s for s in hrir_sets}
     cur_set = {"name": hrir_sets[0].name}
+    if saved_cfg.get("hrir") in {s.name for s in hrir_sets}:  # apply a persisted HRIR set if it exists
+        cur_set["name"] = saved_cfg["hrir"]
     if len(hrir_sets) > 1:
         print(f"HRIR sets ({len(hrir_sets)}): " + ", ".join(s.name for s in hrir_sets)
               + " — switch live in the cockpit")
@@ -812,6 +829,8 @@ def main(argv=None) -> int:
         print(f"WASAPI exclusive unavailable ({exc!r}); using shared mode.")
         out_ctx = _open_output(False)
         print(f"output: WASAPI shared ({out_ctx.latency * 1000:.0f} ms device buffer)")
+    settings_store.mark_started()  # audio opened -> the risky start completed; clear the backstop
+    _reset_req = {"v": False}  # set by the cockpit's reset hook; consumed after the loop exits
     def _run_cockpit() -> bool:
         """Drive the live engine through the Dear PyGui cockpit (B6.12 slice 2).
 
@@ -830,7 +849,8 @@ def main(argv=None) -> int:
             win_ck = CK.CockpitWindow(title=f"world-lock passthrough — webcam {cam_index}")
         q = {"stop": False, "restart": False}
         cur = {"backend": ("rust" if args.rust else "gpu" if args.gpu else "cpu"),
-               "predict": args.predict, "comp": "ctf"}
+               "predict": args.predict,
+               "comp": (saved_cfg.get("comp") if saved_cfg.get("comp") in ("ctf", "df") else "ctf")}
         predictor_ck = PosePredictor()
 
         def _recenter() -> None:
@@ -1110,12 +1130,43 @@ def main(argv=None) -> int:
             except Exception as exc:  # noqa: BLE001
                 win_ck.toast(f"A/B save failed: {exc}", "error")
 
+        def _reset_defaults() -> None:
+            """Reset-to-defaults (settings dialog). Flag it, stop the loop, and relaunch; the actual
+            store.reset() runs after the loop exits (race-free: no auto-save can overwrite it) so the
+            relaunch loads the built-in defaults. Does NOT touch head-tracking calibration."""
+            win_ck.toast("Settings reset to defaults — reloading…", "info", seconds=4)
+            _reset_req["v"] = True
+            q["restart"] = True
+            q["stop"] = True
+
+        # live-reversible auto-revert (RFC rfc-crash-safe-settings v2): block/cushion are applied
+        # live, then watched for a short window — if the output FIFO starts starving, snap back to
+        # the last-good value so a too-aggressive setting can't leave the stream permanently broken.
+        _REVERT_WINDOW_S = 3.0
+        _REVERT_UNDERRUNS = 6
+        _watch: dict = {"revert": None, "t0": 0.0, "knob": ""}
+
+        def _arm_watch(knob: str, revert) -> None:  # noqa: ANN001
+            _watch["knob"], _watch["revert"], _watch["t0"] = knob, revert, time.monotonic()
+
+        def _cushion_user(ms) -> None:  # noqa: ANN001 — settings-dialog cushion change (watched)
+            old_ms = cushion * blk["n"] / brir.samplerate * 1000.0
+            _set_cushion(ms)
+            _arm_watch("Cushion", lambda: _set_cushion(old_ms))
+
+        def _block_user(n) -> None:  # noqa: ANN001 — settings-dialog block change (watched)
+            old_n = blk["n"]
+            _set_block(n)
+            if blk["n"] != old_n:  # _set_block no-ops on unchanged/invalid sizes -> don't arm
+                _arm_watch("Block size", lambda: _set_block(old_n))
+
         win_ck.on_quit = lambda: q.__setitem__("stop", True)
+        win_ck.on_reset_defaults = _reset_defaults
         win_ck.on_recenter = _recenter
         win_ck.on_method = _set_method
         win_ck.on_backend = _set_backend
-        win_ck.on_cushion = _set_cushion
-        win_ck.on_block = _set_block
+        win_ck.on_cushion = _cushion_user
+        win_ck.on_block = _block_user
         win_ck.on_test = _tog("on")
         win_ck.on_solo = _tog("solo")
         win_ck.on_rotate = _tog("rotate")
@@ -1143,6 +1194,7 @@ def main(argv=None) -> int:
         times_ck: deque[float] = deque(maxlen=60)
         miss = 0
         predict_ms_used = 0.0  # persist across frames so a no-face frame doesn't blink it to 0
+        _last_knobs = dict(saved_cfg)  # auto-save: persist only when a knob actually changes
         try:
             while win_ck.running() and not q["stop"]:
                 if cb_error:
@@ -1206,6 +1258,16 @@ def main(argv=None) -> int:
                     fifo_fill = len(out_fifo)
                 recent_under = sum(1 for t in tuple(meter["under_ts"]) if now - t < 2.0)
                 recent_over = sum(1 for t in tuple(meter["over_ts"]) if now - t < 2.0)
+                if _watch["revert"] is not None:  # live-reversible watch window open
+                    since = sum(1 for t in tuple(meter["under_ts"]) if t > _watch["t0"])
+                    if since >= _REVERT_UNDERRUNS:        # change starved the stream -> snap back
+                        rv, kn = _watch["revert"], _watch["knob"]
+                        _watch["revert"] = None
+                        rv()
+                        win_ck.toast(f"{kn} change caused dropouts — reverted to last-good",
+                                     "error", seconds=5)
+                    elif now - _watch["t0"] >= _REVERT_WINDOW_S:  # survived -> accept the change
+                        _watch["revert"] = None
                 out_lat_ms = float(getattr(out_ctx, "latency", 0.0) or 0.0) * 1000.0
                 out_lat["ms"] = out_lat_ms
                 rlabel = main_rend["label"] + ("  · test ON" if t_on else "")
@@ -1261,6 +1323,18 @@ def main(argv=None) -> int:
                     dropout_over_ts=tuple(meter["over_ts"]),
                     dropout_under_ts=tuple(meter["under_ts"]), now=now)
                 win_ck.set_test_state(t_on, t_world_az)  # reflect engine state on the radar
+                _cur_knobs = _SB.current_knobs(
+                    method=test["method"], backend=cur["backend"], block=blk["n"],
+                    cushion_blocks=cushion, exclusive=bool(args.exclusive),
+                    hrir=cur_set["name"], comp=cur["comp"], predict=cur["predict"],
+                    camera=cam_index, cam_w=cam_w, cam_h=cam_h, cam_fps=cam_fps,
+                    hp_eq=(args.output_eq is not None))
+                if _cur_knobs != _last_knobs and not q["stop"]:  # persist a change (atomic+durable)
+                    _last_knobs = _cur_knobs
+                    try:
+                        settings_store.save(_cur_knobs)
+                    except Exception:  # noqa: BLE001 — persistence must never crash the engine
+                        pass
                 win_ck.update(view, camera_rgb=disp, landmarks=landmarks, pose=pose,
                               world_az=world_az, channels=brir.channels,
                               facing_i=nearest_i, head_deg=head_deg,
@@ -1283,6 +1357,9 @@ def main(argv=None) -> int:
     try:
         if args.ui in ("cockpit", "web"):
             restart = _run_cockpit()
+            if _reset_req["v"]:  # loop has exited -> no auto-save can race the reset write
+                settings_store.reset()
+                print("settings: reset to defaults (reloading)")
         while args.ui == "console":
             if cb_error:
                 print(f"audio callback error: {cb_error[0]!r}")

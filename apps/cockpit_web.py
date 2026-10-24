@@ -240,7 +240,7 @@ class WebCockpit:
         for name in ("predict", "recenter", "method", "backend", "block", "cushion", "exclusive",
                      "hrir", "hrir_blind", "comp", "camera", "cam_format", "place_test", "test",
                      "solo", "rotate", "quit", "loc_start", "loc_answer", "loc_stop",
-                     "blind_result"):
+                     "blind_result", "reset_defaults"):
             setattr(self, "on_" + name, (lambda *a, **k: None))
 
     # ---- seed ----
@@ -309,6 +309,7 @@ class WebCockpit:
             "set_test": lambda: self.on_test(bool(args[0])),
             "set_solo": lambda: self.on_solo(bool(args[0])),
             "set_rotate": lambda: self.on_rotate(bool(args[0])),
+            "reset_defaults": self.on_reset_defaults,
             "blind_shuffle_start": lambda: self.toast(
                 "blind A/B - coming to its own panel", "info"),
             "window_close": self._close,
