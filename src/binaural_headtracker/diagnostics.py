@@ -67,6 +67,7 @@ class Diagnosis:
     pose_age_stale_ms: float    # of the measured pose age: the pose→render part (camera + worker)
     pose_age_queue_ms: float    # the render→playout part (output FIFO wait)
     pose_age_device_ms: float   # the device output buffer
+    pose_interval_ms: float     # camera front: sensor+readout+USB before cap.read (est. = 1 frame)
     recent_underruns: int
     recent_overflows: int    # FIFO overflow drops (clock drift / capture bursts) — also audible
     fifo_fill_blocks: float
@@ -225,6 +226,7 @@ def classify(
         pose_age_stale_ms=max(0.0, float(measured_stale_ms)),
         pose_age_queue_ms=max(0.0, float(measured_queue_ms)),
         pose_age_device_ms=max(0.0, float(measured_device_ms)),
+        pose_interval_ms=max(0.0, pose_interval_ms),
         recent_underruns=recent_underruns,
         recent_overflows=max(0, int(recent_overflows)),
         fifo_fill_blocks=fifo_fill_blocks,
