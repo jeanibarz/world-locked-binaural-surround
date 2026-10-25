@@ -15,7 +15,8 @@ product**; Track D is interim de-risking, not the destination. All open question
 > **expected** outcome of the Rust arc is a *permanent* Python vision sidecar + bundled interpreter,
 > i.e. Python is not actually eliminated — v1 priced the hoped outcome, not the likely one. v2
 > splits the work into an independent **Distributable track** (ships now, no rewrite) and an
-> honestly-priced, best-effort **Rust + Studio track**, fixes the filter-pack contract to be
+> honestly-priced, committed **Rust + Studio track** (the zero-Python north star, with one escalation
+> gate), fixes the filter-pack contract to be
 > direction-indexed, and reframes the pose spike around the real target.
 
 ---
@@ -267,7 +268,8 @@ ambition-amplifier) + the mandatory post-round-1 empirical checkpoint.
 
 - **failure-mode-analyst (critical, source-verified):** the pose spike tested the wrong hypothesis
   (FaceGeometry ≠ TFLite+PnP) → **R-S1 re-scoped**. Expected outcome is a permanent sidecar +
-  bundled Python → **G4 reframed best-effort; base case priced; OQ3**. Missing manifest fields
+  bundled Python → **base case priced for OQ3; operator then set G4 = committed zero-Python with one
+  escalation gate (sidecar interim-only)**. Missing manifest fields
   (convention, gain, integrity, grid) → **added**. MMCSS + dual-clock cushion absent from feasibility
   → **R-S2 now includes them**. Embeddable-Python bundle unproven → **M-D3 go/no-go proof**.
   Samplerate refusal breaks 44.1k → **bounded resample / multi-rate (OQ5)**.
