@@ -28,3 +28,5 @@ cockpit_config/
 # Tauri build output
 src-tauri/target/
 src-tauri/gen/
+!src-tauri/dist/
+!src-tauri/dist/index.html
