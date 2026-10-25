@@ -19,12 +19,44 @@ pub fn bundled_default() -> PathBuf {
     exe_dir().join("packs").join("default")
 }
 
-/// Does `dir` look like a BRIR pack? (baked WAVs or a filterpack manifest)
+/// Does `dir` hold a pack the engine can actually load? This must agree with [`BrirPack::load`],
+/// which reads `<ch>_L.wav` + `<ch>_R.wav` for every 7.1 channel — so we require that full baked set
+/// here (BUG-16). Accepting a `filterpack.json`-only or partial-WAV directory made the engine list
+/// and resolve a pack it then failed to open with a confusing `L_L.wav` error; the `filterpack.json`
+/// manifest path is not implemented in the loader, so it is not treated as a pack.
 pub fn is_pack_dir(dir: &Path) -> bool {
     dir.is_dir()
-        && (dir.join("filterpack.json").is_file()
-            || dir.join("L_L.wav").is_file()
-            || dir.join("C_L.wav").is_file())
+        && crate::geometry::CHANNELS_7P1.iter().all(|ch| {
+            dir.join(format!("{ch}_L.wav")).is_file() && dir.join(format!("{ch}_R.wav")).is_file()
+        })
+}
+
+/// Validate a user-supplied pack name: a single path component, no separators / `..` / drive colon,
+/// so an import can't escape the packs directory (BUG-26 path traversal).
+fn valid_pack_name(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains(':')
+        && !name.contains('\0')
+}
+
+/// Recursively copy `src` into `dst` (both directories), preserving nested files.
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+    for entry in std::fs::read_dir(src).map_err(|e| e.to_string())? {
+        let p = entry.map_err(|e| e.to_string())?.path();
+        let Some(name) = p.file_name() else { continue };
+        let to = dst.join(name);
+        if p.is_dir() {
+            std::fs::create_dir_all(&to).map_err(|e| format!("create {}: {e}", to.display()))?;
+            copy_dir_recursive(&p, &to)?;
+        } else if p.is_file() {
+            std::fs::copy(&p, &to).map_err(|e| format!("copy {}: {e}", p.display()))?;
+        }
+    }
+    Ok(())
 }
 
 /// A discovered pack: its display name and directory.
@@ -65,24 +97,26 @@ pub fn resolve_pack(name: &str) -> Option<PathBuf> {
 }
 
 /// Import a pack directory into `%APPDATA%\WLBS\packs\<name>` (name defaults to the source basename).
-/// Copies the pack's files (flat); refuses a source that is not a pack. Returns the destination.
+/// Refuses a source that is not a loadable pack and a name that would escape the packs dir. The
+/// destination is cleared first, so a re-import can't leave stale WAVs behind, and nested files are
+/// copied (BUG-26). Returns the destination.
 pub fn import_pack(src: &Path, name: Option<&str>) -> Result<PathBuf, String> {
     if !is_pack_dir(src) {
-        return Err(format!("{} is not a BRIR pack (no WAVs / filterpack.json)", src.display()));
+        return Err(format!("{} is not a loadable BRIR pack (needs the full baked WAV set)", src.display()));
     }
     let name = name
         .map(str::to_string)
         .or_else(|| src.file_name().map(|s| s.to_string_lossy().into_owned()))
         .ok_or_else(|| "cannot determine pack name".to_string())?;
-    let dst = user_packs_dir().join(&name);
-    std::fs::create_dir_all(&dst).map_err(|e| format!("create {}: {e}", dst.display()))?;
-    for entry in std::fs::read_dir(src).map_err(|e| e.to_string())? {
-        let p = entry.map_err(|e| e.to_string())?.path();
-        if p.is_file() {
-            let to = dst.join(p.file_name().unwrap());
-            std::fs::copy(&p, &to).map_err(|e| format!("copy {}: {e}", p.display()))?;
-        }
+    if !valid_pack_name(&name) {
+        return Err(format!("invalid pack name {name:?} (no path separators, '..', or drive colon)"));
     }
+    let dst = user_packs_dir().join(&name);
+    if dst.exists() {
+        std::fs::remove_dir_all(&dst).map_err(|e| format!("clear {}: {e}", dst.display()))?;
+    }
+    std::fs::create_dir_all(&dst).map_err(|e| format!("create {}: {e}", dst.display()))?;
+    copy_dir_recursive(src, &dst)?;
     Ok(dst)
 }
 
@@ -99,14 +133,35 @@ mod tests {
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().subsec_nanos() as u64
     }
 
+    /// Write the full baked 7.1 WAV set (`<ch>_L.wav`/`<ch>_R.wav`) that `BrirPack::load` reads.
+    fn write_baked_set(dir: &Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        for ch in crate::geometry::CHANNELS_7P1 {
+            std::fs::write(dir.join(format!("{ch}_L.wav")), b"RIFF....WAVE").unwrap();
+            std::fs::write(dir.join(format!("{ch}_R.wav")), b"RIFF....WAVE").unwrap();
+        }
+    }
+
     #[test]
-    fn detects_and_imports_a_pack() {
+    fn requires_the_full_baked_set() {
+        let root = tmp();
+        let partial = root.join("partial");
+        std::fs::create_dir_all(&partial).unwrap();
+        for f in ["L_L.wav", "L_R.wav", "C_L.wav"] {
+            std::fs::write(partial.join(f), b"RIFF....WAVE").unwrap();
+        }
+        assert!(!is_pack_dir(&partial), "a partial WAV set must not count as a pack (BUG-16)");
+        let full = root.join("full");
+        write_baked_set(&full);
+        assert!(is_pack_dir(&full));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn detects_imports_and_clears_on_reimport() {
         let root = tmp();
         let src = root.join("mypack");
-        std::fs::create_dir_all(&src).unwrap();
-        for f in ["L_L.wav", "L_R.wav", "C_L.wav"] {
-            std::fs::write(src.join(f), b"RIFF....WAVE").unwrap();
-        }
+        write_baked_set(&src);
         assert!(is_pack_dir(&src));
 
         // point APPDATA at our tmp so user_packs_dir() lands there
@@ -114,8 +169,27 @@ mod tests {
         let dst = import_pack(&src, Some("imported")).unwrap();
         assert!(dst.ends_with("WLBS/packs/imported") || dst.ends_with("WLBS\\packs\\imported"));
         assert!(dst.join("L_L.wav").is_file());
-        assert_eq!(resolve_pack("imported"), Some(dst));
+        assert_eq!(resolve_pack("imported"), Some(dst.clone()));
+
+        // a stale file in the destination is cleared on re-import (BUG-26)
+        std::fs::write(dst.join("STALE.wav"), b"old").unwrap();
+        let dst2 = import_pack(&src, Some("imported")).unwrap();
+        assert_eq!(dst2, dst);
+        assert!(!dst.join("STALE.wav").exists(), "re-import must clear stale files");
+        assert!(dst.join("SR_R.wav").is_file());
+
         std::env::remove_var("APPDATA");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn rejects_traversal_names() {
+        let root = tmp();
+        let src = root.join("mypack");
+        write_baked_set(&src); // a valid pack, so the name check is what fails
+        for bad in ["../evil", "a/b", "..", ".", "C:evil", ""] {
+            assert!(import_pack(&src, Some(bad)).is_err(), "name {bad:?} must be refused");
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 
