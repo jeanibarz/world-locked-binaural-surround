@@ -1,0 +1,76 @@
+{
+  "comp": "ctf",
+  "convention": {
+    "angle_units": "degrees",
+    "azimuth_positive": "counterclockwise",
+    "azimuth_zero": "front",
+    "pitch_sign": 1,
+    "roll_sign": 1,
+    "yaw_sign": 1
+  },
+  "filterpack_version": 1,
+  "gain": {
+    "integrated_lufs": -23.0,
+    "peak_dbfs": -1.0
+  },
+  "grid": null,
+  "integrity": {
+    "algo": "sha256",
+    "files": {
+      "C.wav": "1f70b92330ccaa5846dc1ece8094519ffaa26cc59f2616e65993aeaf63f79750",
+      "L.wav": "bfcbb4365b3828eec0c36c24469df673aac68ea15b216003c8cb51feaeecb24f",
+      "LFE.wav": "8199f022c63126d445cf3f2990a41f0dc2b8575151385a9fd5a3138d2d6e450e",
+      "R.wav": "d4fabeeeb1b381e11e80e23081a2e91e553948ae30c7048d4b60120871f1919a",
+      "RL.wav": "65eac9600a7f70e8554acc7f72a252f4b8af597570b44dd1b8d435ad539f7366",
+      "RR.wav": "b037503953d5cbd886ac36c34f230b90b04efcaab82be97a27e497eed1bbfe10"
+    }
+  },
+  "ir_length": 64,
+  "layout": {
+    "channels": [
+      "L",
+      "R",
+      "C",
+      "LFE",
+      "RL",
+      "RR"
+    ],
+    "lfe": {
+      "channel": "LFE",
+      "mode": "brir"
+    },
+    "speakers": {
+      "C": {
+        "azimuth_deg": 0.0,
+        "ir": "C.wav"
+      },
+      "L": {
+        "azimuth_deg": 30.0,
+        "ir": "L.wav"
+      },
+      "LFE": {
+        "azimuth_deg": null,
+        "ir": "LFE.wav"
+      },
+      "R": {
+        "azimuth_deg": -30.0,
+        "ir": "R.wav"
+      },
+      "RL": {
+        "azimuth_deg": 110.0,
+        "ir": "RL.wav"
+      },
+      "RR": {
+        "azimuth_deg": -110.0,
+        "ir": "RR.wav"
+      }
+    }
+  },
+  "name": "owner-min-fixture",
+  "provenance": {
+    "license": "owner-redistributable",
+    "source": "synthetic-fixture",
+    "subject": "none"
+  },
+  "samplerate": 48000
+}
