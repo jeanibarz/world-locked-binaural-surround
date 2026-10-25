@@ -148,8 +148,9 @@ absorbs the ONNX-thread contention (underruns bounded, mostly model-load warmup,
    owner-pack baking is now zero-Python too. **Remaining (larger, separate "second product"):** the
    full studio — a Rust-native **SOFA/HDF5 reader + CTF/DF decomposition + densification + A/B
    analysis plots** (the import-third-party-DB path). Its Python form (M-D2) is the RFC-sanctioned
-   interim; the *delivered engine* already ships zero-Python without it. Recommend scoping the full
-   studio as its own initiative (owner product call on how much to build Rust-native now).
+   interim; the *delivered engine* already ships zero-Python without it. **Scoped as a separate future
+   product (operator decision): GitHub issue #142** (full Rust-native studio — SOFA/HDF5 reader +
+   CTF/DF decomposition + densification + A/B plots, RFC G5).
 6. **Track D (distributable)** — **DONE for the zero-Python engine** (M-D1/M-D2 were done). The
    engine now resolves every asset install-relative with **no hardcoded paths** (`assets.rs`: CLI →
    env → `<exe>/…` → `%APPDATA%\WLBS\`), scans `%APPDATA%\WLBS\packs`, and imports packs
