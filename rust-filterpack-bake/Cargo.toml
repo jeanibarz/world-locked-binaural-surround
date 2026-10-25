@@ -1,0 +1,18 @@
+[package]
+name = "filterpack_bake"
+version = "0.1.0"
+edition = "2021"
+description = "Zero-Python Rust baker: baked 7.1 BRIR WAVs -> filterpack (M-D1 format), round-tripping through the shared loader. The Track-S core that makes owner-pack baking need no interpreter (the full SOFA/CTF/DF studio is a separate, larger effort)."
+publish = false
+
+[[bin]]
+name = "filterpack_bake"
+path = "src/main.rs"
+
+[dependencies]
+hound = "3.5"
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+
+[profile.release]
+opt-level = 3

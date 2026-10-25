@@ -138,8 +138,18 @@ SSE shows **real tracked yaw** (−37.8° → 0.8° → 5.1° as the owner moves
 absorbs the ONNX-thread contention (underruns bounded, mostly model-load warmup, fewer with a larger
 `--latency-ms`; the render threads hold MMCSS Pro Audio — cleaner outside an Idle-capped test run).
 
-5. **Track S (studio):** M-D2's Python baker is the start; OQ1 = grow the core baker in the sibling
-   `binaural-localization`; a Rust-native baker makes the *product* zero-Python.
+5. **Track S (studio) — CORE DONE; full studio remaining.** The zero-Python **Rust baker**
+   (`rust-filterpack-bake`, bin `filterpack_bake`) bakes the owner's baked 7.1 BRIRs → a v1
+   filterpack (per-speaker int16 stereo WAV + `manifest.json` + sha256), with **no SOFA/HDF5**.
+   **Gate (measured): byte-for-byte equal to the Python `bake_baked_brir`** — int16-exact across all
+   8 channels + identical manifest content (channels/azimuths/sr/ir_len/comp/convention) ⇒ the shared
+   loader computes the same `canonical_digest` (the M-D2 round-trip gate). Committed parity test
+   (`tests/test_rust_baker_parity.py`, synthetic BRIRs) + 2 Rust unit tests; clippy clean. So
+   owner-pack baking is now zero-Python too. **Remaining (larger, separate "second product"):** the
+   full studio — a Rust-native **SOFA/HDF5 reader + CTF/DF decomposition + densification + A/B
+   analysis plots** (the import-third-party-DB path). Its Python form (M-D2) is the RFC-sanctioned
+   interim; the *delivered engine* already ships zero-Python without it. Recommend scoping the full
+   studio as its own initiative (owner product call on how much to build Rust-native now).
 6. **Track D (distributable)** — **DONE for the zero-Python engine** (M-D1/M-D2 were done). The
    engine now resolves every asset install-relative with **no hardcoded paths** (`assets.rs`: CLI →
    env → `<exe>/…` → `%APPDATA%\WLBS\`), scans `%APPDATA%\WLBS\packs`, and imports packs
