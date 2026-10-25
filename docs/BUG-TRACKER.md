@@ -12,8 +12,15 @@
 | BUG-08 | P1 | Fixed | PR1 |
 | BUG-09 | P1 | Fixed | PR1 (recenter wired with the control drain) |
 | BUG-17 | P2 | Fixed | PR1 |
-| BUG-04 | P1 | Partial | PR1 added the telemetry surface; `running=false` on output death pending PR2 |
-| BUG-03, 14, 15, 18–20, 23, 33 | P1/P2/P3 | Open | PR2 (audio robustness) |
+| BUG-03 | P1 | Fixed | PR2 `fix/audio-robustness` (hard-error on source/output/pack rate mismatch) |
+| BUG-04 | P1 | Fixed | PR2 (output exit flips `running` + surfaces the error) |
+| BUG-14 | P1 | Fixed | PR2 (retry transient capture reads; give up only after a sustained run) |
+| BUG-15 | P1 | Fixed | PR2 (Ctrl-C flips `running`; join audio threads; release devices) |
+| BUG-18 | P2 | Fixed | PR2 (exact match wins; ambiguous substring errors) |
+| BUG-19 | P2 | Fixed | PR2 (5.1 source; output endpoints with >2 channels) |
+| BUG-20 | P2 | Fixed | PR2 (Int24; reject unsupported formats at open) |
+| BUG-23 | P2 | Fixed | PR2 (poison-tolerant FIFO lock; lock-free ring noted as follow-up) |
+| BUG-33 | P3 | Partial | PR2 surfaces capture discontinuity flags; buffer-period tuning needs a live A/B |
 | BUG-10–12, 28–32, 34 | P1/P2/P3 | Open | PR3 (vision) |
 | BUG-13, 21, 27 | P1/P2 | Open | PR4 (DSP/perf) |
 | BUG-16, 22, 24, 25, 26 | P2 | Open | PR5 (lifecycle/packs) |

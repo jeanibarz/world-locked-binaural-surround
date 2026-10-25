@@ -45,7 +45,7 @@ mod engine {
     use control_plane::Cockpit;
     use render_core_lib::{GridRender, Lfe};
 
-    use crate::geometry::head_relative_azimuths;
+    use crate::geometry::{head_relative_azimuths, head_relative_azimuths_5p1};
     use crate::pack::BrirPack;
     use crate::telemetry::{self, LatencyHistogram, TeleInput};
 
@@ -273,6 +273,16 @@ mod engine {
         let running = Arc::new(AtomicBool::new(true));
         let out_status: Arc<Mutex<OutputStatus>> = Arc::new(Mutex::new(OutputStatus::default()));
 
+        // Ctrl-C flips `running` so the threads wind down and the WASAPI devices are released cleanly
+        // instead of being leaked (BUG-15). (On a Windows console-close the handler fires but may not
+        // finish the join before the OS reaps the process — Ctrl-C / `--secs` expiry is the clean path.)
+        {
+            let running = Arc::clone(&running);
+            if let Err(e) = ctrlc::set_handler(move || running.store(false, Ordering::Relaxed)) {
+                eprintln!("CTRLC handler not installed: {e}");
+            }
+        }
+
         // --- control-plane cockpit (tokio) ---
         let cockpit = Cockpit::new(web_dir, build_config(&settings, &cameras_json, &hrir_list, pack.samplerate));
         {
@@ -325,18 +335,23 @@ mod engine {
         }
 
         // --- output thread: drain the FIFO to the render endpoint ---
-        {
+        // The endpoint must run at the source/pack rate (checked in output_loop). On ANY output exit
+        // — error or clean — `running` is flipped so the render loop stops filling a FIFO nobody
+        // drains ("running but no sound"), and surfaces the error to telemetry (BUG-04).
+        let output_handle = {
             let fifo = Arc::clone(&fifo);
             let running = Arc::clone(&running);
             let output = output.clone();
             let out_status = Arc::clone(&out_status);
+            let expected_sr = pack.samplerate;
             std::thread::spawn(move || {
-                if let Err(e) = output_loop(&output, fifo, running, block, &out_status) {
+                if let Err(e) = output_loop(&output, fifo, Arc::clone(&running), block, expected_sr, &out_status) {
                     eprintln!("OUTPUT_ERROR {e}");
                     out_status.lock().unwrap().err = Some(e);
                 }
-            });
-        }
+                running.store(false, Ordering::Relaxed);
+            })
+        };
 
         // --- capture + render thread (this thread) ---
         init_com()?;
@@ -346,6 +361,21 @@ mod engine {
         let sfmt = src.format();
         println!("SOURCE {:?} sr={} ch={}", source, sfmt.sample_rate, sfmt.channels);
         let n_in = sfmt.channels as usize;
+
+        // Sample-rate reconciliation (BUG-03): the IRs are baked at the pack rate, so convolving a
+        // source at a different rate warps ITD/pitch and miscomputes the cushion/fade. No resampler
+        // yet → hard-error with a clear message rather than silently spatialising at the wrong rate.
+        if sfmt.sample_rate != pack.samplerate {
+            running.store(false, Ordering::Relaxed);
+            return Err(format!(
+                "source is {} Hz but the BRIR pack is {} Hz — use a matching-rate pack (no resampler yet)",
+                sfmt.sample_rate, pack.samplerate
+            )
+            .into());
+        }
+        if n_in == 6 {
+            println!("SOURCE 5.1 assumed layout L,R,C,LFE,SL,SR (side surrounds)");
+        }
 
         let mut render = build_render(&pack, n_in, block, latency_ms)?;
 
@@ -359,6 +389,8 @@ mod engine {
         let mut render_peak = 0.0f64;
         let mut lat = LatencyHistogram::new(120, 20, 0.0, 120.0);
         let mut snapshot: Option<Settings> = None; // live edit-session snapshot (begin/commit/cancel)
+        let mut read_errs = 0u32; // consecutive capture-read errors (transient → retry; BUG-14)
+        let mut discontinuities = 0u64; // device-signalled capture glitches (BUG-33)
         while running.load(Ordering::Relaxed) {
             if run_secs > 0.0 && start.elapsed().as_secs_f64() >= run_secs {
                 break;
@@ -434,7 +466,7 @@ mod engine {
                     };
                     if render_ok {
                         block = settings.block; // only advance the live block once render matches it
-                        *fifo.lock().unwrap() =
+                        *lock_fifo(&fifo) =
                             CushionFifo::new(cushion, cushion * 2, vec![0.0f32; block * 2]);
                         in_acc.clear();
                         println!("RECONFIG block={block} cushion={cushion}");
@@ -446,24 +478,47 @@ mod engine {
             // A capture timeout no longer skips telemetry: we fall through to the heartbeat below so
             // an idle source keeps the cockpit live (BUG-05). A short timeout keeps the control drain
             // and heartbeat responsive (~20 Hz) even when an idle loopback emits no capture events.
-            if src.read(&mut buf, 50)?.is_some() {
+            // A transient read error is retried rather than aborting the whole engine (BUG-14); only
+            // a sustained run of errors (device truly gone) gives up.
+            let flags = match src.read(&mut buf, 50) {
+                Ok(f) => { read_errs = 0; f }
+                Err(e) => {
+                    read_errs += 1;
+                    eprintln!("CAPTURE_READ_ERROR ({read_errs}) {e}");
+                    if read_errs >= 200 {
+                        running.store(false, Ordering::Relaxed);
+                        return Err(format!("capture failed {read_errs}× in a row: {e}").into());
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                    continue;
+                }
+            };
+            if let Some(flags) = flags {
+                if flags.discontinuity {
+                    discontinuities += 1; // device-signalled glitch (BUG-33) — surfaced in telemetry
+                }
                 last_audio = Instant::now();
                 in_acc.extend_from_slice(&buf);
                 // Sample the head yaw now, after the blocking read, so the azimuths the block renders
-                // with are fresh (not up to a device period / timeout stale).
-                let az = head_relative_azimuths(*pose.yaw.lock().unwrap(), yaw_sign);
+                // with are fresh (not up to a device period / timeout stale). The azimuth layout
+                // depends on the channel count (5.1 side-surrounds differ from the 7.1 rears).
+                let yaw = *pose.yaw.lock().unwrap();
+                let az: Vec<f64> = match n_in {
+                    6 => head_relative_azimuths_5p1(yaw, yaw_sign).to_vec(),
+                    _ => head_relative_azimuths(yaw, yaw_sign)[..n_in.min(8)].to_vec(),
+                };
                 let block_time = block as f64 / pack.samplerate.max(1) as f64;
                 while in_acc.len() >= block * n_in {
                     let pcm: Vec<f32> = in_acc.drain(..block * n_in).collect();
                     let pcm64: Vec<f64> = pcm.iter().map(|&v| v as f64).collect();
                     let mut out = vec![0.0f64; block * 2];
                     let t0 = Instant::now();
-                    render.process_into(&pcm64, &az[..n_in.min(8)], &mut out);
+                    render.process_into(&pcm64, &az, &mut out);
                     let pct = if block_time > 0.0 { t0.elapsed().as_secs_f64() / block_time * 100.0 } else { 0.0 };
                     render_ema = render_ema * 0.9 + pct * 0.1;
                     if pct > render_peak { render_peak = pct; }
                     let stereo: StereoBlock = out.iter().map(|&v| v as f32).collect();
-                    fifo.lock().unwrap().push(stereo);
+                    lock_fifo(&fifo).push(stereo);
                     rendered_blocks += 1;
                 }
             }
@@ -474,7 +529,7 @@ mod engine {
                 let source_idle = last_audio.elapsed() >= Duration::from_millis(250);
                 render_peak = (render_peak * 0.95).max(render_ema); // slow decay toward the mean
                 let (cushion_now, fill_now, st) = {
-                    let f = fifo.lock().unwrap();
+                    let f = lock_fifo(&fifo);
                     (f.cushion(), f.len(), f.stats())
                 };
                 lat.push(telemetry::estimate_total_ms(block, pack.samplerate, cushion_now, render_ema));
@@ -491,6 +546,7 @@ mod engine {
                     fifo_capacity: cushion_now * 2,
                     underruns: st.underruns,
                     overflow_drops: st.overflow_drops,
+                    discontinuities,
                     rendered_blocks,
                     render_load_pct: render_ema,
                     render_peak_pct: render_peak,
@@ -514,6 +570,10 @@ mod engine {
         }
         running.store(false, Ordering::Relaxed);
         let _ = src.stop();
+        // Join the output thread so its WASAPI render device is released before exit (BUG-15); it
+        // notices `running==false` within one wait timeout (≤1 s). Pose/camera threads are left to
+        // exit on `running` — interrupting a blocked camera read is BUG-30 (vision batch).
+        let _ = output_handle.join();
         // Flush any pending save (e.g. a settings_commit sent just before shutdown) before exit.
         drop(persist_tx);
         let _ = persist_handle.join();
@@ -522,8 +582,8 @@ mod engine {
     }
 
     /// Output-thread status shared with the capture thread for cockpit health telemetry: the opened
-    /// endpoint's format and any fatal error. (BUG-04's full fix — flipping `running` on output
-    /// death — lands in the audio-robustness batch; this is the telemetry surface it needs.)
+    /// endpoint's format and any fatal error. The output thread also flips `running` on exit (BUG-04),
+    /// so a dead output stops the render loop; this struct carries the error text to the cockpit.
     #[derive(Default, Clone)]
     struct OutputStatus {
         sr: u32,
@@ -533,7 +593,8 @@ mod engine {
     }
 
     /// Build the world-lock renderer from the pack, adapting to the source channel count (8 = full
-    /// 7.1 ring + LFE; 2 = front L/R only, for a stereo source).
+    /// 7.1 ring + LFE; 6 = 5.1 ring + LFE; 2 = front L/R only, for a stereo source). The directional
+    /// inputs always steer over the pack's full ring grid, so a 5.1 source still rotates smoothly.
     fn build_render(pack: &BrirPack, n_in: usize, block: usize, latency_ms: f64) -> Result<GridRender, String> {
         let fade = (latency_ms * 1e-3 * pack.samplerate as f64).round().max(1.0) as i64;
         match n_in {
@@ -547,6 +608,19 @@ mod engine {
                     pack.ring_az.clone(), pack.dir_idx.clone(), 8, fade, block, lfe,
                 )
             }
+            6 => {
+                // 5.1 interleave (L,R,C,LFE,SL,SR): directional input columns 0,1,2,4,5 steer over the
+                // pack's full ring grid; LFE is input column 3. (Assumes the common Windows side-
+                // surround 5.1 layout — logged at startup so a mismatch is diagnosable.)
+                let lfe = Lfe::Brir {
+                    conv: BusConvolverCore::new(&pack.lfe_left, &pack.lfe_right, 1, pack.n_taps, block)?,
+                    idx: 3,
+                };
+                GridRender::new(
+                    &pack.ring_left, &pack.ring_right, pack.n_ring, pack.n_taps,
+                    pack.ring_az.clone(), vec![0, 1, 2, 4, 5], 6, fade, block, lfe,
+                )
+            }
             2 => {
                 // front L,R are ring grid buses 0,1 (az +30/-30); route the two input columns to them.
                 let taps = pack.n_taps;
@@ -555,16 +629,28 @@ mod engine {
                 GridRender::new(&left, &right, 2, taps, vec![pack.ring_az[0], pack.ring_az[1]],
                     vec![0, 1], 2, fade, block, Lfe::None)
             }
-            other => Err(format!("source has {other} channels; engine handles 8 (7.1) or 2 (stereo)")),
+            other => Err(format!("source has {other} channels; engine handles 8 (7.1), 6 (5.1), or 2 (stereo)")),
         }
     }
 
-    /// Pull stereo blocks from the FIFO and write them to the output device each event.
+    /// Lock the FIFO, recovering from a poisoned lock instead of propagating the panic. A panic in
+    /// either audio thread must not cascade into the other via a poisoned mutex (BUG-23); the FIFO's
+    /// own state stays valid across a panic, so `into_inner` is safe here.
+    fn lock_fifo(fifo: &Mutex<CushionFifo<StereoBlock>>) -> std::sync::MutexGuard<'_, CushionFifo<StereoBlock>> {
+        fifo.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Pull stereo blocks from the FIFO and write them to the output device each event. `expected_sr`
+    /// is the source/pack sample rate: the output endpoint must run at the same rate, or the FIFO
+    /// would drift continuously (no resampler) — a hard error rather than a silent stream of dropouts
+    /// (BUG-03). Output endpoints with more than two channels are handled by placing the binaural L/R
+    /// in the first two channels and zeroing the rest (BUG-19).
     fn output_loop(
         output_name: &str,
         fifo: Arc<Mutex<CushionFifo<StereoBlock>>>,
         running: Arc<AtomicBool>,
         block: usize,
+        expected_sr: u32,
         status: &Arc<Mutex<OutputStatus>>,
     ) -> Result<(), String> {
         init_com()?;
@@ -577,22 +663,42 @@ mod engine {
             s.sr = ofmt.sample_rate;
             s.ch = ofmt.channels;
         }
-        if ofmt.channels != 2 {
-            return Err(format!("output endpoint is {}ch; need a stereo endpoint", ofmt.channels));
+        let out_ch = ofmt.channels as usize;
+        if out_ch < 2 {
+            return Err(format!("output endpoint is {out_ch}ch; need at least a stereo endpoint"));
+        }
+        if ofmt.sample_rate != expected_sr {
+            return Err(format!(
+                "output endpoint is {} Hz but the source/pack is {expected_sr} Hz — match the endpoints (no resampler yet)",
+                ofmt.sample_rate
+            ));
         }
         let mut pending: Vec<f32> = Vec::with_capacity(block * 4);
+        let mut frame_buf: Vec<f32> = Vec::with_capacity(block * out_ch);
         while running.load(Ordering::Relaxed) {
             if !out.wait(1000)? {
                 continue;
             }
             let need = out.frames_needed()?;
             while pending.len() / 2 < need {
-                let (_p, blk) = fifo.lock().unwrap().pull();
+                let (_p, blk) = lock_fifo(&fifo).pull();
                 pending.extend_from_slice(&blk.unwrap_or_else(|| vec![0.0f32; block * 2]));
             }
-            let take = need * 2;
-            out.write(&pending[..take])?;
-            pending.drain(..take);
+            if out_ch == 2 {
+                let take = need * 2;
+                out.write(&pending[..take])?;
+                pending.drain(..take);
+            } else {
+                // Expand each stereo frame to the endpoint's channel count: L, R, then silence.
+                frame_buf.clear();
+                for f in 0..need {
+                    frame_buf.push(pending[f * 2]);
+                    frame_buf.push(pending[f * 2 + 1]);
+                    frame_buf.extend(std::iter::repeat(0.0).take(out_ch - 2));
+                }
+                out.write(&frame_buf)?;
+                pending.drain(..need * 2);
+            }
         }
         let _ = out.stop();
         Ok(())
