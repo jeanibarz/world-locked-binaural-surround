@@ -7,8 +7,6 @@ apps with different flag presets. There is now one start script — the host's
 
     py -3.12 apps/launch.py listen    [passthrough flags...]   # daily world-lock, web cockpit
     py -3.12 apps/launch.py test      [passthrough flags...]   # + HRIR-set blind A/B & loc test
-    py -3.12 apps/launch.py calibrate [calibration flags...]   # recenter / axis-sign check
-    py -3.12 apps/launch.py latency   [sweep flags...]         # latency sweep (dev, headless)
 
 ``listen`` and ``test`` are the same engine (``voicemeeter_passthrough``): ``test`` is
 ``listen`` plus an ``--hrir-sets-dir`` so the cockpit exposes the RFC-0003 blind A/B and
@@ -38,8 +36,6 @@ for _p in (_ROOT / "apps", _ROOT / "src"):
 MODES: dict[str, str] = {
     "listen": "daily world-lock passthrough (web cockpit)",
     "test": "passthrough + HRIR-set blind A/B & localization test (needs --hrir-sets-dir)",
-    "calibrate": "calibration GUI — recenter / axis-sign check",
-    "latency": "latency sweep (headless dev benchmark)",
 }
 
 
@@ -91,16 +87,6 @@ def main(argv: list[str] | None = None) -> int:
         import voicemeeter_passthrough as app
 
         return app.main(flags)
-
-    if mode == "calibrate":
-        import calibration_gui as app
-
-        return app.main(rest)
-
-    if mode == "latency":
-        import latency_sweep as app
-
-        return app.main(rest)
 
     return 2  # unreachable (mode validated above); keeps type checkers happy
 

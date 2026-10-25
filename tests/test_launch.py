@@ -32,7 +32,7 @@ def stub(monkeypatch):
     """Route every app the dispatcher might import to one shared recorder."""
     rec: dict = {}
     app = _stub_app(rec)
-    for name in ("voicemeeter_passthrough", "calibration_gui", "latency_sweep"):
+    for name in ("voicemeeter_passthrough",):
         monkeypatch.setitem(sys.modules, name, app)
     return rec
 
@@ -88,11 +88,3 @@ def test_test_mode_forwards_hrir_sets_and_web(stub):
     assert argv[-2:] == ["--ui", "web"]
 
 
-def test_calibrate_forwards_untouched(stub):
-    assert launch.main(["calibrate", "--camera", "0"]) == 0
-    assert stub["argv"] == ["--camera", "0"]  # no --ui injection for calibrate
-
-
-def test_latency_forwards_untouched(stub):
-    assert launch.main(["latency", "--output", "sim"]) == 0
-    assert stub["argv"] == ["--output", "sim"]

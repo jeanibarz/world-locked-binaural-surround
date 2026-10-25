@@ -9,8 +9,6 @@ REM
 REM     run.cmd            (no arg -> listen)   daily world-lock, cockpit UI
 REM     run.cmd listen                          same as above
 REM     run.cmd test                            + HRIR-set blind A/B & loc test
-REM     run.cmd calibrate                       recenter / axis-sign check
-REM     run.cmd latency                         latency sweep (headless dev)
 REM
 REM  Everything after the mode is forwarded to the app, e.g.:
 REM     run.cmd listen --method nearest --block 1024
@@ -54,9 +52,7 @@ set "COMMON=--model "%MODEL%" --brir-dir "%BRIR%" --no-dialog --camera 0 --audio
 
 if /I "%MODE%"=="listen" goto passthrough
 if /I "%MODE%"=="test"   goto passthrough
-if /I "%MODE%"=="calibrate" goto calibrate
-if /I "%MODE%"=="latency"   goto latency
-echo [run] unknown mode "%MODE%"  (use: listen ^| test ^| calibrate ^| latency)
+echo [run] unknown mode "%MODE%"  (use: listen ^| test)
 goto end
 
 :passthrough
@@ -67,21 +63,6 @@ if /I "%MODE%"=="test" (
   py -3.12 "%LAUNCH%" listen %COMMON% %EXTRA%
 )
 if %errorlevel%==97 goto loop
-goto end
-
-:calibrate
-py -3.12 "%LAUNCH%" calibrate --model "%MODEL%" --no-dialog --camera 0 %EXTRA%
-goto end
-
-:latency
-REM headless; synthetic pose + sine on the REAL FiiO output measures the true device-buffer
-REM term. Close anything else using the FiiO (incl. the passthrough) first, or exclusive rows
-REM FAIL (the sweep continues). Writes latency_sweep_results.json next to this .cmd.
-py -3.12 "%LAUNCH%" latency --brir-dir "%BRIR%" ^
-  --output device --audio-device FiiO --rust ^
-  --methods timealign --blocks 256 512 1024 --latencies 20 ^
-  --exclusive-modes shared exclusive --warmup 3 --seconds 8 ^
-  --out "%~dp0latency_sweep_results.json" %EXTRA%
 goto end
 
 :end
