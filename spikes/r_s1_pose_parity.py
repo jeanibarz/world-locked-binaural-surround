@@ -108,6 +108,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--grab-camera", type=int, default=0, help="grab N frames from /camera first")
     ap.add_argument("--out", type=Path, default=Path("rs1_frames"))
     ap.add_argument("--camera-url", default="http://127.0.0.1:8731/camera")
+    ap.add_argument("--csv", type=Path, default=None, help="dump per-frame ref/residual angles")
     args = ap.parse_args(argv)
 
     if args.grab_camera:
@@ -189,15 +190,46 @@ def main(argv: list[str] | None = None) -> int:
         return 3
 
     rms = parity_rms(ref, mdl)
+    # Per-axis aligned residuals (for robust stats + operating-range analysis). The app only ever
+    # sees moderate head turns toward a screen; extreme in-the-wild profiles (AFLW2000) are
+    # irrelevant to a world-locked-audio use case, so report the realistic range separately.
+    OP = {"yaw": 45.0, "pitch": 30.0, "roll": 30.0}  # operating half-ranges (deg)
+    resid = {}
+    refa = {ax: np.asarray(ref[ax], float) for ax in AXES}
+    for ax in AXES:
+        s = rms[ax]
+        aligned = s["sign"] * np.asarray(mdl[ax], float) + s["offset_deg"]
+        resid[ax] = refa[ax] - aligned
+    op_mask = np.ones(used, bool)
+    for ax in AXES:
+        op_mask &= np.abs(refa[ax]) <= OP[ax]
+
     print(f"\n=== R-S1 pose parity: 6DRepNet vs MediaPipe ({used} frames) ===")
     for ax in AXES:
         s = rms[ax]
-        print(f"  {ax:5s}: RMS {s['rms_deg']:6.2f}°  max {s['max_abs_deg']:6.2f}°  "
-              f"(ref range {s['ref_range_deg']:.0f}°, sign {s['sign']:+.0f}, "
-              f"offset {s['offset_deg']:+.1f}°)")
-    print(f"  combined RMS: {np.sqrt(np.mean([rms[a]['rms_deg']**2 for a in AXES])):.2f}°")
+        p50 = float(np.median(np.abs(resid[ax])))
+        print(f"  {ax:5s}: RMS {s['rms_deg']:6.2f}°  p50 {p50:5.2f}°  max {s['max_abs_deg']:6.2f}°  "
+              f"(ref range {s['ref_range_deg']:.0f}°, sign {s['sign']:+.0f})")
+    print(f"  combined RMS (full set): {np.sqrt(np.mean([rms[a]['rms_deg']**2 for a in AXES])):.2f}°")
+    if op_mask.sum() >= 3:
+        op_rms = {ax: float(np.sqrt(np.mean(resid[ax][op_mask] ** 2))) for ax in AXES}
+        comb = np.sqrt(np.mean([op_rms[a] ** 2 for a in AXES]))
+        print(f"  --- operating range (|yaw|<={OP['yaw']:.0f} |pitch|<={OP['pitch']:.0f} "
+              f"|roll|<={OP['roll']:.0f}): {op_mask.sum()} frames ---")
+        for ax in AXES:
+            print(f"    {ax:5s}: RMS {op_rms[ax]:5.2f}°")
+        print(f"    combined RMS (operating range): {comb:.2f}°")
     print(f"  latency MediaPipe: {latency_stats(mp_lat)}")
     print(f"  latency 6DRepNet : {latency_stats(sd_lat)}")
+    if args.csv:
+        import csv
+        with open(args.csv, "w", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(["yaw_ref", "pitch_ref", "roll_ref", "yaw_resid", "pitch_resid", "roll_resid"])
+            for i in range(used):
+                w.writerow([refa["yaw"][i], refa["pitch"][i], refa["roll"][i],
+                            resid["yaw"][i], resid["pitch"][i], resid["roll"][i]])
+        print(f"  wrote per-frame CSV: {args.csv}")
     return 0
 
 
