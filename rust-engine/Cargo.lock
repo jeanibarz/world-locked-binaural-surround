@@ -2486,6 +2486,7 @@ dependencies = [
  "binaural_conv",
  "control_plane",
  "hound",
+ "image",
  "nokhwa",
  "render_core_lib",
  "serde_json",

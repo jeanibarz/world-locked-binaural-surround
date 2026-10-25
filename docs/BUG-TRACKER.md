@@ -1,5 +1,28 @@
 # wlbs_engine — Bug Tracker (overhaul audit, 2026-10-25)
 
+## Status (kept in sync as batches land)
+
+| Bug | Sev | Status | PR / branch |
+|---|---|---|---|
+| BUG-01 | P0 | Fixed | PR1 `fix/engine-bug-backlog` |
+| BUG-02 | P0 | Fixed | PR1 |
+| BUG-05 | P1 | Fixed | PR1 |
+| BUG-06 | P1 | Fixed | PR1 |
+| BUG-07 | P1 | Fixed | PR1 |
+| BUG-08 | P1 | Fixed | PR1 |
+| BUG-09 | P1 | Fixed | PR1 (recenter wired with the control drain) |
+| BUG-17 | P2 | Fixed | PR1 |
+| BUG-04 | P1 | Partial | PR1 added the telemetry surface; `running=false` on output death pending PR2 |
+| BUG-03, 14, 15, 18–20, 23, 33 | P1/P2/P3 | Open | PR2 (audio robustness) |
+| BUG-10–12, 28–32, 34 | P1/P2/P3 | Open | PR3 (vision) |
+| BUG-13, 21, 27 | P1/P2 | Open | PR4 (DSP/perf) |
+| BUG-16, 22, 24, 25, 26 | P2 | Open | PR5 (lifecycle/packs) |
+
+> Baseline: the uncommitted "direct webcam capture (nokhwa) + `--list-devices`" edits were applied
+> as the first commit on this branch.
+
+
+
 Source: 5-way read-only code audit of `world-locked-binaural-surround` @ `feat/cockpit-ui-redesign`
 (engine crates + cockpit UI), plus the in-progress camera-capture edits. Paths are `file:line`.
 Severity: **P0** breaks a core promise · **P1** major (audio loss / silent failure / unusable feature) ·

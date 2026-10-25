@@ -12,21 +12,37 @@
 #![cfg(windows)]
 
 use std::io::Read;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use control_plane::Cockpit;
 use vision_client::image_util::RgbImage;
 use vision_client::pipeline::{decode_image, Pipeline};
 
-/// Shared, recenter-able head yaw (deg). The first valid pose defines neutral (0).
+fn now_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+/// Shared, recenter-able head yaw (deg). The first valid pose defines neutral (0). Also carries
+/// tracker liveness (last-update timestamp) and the camera resolution, for cockpit telemetry.
 pub struct PoseState {
     pub yaw: Mutex<f64>,
     yaw0: Mutex<Option<f64>>,
+    /// Epoch-millis of the last pose update, or 0 if no pose has been produced yet.
+    last_update: AtomicU64,
+    /// The active camera resolution, once a camera stream is open.
+    cam_res: Mutex<Option<(u32, u32)>>,
 }
 
 impl PoseState {
     pub fn new() -> Arc<Self> {
-        Arc::new(Self { yaw: Mutex::new(0.0), yaw0: Mutex::new(None) })
+        Arc::new(Self {
+            yaw: Mutex::new(0.0),
+            yaw0: Mutex::new(None),
+            last_update: AtomicU64::new(0),
+            cam_res: Mutex::new(None),
+        })
     }
     fn update_raw(&self, raw_yaw: f64) {
         let mut y0 = self.yaw0.lock().unwrap();
@@ -34,6 +50,39 @@ impl PoseState {
             *y0 = Some(raw_yaw); // first pose = neutral
         }
         *self.yaw.lock().unwrap() = raw_yaw - y0.unwrap();
+        self.last_update.store(now_ms(), Ordering::Relaxed);
+    }
+
+    /// Fold the current offset into neutral so the direction the head faces right now reads as 0°
+    /// (the cockpit Recenter control). A no-op before the first pose. Fixes BUG-09.
+    pub fn recenter(&self) {
+        let mut y0 = self.yaw0.lock().unwrap();
+        let mut y = self.yaw.lock().unwrap();
+        if let Some(cur0) = *y0 {
+            *y0 = Some(cur0 + *y);
+            *y = 0.0;
+        }
+    }
+
+    /// Has a pose ever been produced?
+    pub fn is_tracking(&self) -> bool {
+        self.last_update.load(Ordering::Relaxed) != 0
+    }
+
+    /// Milliseconds since the last pose update, or `None` if none yet.
+    pub fn millis_since_update(&self) -> Option<u64> {
+        match self.last_update.load(Ordering::Relaxed) {
+            0 => None,
+            t => Some(now_ms().saturating_sub(t)),
+        }
+    }
+
+    /// The active camera resolution, if a camera stream is open.
+    pub fn cam_res(&self) -> Option<(u32, u32)> {
+        *self.cam_res.lock().unwrap()
+    }
+    fn set_cam_res(&self, w: u32, h: u32) {
+        *self.cam_res.lock().unwrap() = Some((w, h));
     }
 }
 
@@ -65,6 +114,7 @@ pub fn spawn_camera_pose(
     stride: usize,
     pose: Arc<PoseState>,
     running: Arc<AtomicBool>,
+    cockpit: Option<Arc<Cockpit>>,
 ) {
     std::thread::spawn(move || {
         use nokhwa::pixel_format::RgbFormat;
@@ -91,8 +141,13 @@ pub fn spawn_camera_pose(
             return;
         }
         let res = cam.resolution();
+        pose.set_cam_res(res.width(), res.height());
         println!("POSE camera index={index} {}x{}", res.width(), res.height());
 
+        // The cockpit's `/camera` preview is fed by re-encoding the decoded RGB frame to JPEG and
+        // handing it to `Cockpit::set_frame` (BUG-07 — before, only the test bin ever did this, so the
+        // preview was always blank). Throttled to ~12 fps so the preview never competes with pose.
+        let mut last_preview = std::time::Instant::now() - std::time::Duration::from_secs(1);
         let (mut ok, mut miss, mut n) = (0u64, 0u64, 0usize);
         while running.load(Ordering::Relaxed) {
             let frame = match cam.frame() {
@@ -111,6 +166,14 @@ pub fn spawn_camera_pose(
                 Ok(d) => d,
                 Err(_) => continue,
             };
+            if let Some(cp) = &cockpit {
+                if last_preview.elapsed() >= std::time::Duration::from_millis(80) {
+                    if let Some(jpeg) = encode_jpeg(decoded.as_raw(), decoded.width(), decoded.height()) {
+                        cp.set_frame(jpeg);
+                    }
+                    last_preview = std::time::Instant::now();
+                }
+            }
             let img = RgbImage {
                 w: decoded.width() as usize,
                 h: decoded.height() as usize,
@@ -128,6 +191,20 @@ pub fn spawn_camera_pose(
             }
         }
     });
+}
+
+/// Encode an interleaved RGB8 buffer to a baseline JPEG for the cockpit preview. `None` on any
+/// encoder error (the preview just skips that frame).
+fn encode_jpeg(rgb: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {
+    use image::codecs::jpeg::JpegEncoder;
+    use image::ExtendedColorType;
+    if rgb.len() < (w as usize * h as usize * 3) {
+        return None;
+    }
+    let mut out = Vec::with_capacity(64 * 1024);
+    let mut enc = JpegEncoder::new_with_quality(&mut out, 70);
+    enc.encode(rgb, w, h, ExtendedColorType::Rgb8).ok()?;
+    Some(out)
 }
 
 /// Extract complete JPEGs (SOI 0xFFD8 … EOI 0xFFD9) from a growing byte buffer, returning the
