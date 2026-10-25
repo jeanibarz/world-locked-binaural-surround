@@ -303,6 +303,14 @@ dependencies = [
  "binaural_conv",
  "numpy",
  "pyo3",
+ "render_core_lib",
+]
+
+[[package]]
+name = "render_core_lib"
+version = "0.1.0"
+dependencies = [
+ "binaural_conv",
 ]
 
 [[package]]

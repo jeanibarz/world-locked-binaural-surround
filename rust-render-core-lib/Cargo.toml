@@ -1,0 +1,16 @@
+[package]
+name = "render_core_lib"
+version = "0.1.0"
+edition = "2021"
+description = "Pure-Rust world-lock render (BusMixer + binaural_conv + LFE), no PyO3. Shared by the render_core PyO3 shim and the standalone engine binary."
+publish = false
+
+[lib]
+name = "render_core_lib"
+crate-type = ["rlib"]
+
+[dependencies]
+binaural_conv = { path = "../rust-conv-core" }
+
+[profile.release]
+opt-level = 3

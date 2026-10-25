@@ -90,6 +90,17 @@ impl Cockpit {
     }
 }
 
+/// Serve the cockpit on `127.0.0.1:port` forever, owning a Tokio runtime — the engine spawns this on
+/// a thread so it needs neither `axum` nor `tokio` directly. Prints `COCKPIT <url>` once bound.
+pub fn serve_blocking(cockpit: Arc<Cockpit>, port: u16) {
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("tokio runtime");
+    rt.block_on(async move {
+        let l = tokio::net::TcpListener::bind(("127.0.0.1", port)).await.expect("bind cockpit port");
+        println!("COCKPIT http://127.0.0.1:{}", l.local_addr().unwrap().port());
+        axum::serve(l, router(cockpit)).await.expect("cockpit serve");
+    });
+}
+
 /// Build the router for a [`Cockpit`].
 pub fn router(cockpit: Arc<Cockpit>) -> Router {
     Router::new()

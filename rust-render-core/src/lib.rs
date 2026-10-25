@@ -16,8 +16,7 @@ use numpy::ndarray::Array2;
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 
-mod render;
-use render::{wrapped_deg, BusMixerState, GridRender, Lfe};
+use render_core_lib::{wrapped_deg, BusMixerState, GridRender, Lfe};
 
 #[pyfunction]
 fn wrapped_deg_py(delta: f64) -> f64 {

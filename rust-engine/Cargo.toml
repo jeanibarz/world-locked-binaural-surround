@@ -1,0 +1,25 @@
+[package]
+name = "wlbs_engine"
+version = "0.1.0"
+edition = "2021"
+description = "The standalone zero-Python world-lock binaural engine: loopback-captures a 7.1 source, world-lock renders it to binaural on the native kernel, outputs via WASAPI, and serves the web cockpit — one Rust binary, no interpreter."
+publish = false
+
+[[bin]]
+name = "wlbs_engine"
+path = "src/main.rs"
+
+[dependencies]
+render_core_lib = { path = "../rust-render-core-lib" }
+binaural_conv = { path = "../rust-conv-core" }
+control_plane = { path = "../rust-control-plane" }
+serde_json = { version = "1", features = ["preserve_order"] }
+hound = "3.5"
+
+# WASAPI audio I/O is Windows-only; on other targets the engine builds (for the pack/geometry unit
+# tests) but main() prints a notice.
+[target.'cfg(windows)'.dependencies]
+audio_io = { path = "../rust-audio-io" }
+
+[profile.release]
+opt-level = 3
