@@ -12,7 +12,15 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod anchors;
+pub mod detector;
+pub mod image_util;
+pub mod roi;
 pub mod solve;
+
+/// The Rust-native ONNX head-pose pipeline (BlazeFace + FaceMesh → Kabsch). Needs onnxruntime.
+#[cfg(feature = "inference")]
+pub mod pipeline;
 
 /// Protocol major version. Bump only on a breaking change; additive fields do not bump it.
 pub const PROTOCOL_VERSION: u32 = 1;

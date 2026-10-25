@@ -62,10 +62,16 @@ it was accurate but ~32× too heavy). All four facets measured:
 
 ## Remaining engine port (the work for the fresh task)
 Add each crate's body **as its code lands** (YAGNI — do NOT stub empty crates):
-1. **`vision-client` body** (finish it): `ort` inference of both ONNX nets in Rust; BlazeFace
-   detector decode + NMS; the ROI/align transform; wire the Kabsch solve. **Guard-1** (Rust ONNX
-   landmarks ≈ MediaPipe, already proven at the net level ≤3.8e-4) and **guard-2** (end-to-end Rust
-   pose parity ≈ the ~0.65° GT-parity in the shipping pipeline) are the validation gates.
+1. **`vision-client` body** — **DONE** (slice 1). `ort` inference of both ONNX nets in Rust;
+   BlazeFace short-range anchors + decode + weighted NMS; the MediaPipe ROI/align transform
+   (DetectionsToRects eye-line rotation + RectTransformation 1.5×/square_long → 256² rotated crop);
+   FaceMesh landmark un-projection; wired to the Kabsch solve. Behind an `inference` feature so the
+   protocol/solve crate stays CI-light. **Both guards measured on the host over AFLW2000:**
+   - **Guard-1 (landmark parity):** Rust pipeline 478 landmarks vs MediaPipe's own — **median 0.92 px,
+     mean 1.22 px, p95 1.46 px** (27,246 landmark pairs, 57 imgs). Closes net-level ≤3.8e-4 + ROI.
+   - **Guard-2 (GT pose parity, operating range ±45/30/30):** Rust GT-RMS **yaw 4.19° / pitch 5.72° /
+     roll 3.99°** vs MediaPipe **4.08 / 5.61 / 3.42** → worst delta **+0.57°/axis** (bar ±2°). **PASS.**
+     Direct Rust↔MediaPipe parity 1.51° combined. The zero-Python pose source is proven end-to-end.
 2. **`render-core`** (grow from R0): R0 landed `wrapped_deg`/`nearest_brir_index`/`gain_ramp`/
    `BusMixer` bit-exact. Next: the voice-pool block loop, LFE handling, the full `WorldLocked7p1` /
    `InterpWorldLocked7p1` render, feeding the existing Rust convolution kernel (`binaural_kernel`).
