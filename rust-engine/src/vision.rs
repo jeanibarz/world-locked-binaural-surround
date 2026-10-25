@@ -102,25 +102,37 @@ impl PoseState {
 /// Enumerate the local cameras (index, human name) for the cockpit picker. Empty on error / none.
 /// String-indexed cameras (rare on the Windows MediaFoundation backend) are skipped with a log line
 /// rather than dropped silently; selecting them would need a `CameraIndex::String` path (BUG-34).
+///
+/// The nokhwa query runs on a short-lived joined thread so MediaFoundation's `CoInitialize` happens
+/// there, not on the engine's main thread — otherwise it would pin the main thread's COM apartment
+/// before the engine's own `init_com()`/`initialize_mta()` runs, aborting startup with
+/// `RPC_E_CHANGED_MODE` (BUG-35). The child thread dies right after, releasing its apartment.
 pub fn enumerate_cameras() -> Vec<(u32, String)> {
-    use nokhwa::query;
-    use nokhwa::utils::{ApiBackend, CameraIndex};
-    match query(ApiBackend::Auto) {
-        Ok(list) => list
-            .iter()
-            .filter_map(|c| match c.index() {
-                CameraIndex::Index(i) => Some((*i, c.human_name())),
-                CameraIndex::String(s) => {
-                    eprintln!("VISION camera skipped (string index {s:?}): {}", c.human_name());
-                    None
-                }
-            })
-            .collect(),
-        Err(e) => {
-            eprintln!("VISION_ERROR camera query: {e}");
-            Vec::new()
+    std::thread::spawn(|| {
+        use nokhwa::query;
+        use nokhwa::utils::{ApiBackend, CameraIndex};
+        match query(ApiBackend::Auto) {
+            Ok(list) => list
+                .iter()
+                .filter_map(|c| match c.index() {
+                    CameraIndex::Index(i) => Some((*i, c.human_name())),
+                    CameraIndex::String(s) => {
+                        eprintln!("VISION camera skipped (string index {s:?}): {}", c.human_name());
+                        None
+                    }
+                })
+                .collect(),
+            Err(e) => {
+                eprintln!("VISION_ERROR camera query: {e}");
+                Vec::new()
+            }
         }
-    }
+    })
+    .join()
+    .unwrap_or_else(|_| {
+        eprintln!("VISION_ERROR camera-query thread panicked");
+        Vec::new()
+    })
 }
 
 /// Open camera `index` at the requested resolution/fps (0 = a sane default), run the pose pipeline

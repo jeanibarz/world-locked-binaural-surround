@@ -27,8 +27,23 @@ pub fn set_pro_audio() -> bool {
 }
 
 /// Initialise COM (MTA) for this thread — call once before building devices.
+///
+/// Tolerant of a thread whose COM apartment another library already initialised: `CoInitializeEx`
+/// returns `S_OK`/`S_FALSE` (already initialised, fine), `RPC_E_CHANGED_MODE` (already initialised in
+/// a different apartment model — still usable for our calls), or `RPC_E_TOO_LATE`. Treating those as
+/// success stops a hard abort when e.g. nokhwa/MediaFoundation touched COM on this thread first
+/// (BUG-35: the `?` here used to abort the whole engine with `0x80010106`).
 pub fn init_com() -> Result<(), String> {
-    initialize_mta().ok().map_err(|e| format!("initialize_mta: {e}"))
+    let hr = initialize_mta();
+    if hr.is_ok() {
+        return Ok(()); // S_OK or S_FALSE
+    }
+    const RPC_E_CHANGED_MODE: i32 = 0x8001_0106u32 as i32;
+    const RPC_E_TOO_LATE: i32 = 0x8001_0119u32 as i32;
+    match hr.0 {
+        RPC_E_CHANGED_MODE | RPC_E_TOO_LATE => Ok(()),
+        _ => Err(format!("initialize_mta: {hr:?}")),
+    }
 }
 
 /// Resolve a render endpoint by name. An exact (case-insensitive) friendly-name match wins; failing

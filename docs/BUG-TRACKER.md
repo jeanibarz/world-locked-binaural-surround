@@ -38,6 +38,7 @@
 | BUG-24 | P2 | Fixed | PR5 (startup existence check for web/onnx/canonical assets) |
 | BUG-25 | P2 | Fixed | PR1 (held-yaw no-camera case now logs `POSE none (held yaw 0)`) |
 | BUG-26 | P2 | Fixed | PR5 (`import_pack`: clear dest, reject `..`/separators, recursive copy) |
+| BUG-35 | P0 | Fixed | PR6 `fix/com-mta-regression` (COM apartment regression: enumerate off main thread + tolerant `init_com`) |
 
 > Baseline: the uncommitted "direct webcam capture (nokhwa) + `--list-devices`" edits were applied
 > as the first commit on this branch.
