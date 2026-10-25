@@ -304,6 +304,7 @@ pub fn spawn_mjpeg_pose(
         let mut pipe = match Pipeline::new(&onnx_dir, &canonical) {
             Ok(p) => p,
             Err(e) => {
+                pose.set_cam_error(format!("pipeline: {e}"));
                 eprintln!("VISION_ERROR pipeline: {e}");
                 return;
             }
@@ -363,6 +364,7 @@ pub fn spawn_image_pose(
         let mut pipe = match Pipeline::new(&onnx_dir, &canonical) {
             Ok(p) => p,
             Err(e) => {
+                pose.set_cam_error(format!("pipeline: {e}"));
                 eprintln!("VISION_ERROR pipeline: {e}");
                 return;
             }
