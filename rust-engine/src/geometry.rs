@@ -47,6 +47,20 @@ pub fn head_relative_azimuths(yaw_deg: f64, yaw_sign: f64) -> [f64; 8] {
     out
 }
 
+/// 5.1 channel labels in WASAPI interleave order `(L, R, C, LFE, SL, SR)` — the common Windows 5.1
+/// layout (side surrounds at ±110°). Used when the source is 6-channel.
+pub const CHANNELS_5P1: [&str; 6] = ["L", "R", "C", "LFE", "SL", "SR"];
+
+/// Per-channel head-relative azimuths (length 6) for a 5.1 source. Same math as the 7.1 version but
+/// over the 5.1 channel order, so input column 4/5 are the side surrounds, not the 7.1 rears.
+pub fn head_relative_azimuths_5p1(yaw_deg: f64, yaw_sign: f64) -> [f64; 6] {
+    let mut out = [0.0f64; 6];
+    for (i, ch) in CHANNELS_5P1.iter().enumerate() {
+        out[i] = wrap_deg(speaker_azimuth(ch) - yaw_sign * yaw_deg);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -66,6 +80,16 @@ mod tests {
         assert!((az[0] - 0.0).abs() < 1e-9);
         // and the centre speaker is now to the head's right (-30).
         assert!((az[2] - (-30.0)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn five_one_layout_uses_side_surrounds() {
+        let az = head_relative_azimuths_5p1(0.0, 1.0);
+        assert_eq!(az[0], 30.0); // L
+        assert_eq!(az[1], -30.0); // R
+        assert_eq!(az[2], 0.0); // C
+        assert_eq!(az[4], 110.0); // SL (side, not the 7.1 rear 150)
+        assert_eq!(az[5], -110.0); // SR
     }
 
     #[test]

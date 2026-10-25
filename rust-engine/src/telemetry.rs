@@ -77,6 +77,7 @@ pub struct TeleInput<'a> {
     pub fifo_capacity: usize,
     pub underruns: u64,
     pub overflow_drops: u64,
+    pub discontinuities: u64,
     pub rendered_blocks: u64,
     /// Mean render time per block as a percentage of the block's real-time budget.
     pub render_load_pct: f64,
@@ -222,9 +223,11 @@ pub fn build_state(t: &TeleInput) -> Value {
     };
     health.push(json!({"dot": pose_dot, "label": "Head pose", "value": pose_val}));
     health.push(json!({
-        "dot": green,
+        "dot": if t.discontinuities > 0 { amber } else { green },
         "label": "Engine",
-        "value": format!("rust · {} blocks{}", t.rendered_blocks, if t.mmcss { " · pro-audio" } else { "" }),
+        "value": format!("rust · {} blocks{}{}", t.rendered_blocks,
+                         if t.mmcss { " · pro-audio" } else { "" },
+                         if t.discontinuities > 0 { format!(" · {} glitches", t.discontinuities) } else { String::new() }),
     }));
 
     // --- camera badge ---
@@ -292,6 +295,7 @@ mod tests {
             fifo_capacity: 8,
             underruns: 0,
             overflow_drops: 0,
+            discontinuities: 0,
             rendered_blocks: 1000,
             render_load_pct: 22.0,
             render_peak_pct: 38.0,

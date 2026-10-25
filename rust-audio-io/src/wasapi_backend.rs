@@ -31,18 +31,35 @@ pub fn init_com() -> Result<(), String> {
     initialize_mta().ok().map_err(|e| format!("initialize_mta: {e}"))
 }
 
+/// Resolve a render endpoint by name. An exact (case-insensitive) friendly-name match wins; failing
+/// that a unique case-insensitive substring match is used; if several endpoints contain the string
+/// the match is **ambiguous** and we error listing them, rather than silently grabbing the first
+/// (which could be the wrong, e.g. 2-channel, endpoint — BUG-18).
 fn find_render_device(want: &str) -> Result<Device, String> {
     let enumerator = DeviceEnumerator::new().map_err(|e| e.to_string())?;
     let coll = enumerator.get_device_collection(&Direction::Render).map_err(|e| e.to_string())?;
     let n = coll.get_nbr_devices().map_err(|e| e.to_string())?;
+    let wl = want.to_lowercase();
+    let mut substr: Vec<(String, Device)> = Vec::new();
     for i in 0..n {
         let d = coll.get_device_at_index(i).map_err(|e| e.to_string())?;
         let name = d.get_friendlyname().unwrap_or_default();
-        if name.to_lowercase().contains(&want.to_lowercase()) {
-            return Ok(d);
+        let nl = name.to_lowercase();
+        if nl == wl {
+            return Ok(d); // exact match wins outright
+        }
+        if nl.contains(&wl) {
+            substr.push((name, d));
         }
     }
-    Err(format!("no render device matching {want:?}"))
+    match substr.len() {
+        0 => Err(format!("no render device matching {want:?}")),
+        1 => Ok(substr.pop().unwrap().1),
+        _ => {
+            let names: Vec<String> = substr.into_iter().map(|(n, _)| n).collect();
+            Err(format!("{want:?} is ambiguous — matches {names:?}; use a more specific name"))
+        }
+    }
 }
 
 fn sample_kind(fmt: &WaveFormat) -> Result<(SampleType, u16), String> {
@@ -51,12 +68,30 @@ fn sample_kind(fmt: &WaveFormat) -> Result<(SampleType, u16), String> {
     Ok((st, bits))
 }
 
-/// Convert one interleaved sample's raw little-endian bytes to f32 in [-1,1].
+/// Reject a PCM format the byte<->f32 converters don't handle, at open time, so an unsupported depth
+/// can't silently produce digital silence (capture) or a short/garbage buffer (render) — BUG-20.
+fn check_format(st: SampleType, bits: u16) -> Result<(), String> {
+    match (st, bits) {
+        (SampleType::Float, 32)
+        | (SampleType::Int, 16)
+        | (SampleType::Int, 24)
+        | (SampleType::Int, 32) => Ok(()),
+        _ => Err(format!("unsupported PCM format: {st:?} {bits}-bit (need Float32 or Int16/24/32)")),
+    }
+}
+
+/// Convert one interleaved sample's raw little-endian bytes to f32 in [-1,1]. 24-bit is 3 packed
+/// bytes, sign-extended from bit 23.
 #[inline]
 fn bytes_to_f32(b: &[u8], st: SampleType, bits: u16) -> f32 {
     match (st, bits) {
         (SampleType::Float, 32) => f32::from_le_bytes([b[0], b[1], b[2], b[3]]),
         (SampleType::Int, 16) => i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0,
+        (SampleType::Int, 24) => {
+            // pack 3 LE bytes into the high 24 bits of an i32, then arithmetic-shift down to sign-extend
+            let v = ((b[0] as i32) << 8) | ((b[1] as i32) << 16) | ((b[2] as i32) << 24);
+            (v >> 8) as f32 / 8_388_608.0
+        }
         (SampleType::Int, 32) => i32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f32 / 2147483648.0,
         _ => 0.0,
     }
@@ -82,6 +117,7 @@ impl WasapiLoopback {
         let mut client = device.get_iaudioclient().map_err(|e| e.to_string())?;
         let format = client.get_mixformat().map_err(|e| e.to_string())?;
         let (st, bits) = sample_kind(&format)?;
+        check_format(st, bits)?;
         let sr = format.get_samplespersec();
         let ch = format.get_nchannels();
         let blockalign = format.get_blockalign() as usize;
@@ -151,6 +187,7 @@ impl WasapiRender {
         let mut client = device.get_iaudioclient().map_err(|e| e.to_string())?;
         let format = client.get_mixformat().map_err(|e| e.to_string())?;
         let (st, bits) = sample_kind(&format)?;
+        check_format(st, bits)?;
         let sr = format.get_samplespersec();
         let ch = format.get_nchannels();
         let blockalign = format.get_blockalign() as usize;
@@ -178,6 +215,11 @@ impl WasapiRender {
             (SampleType::Int, 16) => {
                 let s = (v.clamp(-1.0, 1.0) * 32767.0) as i16;
                 out.extend_from_slice(&s.to_le_bytes());
+            }
+            (SampleType::Int, 24) => {
+                let s = (v.clamp(-1.0, 1.0) * 8_388_607.0) as i32;
+                let b = s.to_le_bytes();
+                out.extend_from_slice(&b[0..3]); // low 3 bytes = 24-bit LE
             }
             (SampleType::Int, 32) => {
                 let s = (v.clamp(-1.0, 1.0) * 2147483647.0) as i32;
