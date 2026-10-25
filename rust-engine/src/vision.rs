@@ -99,27 +99,28 @@ impl PoseState {
     }
 }
 
-/// Enumerate the local cameras (index, human name) for the cockpit picker. Empty on error / none.
-/// String-indexed cameras (rare on the Windows MediaFoundation backend) are skipped with a log line
-/// rather than dropped silently; selecting them would need a `CameraIndex::String` path (BUG-34).
+/// Enumerate the local cameras (id, human name) for the cockpit picker. Empty on error / none. The
+/// id is the nokhwa `CameraIndex` rendered as a string — the decimal index for an `Index` camera, or
+/// the opaque string for a `String`-indexed one. Both kinds are now listed and selectable via that id
+/// (BUG-34; string cameras used to be dropped).
 ///
 /// The nokhwa query runs on a short-lived joined thread so MediaFoundation's `CoInitialize` happens
 /// there, not on the engine's main thread — otherwise it would pin the main thread's COM apartment
 /// before the engine's own `init_com()`/`initialize_mta()` runs, aborting startup with
 /// `RPC_E_CHANGED_MODE` (BUG-35). The child thread dies right after, releasing its apartment.
-pub fn enumerate_cameras() -> Vec<(u32, String)> {
+pub fn enumerate_cameras() -> Vec<(String, String)> {
     std::thread::spawn(|| {
         use nokhwa::query;
         use nokhwa::utils::{ApiBackend, CameraIndex};
         match query(ApiBackend::Auto) {
             Ok(list) => list
                 .iter()
-                .filter_map(|c| match c.index() {
-                    CameraIndex::Index(i) => Some((*i, c.human_name())),
-                    CameraIndex::String(s) => {
-                        eprintln!("VISION camera skipped (string index {s:?}): {}", c.human_name());
-                        None
-                    }
+                .map(|c| {
+                    let id = match c.index() {
+                        CameraIndex::Index(i) => i.to_string(),
+                        CameraIndex::String(s) => s.clone(),
+                    };
+                    (id, c.human_name())
                 })
                 .collect(),
             Err(e) => {
@@ -135,12 +136,23 @@ pub fn enumerate_cameras() -> Vec<(u32, String)> {
     })
 }
 
-/// Open camera `index` at the requested resolution/fps (0 = a sane default), run the pose pipeline
-/// on ~every `stride`-th frame, update `pose`, and feed the cockpit preview. Stride is clamped to
-/// ≥1 by the caller. Reopens the device if it is unplugged, and releases it on exit.
+/// Parse a camera id string into a nokhwa `CameraIndex`: a decimal id is an `Index`, anything else a
+/// `String` index. Mirrors how [`enumerate_cameras`] renders them.
+fn camera_index_from_id(id: &str) -> nokhwa::utils::CameraIndex {
+    use nokhwa::utils::CameraIndex;
+    match id.parse::<u32>() {
+        Ok(i) => CameraIndex::Index(i),
+        Err(_) => CameraIndex::String(id.to_string()),
+    }
+}
+
+/// Open camera `id` (decimal index or opaque string) at the requested resolution/fps (0 = a sane
+/// default), run the pose pipeline on ~every `stride`-th frame, update `pose`, and feed the cockpit
+/// preview. Stride is clamped to ≥1 by the caller. Reopens the device if it is unplugged, and
+/// releases it on exit.
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_camera_pose(
-    index: u32,
+    id: String,
     onnx_dir: String,
     canonical: String,
     stride: usize,
@@ -173,11 +185,11 @@ pub fn spawn_camera_pose(
 
         // Outer loop: (re)open the camera, so an unplug/replug recovers instead of freezing (BUG-30).
         while running.load(Ordering::Relaxed) {
-            let mut cam = match open_camera(index, req_w, req_h, req_fps) {
+            let mut cam = match open_camera(&id, req_w, req_h, req_fps) {
                 Ok(c) => c,
                 Err(e) => {
                     pose.set_cam_error(format!("camera unavailable: {e}"));
-                    eprintln!("VISION_ERROR camera open (index {index}): {e}");
+                    eprintln!("VISION_ERROR camera open (id {id}): {e}");
                     // Back off ~2 s, then retry — unless we're shutting down.
                     for _ in 0..20 {
                         if !running.load(Ordering::Relaxed) {
@@ -191,7 +203,7 @@ pub fn spawn_camera_pose(
             let res = cam.resolution();
             pose.set_cam_res(res.width(), res.height());
             pose.clear_cam_error();
-            println!("POSE camera index={index} {}x{}", res.width(), res.height());
+            println!("POSE camera id={id} {}x{}", res.width(), res.height());
 
             let mut consec_frame_err = 0u32;
             while running.load(Ordering::Relaxed) {
@@ -255,16 +267,14 @@ pub fn spawn_camera_pose(
 
 /// Open a camera at a requested resolution/fps (0 ⇒ a controlled 640×480@30 default, not nokhwa's
 /// `AbsoluteHighestFrameRate` which can pick a tiny or 1080p mode — BUG-28).
-fn open_camera(index: u32, w: u32, h: u32, fps: u32) -> Result<nokhwa::Camera, String> {
+fn open_camera(id: &str, w: u32, h: u32, fps: u32) -> Result<nokhwa::Camera, String> {
     use nokhwa::pixel_format::RgbFormat;
-    use nokhwa::utils::{
-        CameraFormat, CameraIndex, FrameFormat, RequestedFormat, RequestedFormatType, Resolution,
-    };
+    use nokhwa::utils::{CameraFormat, FrameFormat, RequestedFormat, RequestedFormatType, Resolution};
     let (rw, rh) = if w > 0 && h > 0 { (w, h) } else { (640, 480) };
     let rfps = if fps > 0 { fps } else { 30 };
     let want = CameraFormat::new(Resolution::new(rw, rh), FrameFormat::MJPEG, rfps);
     let fmt = RequestedFormat::new::<RgbFormat>(RequestedFormatType::Closest(want));
-    let mut cam = nokhwa::Camera::new(CameraIndex::Index(index), fmt).map_err(|e| e.to_string())?;
+    let mut cam = nokhwa::Camera::new(camera_index_from_id(id), fmt).map_err(|e| e.to_string())?;
     cam.open_stream().map_err(|e| e.to_string())?;
     Ok(cam)
 }
