@@ -39,6 +39,11 @@ fn read_ir(path: &Path) -> Result<(u32, Vec<f64>), String> {
             take0(r.samples::<i32>().map(|s| s.unwrap_or(0) as f64 / max).collect())
         }
     };
+    // Reject a non-finite tap (NaN/Inf) at load: once a NaN enters the partitioned convolver's
+    // persistent FFT state it poisons every subsequent output block forever (BUG-21).
+    if let Some(i) = samples.iter().position(|v| !v.is_finite()) {
+        return Err(format!("{}: non-finite IR tap at sample {i}", path.display()));
+    }
     Ok((spec.sample_rate, samples))
 }
 
