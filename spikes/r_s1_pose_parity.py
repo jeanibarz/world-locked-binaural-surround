@@ -128,7 +128,19 @@ def main(argv: list[str] | None = None) -> int:
         output_facial_transformation_matrixes=True, num_faces=1))
 
     from sixdrepnet import SixDRepNet
-    sixd = SixDRepNet()
+    sixd = SixDRepNet(gpu_id=-1)  # CPU (torch is CPU-only here); -1 skips .cuda in predict too
+
+    def _face_crop(bgr_img, landmarks, margin=0.35):
+        """Crop the face bbox (from MediaPipe landmarks) + margin — 6DRepNet wants a face crop."""
+        h, w = bgr_img.shape[:2]
+        xs = [lm.x for lm in landmarks]
+        ys = [lm.y for lm in landmarks]
+        x0, x1 = min(xs) * w, max(xs) * w
+        y0, y1 = min(ys) * h, max(ys) * h
+        mx, my = (x1 - x0) * margin, (y1 - y0) * margin
+        x0 = max(0, int(x0 - mx)); x1 = min(w, int(x1 + mx))
+        y0 = max(0, int(y0 - my)); y1 = min(h, int(y1 + my))
+        return bgr_img[y0:y1, x0:x1]
 
     imgs = sorted(p for p in args.images.iterdir()
                   if p.suffix.lower() in {".jpg", ".jpeg", ".png"})
@@ -153,9 +165,12 @@ def main(argv: list[str] | None = None) -> int:
             continue  # no face detected by MediaPipe -> can't form a reference
         yaw_m, pitch_m, roll_m = head_pose_from_matrix(
             np.array(res.facial_transformation_matrixes[0]))
+        crop = _face_crop(bgr, res.face_landmarks[0]) if res.face_landmarks else bgr
+        if crop.size == 0:
+            continue
         t2 = time.perf_counter()
         try:
-            pitch_s, yaw_s, roll_s = sixd.predict(bgr)
+            pitch_s, yaw_s, roll_s = sixd.predict(crop)
         except Exception as e:  # noqa: BLE001 — a model that can't predict on a frame is a miss
             print(f"{p.name}: 6DRepNet predict failed: {e}", file=sys.stderr)
             continue
