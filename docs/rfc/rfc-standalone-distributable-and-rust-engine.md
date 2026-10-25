@@ -158,10 +158,18 @@ never what blocked distributability**; the hardcoded paths, WSL assumption, and 
   Rust-deployable **ONNX 6-DoF regressor** (e.g. 6DRepNet via the `ort` crate) — a model the engine
   owns/quantizes, which makes zero-Python achievable. **Route (a)** (reproduce FaceGeometry in Rust)
   is the fallback. Both measured against MediaPipe's **own matrix on identical frames**.
-  **Gate:** pose RMS error (deg) and p95 detect latency within a stated tolerance across a
-  **multi-condition validation set** (faces, skin tones, glasses, low light) — not just the owner's
-  face. **Escalation:** if *neither* route clears the gate, zero-Python is blocked → STOP and report
-  to the operator (the one stop condition); do not silently settle for a permanent sidecar.
+  **Gate — TWO dimensions, screened jointly (operator addendum 2026-10-25):**
+  (1) **accuracy-parity vs ground truth, in the ±45° yaw / ±30° pitch-roll operating range** — the
+  model's per-axis GT-RMS no worse than the incumbent MediaPipe's by more than ~1.5–2°/axis (as
+  accurate as what ships; extreme-profile >45° is out of scope, documented not gated); and
+  (2) **performance budget (NFR-4b):** 60 fps-capable (per-frame ~≤12–16 ms, or decouple inference
+  rate from capture and predict between frames) **and** no heavier than MediaPipe on measured
+  **CPU%/GPU%**, leaving headroom for a concurrent game. 6DRepNet is the accuracy *reference*; if it
+  meets accuracy but busts the budget, pick the **lightest model that still meets accuracy parity**
+  (RepVGG-A0 / MobileNet-EfficientNet 6-DoF heads; ONNX EPs — DirectML/NPU — to offload CPU).
+  **Escalation (the one stop):** only if **no** ownable model reaches in-range accuracy parity with
+  MediaPipe does zero-Python become a genuine dead end → STOP and report to the operator. A flaky
+  dataset fetch or one model being too heavy is not that wall.
 - **R-S2 (audio spike, parallel).** `wasapi`-crate loopback **with** the dual-clock cushion/backlog/
   drift accounting and **MMCSS "Pro Audio"** elevation (`AvSetMmThreadCharacteristicsW`) replicated,
   vs PyAudioWPatch under sustained load — "frames arrive" is not parity. (SYSVAD/Track-B capture is N2.)
