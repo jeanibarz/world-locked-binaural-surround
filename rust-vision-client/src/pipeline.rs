@@ -44,10 +44,24 @@ pub struct Pipeline {
 impl Pipeline {
     /// Load `facedet.onnx` + `facemesh.onnx` from `onnx_dir` and the canonical model from
     /// `canonical_obj` (MediaPipe's `canonical_face_model.obj`, 468 verts).
-    pub fn new(onnx_dir: &str, canonical_obj: &str) -> ort::Result<Self> {
-        let detector = Session::builder()?.commit_from_file(format!("{onnx_dir}/facedet.onnx"))?;
-        let mesh = Session::builder()?.commit_from_file(format!("{onnx_dir}/facemesh.onnx"))?;
-        let canonical_rigid = load_canonical_rigid(canonical_obj);
+    ///
+    /// Returns `Err(String)` (not a panic) for a missing/malformed ONNX net **or** canonical OBJ, so
+    /// a bad asset surfaces as a clean error the caller can log, symmetrically for both inputs
+    /// (BUG-11 — previously a missing/short OBJ panicked the pose thread).
+    ///
+    /// ONNX intra-op threads are capped (BUG-12) so inference doesn't grab every core and starve the
+    /// real-time audio render thread; the two nets run on a small pool, not all cores.
+    pub fn new(onnx_dir: &str, canonical_obj: &str) -> Result<Self, String> {
+        let intra = onnx_intra_threads();
+        let detector = Session::builder()
+            .and_then(|b| b.with_intra_threads(intra))
+            .and_then(|b| b.commit_from_file(format!("{onnx_dir}/facedet.onnx")))
+            .map_err(|e| format!("load facedet.onnx: {e}"))?;
+        let mesh = Session::builder()
+            .and_then(|b| b.with_intra_threads(intra))
+            .and_then(|b| b.commit_from_file(format!("{onnx_dir}/facemesh.onnx")))
+            .map_err(|e| format!("load facemesh.onnx: {e}"))?;
+        let canonical_rigid = load_canonical_rigid(canonical_obj)?;
         Ok(Self { detector, mesh, anchors: short_range_anchors(), canonical_rigid })
     }
 
@@ -94,20 +108,42 @@ impl Pipeline {
     }
 }
 
+/// Number of ONNX intra-op threads: a small cap so the two nets don't grab every core and starve
+/// the real-time audio render thread (BUG-12). ~1/4 of the machine's cores, clamped to 1..=2.
+fn onnx_intra_threads() -> usize {
+    (std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4) / 4).clamp(1, 2)
+}
+
 /// Parse `canonical_face_model.obj`, flip Y/Z (OpenGL→OpenCV), and take the `RIGID_IDX` subset.
-pub fn load_canonical_rigid(obj_path: &str) -> Vec<[f64; 3]> {
-    let text = std::fs::read_to_string(obj_path).expect("read canonical obj");
+/// Returns `Err` (not a panic) on a missing/unreadable file, a malformed `v` line, or a model with
+/// too few vertices to cover `RIGID_IDX` — so a bad asset can't crash the pose thread (BUG-11).
+pub fn load_canonical_rigid(obj_path: &str) -> Result<Vec<[f64; 3]>, String> {
+    let text = std::fs::read_to_string(obj_path)
+        .map_err(|e| format!("read canonical obj {obj_path}: {e}"))?;
     let mut verts: Vec<[f64; 3]> = Vec::new();
-    for line in text.lines() {
+    for (ln, line) in text.lines().enumerate() {
         if let Some(rest) = line.strip_prefix("v ") {
             let mut it = rest.split_whitespace();
-            let x: f64 = it.next().unwrap().parse().unwrap();
-            let y: f64 = it.next().unwrap().parse().unwrap();
-            let z: f64 = it.next().unwrap().parse().unwrap();
+            let mut next = |axis: &str| -> Result<f64, String> {
+                it.next()
+                    .ok_or_else(|| format!("canonical obj line {}: missing {axis}", ln + 1))?
+                    .parse::<f64>()
+                    .map_err(|e| format!("canonical obj line {}: bad {axis}: {e}", ln + 1))
+            };
+            let x = next("x")?;
+            let y = next("y")?;
+            let z = next("z")?;
             verts.push([x, -y, -z]); // OpenGL -> OpenCV frame
         }
     }
-    RIGID_IDX.iter().map(|&i| verts[i]).collect()
+    let need = RIGID_IDX.iter().copied().max().unwrap_or(0);
+    if verts.len() <= need {
+        return Err(format!(
+            "canonical obj has {} vertices; need > {need} for the rigid subset",
+            verts.len()
+        ));
+    }
+    Ok(RIGID_IDX.iter().map(|&i| verts[i]).collect())
 }
 
 /// Decode a JPEG/PNG byte buffer into an [`RgbImage`] (f32 [0,255], R,G,B).

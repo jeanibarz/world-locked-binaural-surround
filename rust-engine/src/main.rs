@@ -211,8 +211,16 @@ mod engine {
         .into_owned();
         let camera_mjpeg = arg(&a, "--camera-mjpeg");
         let face_image = arg(&a, "--face-image");
-        let pose_stride: usize = arg(&a, "--pose-stride").and_then(|s| s.parse().ok()).unwrap_or(2);
+        // Clamp stride to ≥1: 0 would make `is_multiple_of(0)` disable all pose updates (BUG-31).
+        let pose_stride: usize = arg(&a, "--pose-stride").and_then(|s| s.parse().ok()).unwrap_or(2).max(1);
         let camera_idx = arg(&a, "--camera").and_then(|s| s.parse::<u32>().ok());
+        let no_camera = flag(&a, "--no-camera"); // privacy opt-out of the auto webcam (BUG-10)
+        // Optional explicit capture format (BUG-28): --resolution WxH, --framerate N.
+        let cli_res: Option<(u32, u32)> = arg(&a, "--resolution").and_then(|s| {
+            let (w, h) = s.split_once(['x', 'X', '×'])?;
+            Some((w.trim().parse().ok()?, h.trim().parse().ok()?))
+        });
+        let cli_fps: Option<u32> = arg(&a, "--framerate").and_then(|s| s.parse().ok());
         // Enumerate local cameras once, for the cockpit picker and the auto-default source.
         let cameras = crate::vision::enumerate_cameras();
         for (i, n) in &cameras {
@@ -252,6 +260,8 @@ mod engine {
         if arg(&a, "--block").is_some() { settings.block = block; }
         if arg(&a, "--latency-ms").is_some() { settings.cushion_ms = latency_ms; }
         if camera_idx.is_some() { settings.camera_idx = camera_idx; }
+        if let Some((w, h)) = cli_res { settings.cam_w = w; settings.cam_h = h; }
+        if let Some(f) = cli_fps { settings.cam_fps = f; }
         let hrir_list: Vec<String> = packs::list_packs().into_iter().map(|p| p.name).collect();
         let mut block = settings.block; // the live block size (the settings dialog can change it)
 
@@ -293,9 +303,11 @@ mod engine {
         // --- head-pose source --- priority: explicit --camera > explicit mjpeg/image/demo >
         // persisted camera > first local camera (the product default) > held. A persisted camera must
         // NOT override an explicit `--rotate-demo`/`--face-image`/`--camera-mjpeg` (WSL + test flows).
+        // `--no-camera` disables the auto webcam entirely (privacy opt-out, BUG-10); an explicit
+        // `--camera` still forces a specific one.
         let auto_cam = if let Some(c) = camera_idx {
             Some(c)
-        } else if camera_mjpeg.is_some() || face_image.is_some() || rotate_demo {
+        } else if no_camera || camera_mjpeg.is_some() || face_image.is_some() || rotate_demo {
             None
         } else {
             settings.camera_idx.or_else(|| cameras.first().map(|(i, _)| *i))
@@ -304,8 +316,9 @@ mod engine {
         if let Some(idx) = auto_cam {
             pose_source = "camera";
             crate::vision::spawn_camera_pose(
-                idx, onnx_dir, canonical, pose_stride, Arc::clone(&pose), Arc::clone(&running),
-                Some(Arc::clone(&cockpit)),
+                idx, onnx_dir, canonical, pose_stride,
+                settings.cam_w, settings.cam_h, settings.cam_fps,
+                Arc::clone(&pose), Arc::clone(&running), Some(Arc::clone(&cockpit)),
             );
         } else if let Some(url) = camera_mjpeg {
             pose_source = "mjpeg";
@@ -534,6 +547,7 @@ mod engine {
                 };
                 lat.push(telemetry::estimate_total_ms(block, pack.samplerate, cushion_now, render_ema));
                 let os = out_status.lock().unwrap().clone();
+                let cam_error = pose.cam_error();
                 let pose_stale = pose.millis_since_update().map_or(false, |m| m >= 1500);
                 let state = telemetry::build_state(&TeleInput {
                     title: "WLBS Engine",
@@ -561,6 +575,7 @@ mod engine {
                     tracking: pose.is_tracking(),
                     pose_stale,
                     cam_res: pose.cam_res(),
+                    cam_error: cam_error.as_deref(),
                     mmcss,
                     lat: &lat,
                 });
