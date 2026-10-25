@@ -14,8 +14,10 @@
 // exercised on the real (Windows) target. Geometry stays used by its unit tests everywhere.
 #![cfg_attr(not(windows), allow(dead_code))]
 
+mod assets;
 mod geometry;
 mod pack;
+mod packs;
 mod vision;
 
 #[cfg(not(windows))]
@@ -54,10 +56,32 @@ mod engine {
     type StereoBlock = Vec<f32>; // interleaved L,R, length block*2
 
     pub fn run() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::{assets, packs};
         let a: Vec<String> = std::env::args().collect();
-        let brir_dir = PathBuf::from(
-            arg(&a, "--brir-dir").expect("--brir-dir <baked 7.1 dir> required"),
-        );
+
+        // Pack management sub-commands (install-relative + %APPDATA%\WLBS\packs), then exit.
+        if flag(&a, "--list-packs") {
+            println!("packs dir: {}", packs::user_packs_dir().display());
+            for p in packs::list_packs() {
+                println!("  {}  {}", p.name, p.dir.display());
+            }
+            return Ok(());
+        }
+        if let Some(src) = arg(&a, "--import-pack") {
+            let dst = packs::import_pack(std::path::Path::new(&src), arg(&a, "--name").as_deref())?;
+            println!("imported -> {}", dst.display());
+            return Ok(());
+        }
+
+        // BRIR pack: --pack <name> (bundled default / %APPDATA%), else --brir-dir, else the bundled
+        // default beside the exe. No hardcoded paths — a clean-machine install resolves itself.
+        let brir_dir: PathBuf = if let Some(name) = arg(&a, "--pack") {
+            packs::resolve_pack(&name).ok_or_else(|| format!("no pack named {name:?}"))?
+        } else if let Some(d) = arg(&a, "--brir-dir") {
+            PathBuf::from(d)
+        } else {
+            packs::bundled_default()
+        };
         let source = arg(&a, "--source").unwrap_or_else(|| "VoiceMeeter".into());
         let output = arg(&a, "--output").unwrap_or_else(|| "Bigscreen".into());
         let port: u16 = arg(&a, "--port").and_then(|s| s.parse().ok()).unwrap_or(8732);
@@ -65,13 +89,24 @@ mod engine {
         let latency_ms: f64 = arg(&a, "--latency-ms").and_then(|s| s.parse().ok()).unwrap_or(20.0);
         let yaw_sign: f64 = arg(&a, "--yaw-sign").and_then(|s| s.parse().ok()).unwrap_or(1.0);
         let rotate_demo = flag(&a, "--rotate-demo");
-        let web_dir = arg(&a, "--web-dir").unwrap_or_else(|| "apps/web_cockpit".into());
+        // Install-relative asset resolution (no hardcoded paths): CLI → env → <exe>/… → %APPDATA%.
+        let web_dir =
+            assets::resolve_dir(arg(&a, "--web-dir").as_deref(), "WLBS_WEB_DIR", "web_cockpit")
+                .to_string_lossy()
+                .into_owned();
         let run_secs: f64 = arg(&a, "--secs").and_then(|s| s.parse().ok()).unwrap_or(0.0); // 0 = forever
         // Head-pose source (zero-Python vision-client). --camera-mjpeg pulls live frames from an
         // MJPEG URL; --face-image loops one image; else the demo rotator / held yaw.
-        let onnx_dir = arg(&a, "--onnx-dir").unwrap_or_else(|| r"C:\Users\ibarz\facemesh_extract".into());
-        let canonical = arg(&a, "--canonical")
-            .unwrap_or_else(|| r"C:\Users\ibarz\canonical_face_model.obj".into());
+        let onnx_dir = assets::resolve_dir(arg(&a, "--onnx-dir").as_deref(), "WLBS_ONNX_DIR", "assets")
+            .to_string_lossy()
+            .into_owned();
+        let canonical = assets::resolve_file(
+            arg(&a, "--canonical").as_deref(),
+            "WLBS_CANONICAL",
+            "assets/canonical_face_model.obj",
+        )
+        .to_string_lossy()
+        .into_owned();
         let camera_mjpeg = arg(&a, "--camera-mjpeg");
         let face_image = arg(&a, "--face-image");
         let pose_stride: usize = arg(&a, "--pose-stride").and_then(|s| s.parse().ok()).unwrap_or(2);

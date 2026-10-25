@@ -140,8 +140,17 @@ absorbs the ONNX-thread contention (underruns bounded, mostly model-load warmup,
 
 5. **Track S (studio):** M-D2's Python baker is the start; OQ1 = grow the core baker in the sibling
    `binaural-localization`; a Rust-native baker makes the *product* zero-Python.
-6. **Track D (distributable):** M-D1/M-D2 done; M-D3 bundle + asset bundling + user pack dir
-   (`%APPDATA%\WLBS\packs`) + import flow. Ships first as the hybrid de-risker.
+6. **Track D (distributable)** — **DONE for the zero-Python engine** (M-D1/M-D2 were done). The
+   engine now resolves every asset install-relative with **no hardcoded paths** (`assets.rs`: CLI →
+   env → `<exe>/…` → `%APPDATA%\WLBS\`), scans `%APPDATA%\WLBS\packs`, and imports packs
+   (`packs.rs`; `--list-packs` / `--import-pack <dir>` / `--pack <name>`). `host/bundle-engine.sh`
+   assembles the self-contained bundle (`wlbs_engine.exe` + `DirectML.dll` + `assets/` ONNX nets +
+   canonical + `packs/default/` + `web_cockpit/`). **M-D3 gate (measured):** the whole zero-Python
+   bundle is **46 MB** — vs the 321 MB target (**7× under**) and the 540 MB Python hybrid (**12×
+   smaller**): the concrete OQ6 payoff. **Verified on host:** running the bundle with *no* asset
+   paths resolves the pack/ONNX/cockpit relative to the exe and renders live (1667 blocks/12 s);
+   `--list-packs` finds the bundled default + reports the `%APPDATA%\WLBS\packs` user dir.
+   (The remaining M-D3 *hybrid* bundle was the de-risker; zero-Python superseded it.)
 
 ## Standing decisions (binding)
 - **Incumbent-parity bar:** MediaPipe is "good enough" (N3 forbids a perceptual redesign). A pose
