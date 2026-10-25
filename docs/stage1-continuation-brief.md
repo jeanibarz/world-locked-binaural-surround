@@ -72,9 +72,27 @@ Add each crate's body **as its code lands** (YAGNI — do NOT stub empty crates)
    - **Guard-2 (GT pose parity, operating range ±45/30/30):** Rust GT-RMS **yaw 4.19° / pitch 5.72° /
      roll 3.99°** vs MediaPipe **4.08 / 5.61 / 3.42** → worst delta **+0.57°/axis** (bar ±2°). **PASS.**
      Direct Rust↔MediaPipe parity 1.51° combined. The zero-Python pose source is proven end-to-end.
-2. **`render-core`** (grow from R0): R0 landed `wrapped_deg`/`nearest_brir_index`/`gain_ramp`/
-   `BusMixer` bit-exact. Next: the voice-pool block loop, LFE handling, the full `WorldLocked7p1` /
-   `InterpWorldLocked7p1` render, feeding the existing Rust convolution kernel (`binaural_kernel`).
+2. **`render-core`** — **DONE** (slice 2, the full per-block render in pure Rust). R0 landed
+   `wrapped_deg`/`nearest_brir_index`/`gain_ramp`/`BusMixer` bit-exact. This slice added:
+   - **`binaural_conv`** (new pure-Rust `rlib`): the batched partitioned-convolution compute extracted
+     from `binaural_kernel` with a slice API (no PyO3), so the convolver composes **with no
+     interpreter in the loop**. `binaural_kernel` is now a thin PyO3 shim over it — wheel math
+     unchanged, the kernel parity test still passes (7/7, `<1e-9`).
+   - **`render_core::GridRender`** (+ PyO3 `RenderGrid`): the full render — targets (nearest grid bus
+     per directional channel) → crossfade `BusMixer` → native grid convolution → LFE (`brir`/`flat`) →
+     stereo, in one Rust call. The Rust twin of `InterpWorldLocked7p1.process_block` (the daily-driver
+     `--method timealign` path). `BusMixer` now delegates to the shared `BusMixerState` (one impl).
+   - Also fixed the broken `maturin develop -m rust-render-core/Cargo.toml` (added the missing
+     per-crate `pyproject.toml`, an oversight from #127 — the kernel had one).
+
+   **Gate — bit-exact parity + measured perf (WSL, maturin wheels):** `RenderGrid` matches Python
+   `InterpWorldLocked7p1` (`use_rust=True`) over a crossfade sweep to **`<1e-9`** across
+   method∈{nearest,timealign} × lfe∈{brir,flat} × block∈{128,256} (8 cases); 23/23 Rust parity tests
+   green. **Perf (36-bus/24000-tap grid, block 256 @ 48 kHz, budget 5.33 ms):** all-Rust **3.58
+   ms/block (1.5× realtime)** vs Python-orchestrated **6.13 ms/block (0.9× — sub-realtime)** → a
+   **1.7× speedup that crosses into realtime** (removes the numpy BusMixer + marshaling + GIL glue).
+   Next (follow-up): wire `RenderGrid`/`binaural_conv` into the live engine + a pure-Rust binary
+   (no PyO3 shim) as `audio-io`/`control-plane` land.
 3. **`audio-io`:** `wasapi` loopback capture + output, the cushioned drift-FIFO (journal 81 re-prime),
    MMCSS elevation (proven in R-S2), behind an `AudioSource`/output trait so Track-B (SYSVAD) is a
    drop-in. Replaces `sounddevice`/PyAudioWPatch.
