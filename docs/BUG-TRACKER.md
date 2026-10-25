@@ -33,7 +33,11 @@
 | BUG-13 | P1 | Fixed | PR4 `fix/dsp-perf` (resident RT scratch in render_core_lib + engine loop; single-thread conv benchmark noted) |
 | BUG-21 | P2 | Fixed | PR4 (output clamp + non-finite drop; reject non-finite IR taps at load) |
 | BUG-27 | P2 | Fixed | PR4 (stereo world-lock over the full ring grid) |
-| BUG-16, 22, 24, 25, 26 | P2 | Open | PR5 (lifecycle/packs) |
+| BUG-16 | P2 | Fixed | PR5 `fix/lifecycle-packs` (`is_pack_dir` requires the baked set `BrirPack::load` reads) |
+| BUG-22 | P2 | Fixed | PR5 (bad numeric flags error loudly; `arg()` precedence documented) |
+| BUG-24 | P2 | Fixed | PR5 (startup existence check for web/onnx/canonical assets) |
+| BUG-25 | P2 | Fixed | PR1 (held-yaw no-camera case now logs `POSE none (held yaw 0)`) |
+| BUG-26 | P2 | Fixed | PR5 (`import_pack`: clear dest, reject `..`/separators, recursive copy) |
 
 > Baseline: the uncommitted "direct webcam capture (nokhwa) + `--list-devices`" edits were applied
 > as the first commit on this branch.

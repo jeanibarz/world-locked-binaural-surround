@@ -49,11 +49,23 @@ mod engine {
     use crate::pack::BrirPack;
     use crate::telemetry::{self, LatencyHistogram, TeleInput};
 
+    // NOTE: `arg` returns the first occurrence's following token (first-match precedence), and takes
+    // the next token verbatim as the value — so a value-flag written with no value would swallow the
+    // following flag. Pass each value flag once, with a value.
     fn arg(a: &[String], k: &str) -> Option<String> {
         a.iter().position(|x| x == k).and_then(|i| a.get(i + 1)).cloned()
     }
     fn flag(a: &[String], k: &str) -> bool {
         a.iter().any(|x| x == k)
+    }
+    /// Parse a numeric/typed value flag: `Ok(None)` if absent, `Ok(Some(v))` if present and valid,
+    /// and an `Err` if present but unparseable — so a typo fails loudly instead of silently falling
+    /// back to the default (BUG-22).
+    fn arg_num<T: std::str::FromStr>(a: &[String], k: &str) -> Result<Option<T>, String> {
+        match arg(a, k) {
+            None => Ok(None),
+            Some(v) => v.parse::<T>().map(Some).map_err(|_| format!("invalid value for {k}: {v:?}")),
+        }
     }
 
     type StereoBlock = Vec<f32>; // interleaved L,R, length block*2
@@ -186,17 +198,17 @@ mod engine {
         };
         let source = arg(&a, "--source").unwrap_or_else(|| "VoiceMeeter".into());
         let output = arg(&a, "--output").unwrap_or_else(|| "Bigscreen".into());
-        let port: u16 = arg(&a, "--port").and_then(|s| s.parse().ok()).unwrap_or(8732);
-        let block: usize = arg(&a, "--block").and_then(|s| s.parse().ok()).unwrap_or(256);
-        let latency_ms: f64 = arg(&a, "--latency-ms").and_then(|s| s.parse().ok()).unwrap_or(20.0);
-        let yaw_sign: f64 = arg(&a, "--yaw-sign").and_then(|s| s.parse().ok()).unwrap_or(1.0);
+        let port: u16 = arg_num(&a, "--port")?.unwrap_or(8732);
+        let block: usize = arg_num(&a, "--block")?.unwrap_or(256);
+        let latency_ms: f64 = arg_num(&a, "--latency-ms")?.unwrap_or(20.0);
+        let yaw_sign: f64 = arg_num(&a, "--yaw-sign")?.unwrap_or(1.0);
         let rotate_demo = flag(&a, "--rotate-demo");
         // Install-relative asset resolution (no hardcoded paths): CLI → env → <exe>/… → %APPDATA%.
         let web_dir =
             assets::resolve_dir(arg(&a, "--web-dir").as_deref(), "WLBS_WEB_DIR", "web_cockpit")
                 .to_string_lossy()
                 .into_owned();
-        let run_secs: f64 = arg(&a, "--secs").and_then(|s| s.parse().ok()).unwrap_or(0.0); // 0 = forever
+        let run_secs: f64 = arg_num(&a, "--secs")?.unwrap_or(0.0); // 0 = forever
         // Head-pose source (zero-Python vision-client). --camera-mjpeg pulls live frames from an
         // MJPEG URL; --face-image loops one image; else the demo rotator / held yaw.
         let onnx_dir = assets::resolve_dir(arg(&a, "--onnx-dir").as_deref(), "WLBS_ONNX_DIR", "assets")
@@ -212,15 +224,22 @@ mod engine {
         let camera_mjpeg = arg(&a, "--camera-mjpeg");
         let face_image = arg(&a, "--face-image");
         // Clamp stride to ≥1: 0 would make `is_multiple_of(0)` disable all pose updates (BUG-31).
-        let pose_stride: usize = arg(&a, "--pose-stride").and_then(|s| s.parse().ok()).unwrap_or(2).max(1);
-        let camera_idx = arg(&a, "--camera").and_then(|s| s.parse::<u32>().ok());
+        let pose_stride: usize = arg_num(&a, "--pose-stride")?.unwrap_or(2).max(1);
+        let camera_idx: Option<u32> = arg_num(&a, "--camera")?;
         let no_camera = flag(&a, "--no-camera"); // privacy opt-out of the auto webcam (BUG-10)
-        // Optional explicit capture format (BUG-28): --resolution WxH, --framerate N.
-        let cli_res: Option<(u32, u32)> = arg(&a, "--resolution").and_then(|s| {
-            let (w, h) = s.split_once(['x', 'X', '×'])?;
-            Some((w.trim().parse().ok()?, h.trim().parse().ok()?))
-        });
-        let cli_fps: Option<u32> = arg(&a, "--framerate").and_then(|s| s.parse().ok());
+        // Optional explicit capture format (BUG-28): --resolution WxH, --framerate N (bad → error).
+        let cli_res: Option<(u32, u32)> = match arg(&a, "--resolution") {
+            None => None,
+            Some(s) => {
+                let (w, h) = s
+                    .split_once(['x', 'X', '×'])
+                    .ok_or_else(|| format!("invalid --resolution {s:?} (want WxH)"))?;
+                let w = w.trim().parse().map_err(|_| format!("invalid --resolution width in {s:?}"))?;
+                let h = h.trim().parse().map_err(|_| format!("invalid --resolution height in {s:?}"))?;
+                Some((w, h))
+            }
+        };
+        let cli_fps: Option<u32> = arg_num(&a, "--framerate")?;
         // Enumerate local cameras once, for the cockpit picker and the auto-default source.
         let cameras = crate::vision::enumerate_cameras();
         for (i, n) in &cameras {
@@ -228,6 +247,23 @@ mod engine {
         }
         let cameras_json =
             serde_json::Value::Array(cameras.iter().map(|(i, n)| serde_json::json!([n, i])).collect());
+
+        // Startup asset existence check (BUG-24): surface missing dirs/files with a clear log line up
+        // front, instead of a 404 at the browser or a failure buried in the vision thread. These are
+        // warnings, not fatal — the engine still runs (held yaw, blank preview) if the camera assets
+        // are absent; the pack load below is the one hard requirement.
+        if !std::path::Path::new(&web_dir).is_dir() {
+            eprintln!("ASSET_WARN web_dir not found: {web_dir} (the cockpit page will 404)");
+        }
+        for f in ["facedet.onnx", "facemesh.onnx"] {
+            let p = std::path::Path::new(&onnx_dir).join(f);
+            if !p.is_file() {
+                eprintln!("ASSET_WARN missing {} (head tracking will be unavailable)", p.display());
+            }
+        }
+        if !std::path::Path::new(&canonical).is_file() {
+            eprintln!("ASSET_WARN canonical model not found: {canonical} (head tracking will fail)");
+        }
 
         let pack = Arc::new(BrirPack::load(&brir_dir)?);
         println!("PACK sr={} taps={} ring={} lfe_idx={}", pack.samplerate, pack.n_taps, pack.n_ring, pack.lfe_idx);
