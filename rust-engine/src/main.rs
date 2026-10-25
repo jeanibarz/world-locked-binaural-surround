@@ -16,6 +16,7 @@
 
 mod assets;
 mod geometry;
+mod interp;
 mod pack;
 mod packs;
 mod telemetry;
@@ -95,6 +96,15 @@ mod engine {
         win_h: u32,
     }
 
+    /// Settings file schema. Bumped to 2 when the ring-interp methods (#187) shipped: a v1 file's
+    /// persisted `method` is a stale pre-feature default, migrated in [`Settings::overlay`].
+    const SETTINGS_SCHEMA: u64 = 2;
+
+    /// Is `s` a method the engine implements?
+    fn valid_method(s: &str) -> bool {
+        matches!(s, "nearest" | "timealign" | "minphase" | "notchwarp")
+    }
+
     impl Settings {
         /// Overlay the persisted JSON (from [`SettingsStore::load`]) onto the CLI/computed defaults.
         /// Persisted UI choices win for the knobs the cockpit owns; delete the settings file (or use
@@ -104,7 +114,16 @@ mod engine {
                 Some(o) => o,
                 None => return,
             };
-            if let Some(s) = o.get("method").and_then(|x| x.as_str()) { self.method = s.into(); }
+            // A pre-v2 settings file predates the ring-interp methods (#187) — back then "nearest"
+            // was the only method, so a persisted "nearest" is the old implicit default, not a user
+            // choice; don't let it override the new timealign default. A valid method from a v2+ file
+            // (a real dropdown choice) is honored. Unknown strings are ignored.
+            let schema = o.get("schema").and_then(|x| x.as_u64()).unwrap_or(1);
+            if let Some(s) = o.get("method").and_then(|x| x.as_str()) {
+                if valid_method(s) && (schema >= SETTINGS_SCHEMA || s != "nearest") {
+                    self.method = s.into();
+                }
+            }
             if let Some(s) = o.get("hrir_name").and_then(|x| x.as_str()) { self.hrir_name = s.into(); }
             if let Some(s) = o.get("backend").and_then(|x| x.as_str()) { self.backend = s.into(); }
             if let Some(s) = o.get("comp").and_then(|x| x.as_str()) { self.comp = s.into(); }
@@ -131,6 +150,7 @@ mod engine {
         /// Serialise for [`SettingsStore::save`] (the same keys [`Settings::overlay`] reads).
         fn to_json(&self) -> serde_json::Value {
             serde_json::json!({
+                "schema": SETTINGS_SCHEMA,
                 "method": self.method, "hrir_name": self.hrir_name, "backend": self.backend,
                 "comp": self.comp, "block": self.block, "cushion_ms": self.cushion_ms,
                 "exclusive": self.exclusive, "hp_eq": self.hp_eq, "hp_model": self.hp_model,
@@ -152,7 +172,7 @@ mod engine {
         serde_json::json!({
             "cameras": cameras_json,
             "hrir": if hrir_list.is_empty() { vec!["default".to_string()] } else { hrir_list.to_vec() },
-            "methods": ["nearest"], // the engine renders nearest-ring only; the rest aren't implemented
+            "methods": ["nearest", "timealign", "minphase", "notchwarp"], // ring-interp methods (#187)
             "resolutions": ["default", "320×240", "640×480", "848×480", "1280×720"],
             "framerates": ["default", "30 fps", "60 fps"],
             "samplerate": samplerate,
@@ -208,6 +228,21 @@ mod engine {
         let block: usize = arg_num(&a, "--block")?.unwrap_or(256);
         let latency_ms: f64 = arg_num(&a, "--latency-ms")?.unwrap_or(20.0);
         let yaw_sign: f64 = arg_num(&a, "--yaw-sign")?.unwrap_or(1.0);
+        // Ring-interpolation method (#187): nearest | timealign | minphase | notchwarp. The owner
+        // prefers timealign, so it's the default. `--interp-step` sets the dense-ring spacing (deg):
+        // finer = smoother rotation but more convolution buses (measured cost in the PR); 15° is a
+        // headroom-safe default. `nearest` ignores the step (it snaps to the measured ring).
+        let method_cli = arg(&a, "--method");
+        if let Some(m) = &method_cli {
+            if !["nearest", "timealign", "minphase", "notchwarp"].contains(&m.as_str()) {
+                return Err(format!("--method must be nearest|timealign|minphase|notchwarp; got {m:?}").into());
+            }
+        }
+        let interp_step: f64 = match arg_num::<f64>(&a, "--interp-step")? {
+            Some(v) if v.is_finite() && v > 0.0 => v.clamp(1.0, 90.0),
+            Some(v) => return Err(format!("invalid --interp-step {v} (want a positive number of degrees)").into()),
+            None => 15.0,
+        };
         let rotate_demo = flag(&a, "--rotate-demo");
         // Install-relative asset resolution (no hardcoded paths): CLI → env → <exe>/… → %APPDATA%.
         let web_dir =
@@ -279,7 +314,7 @@ mod engine {
         // --- live settings: CLI/computed defaults, then the persisted overlay (BUG-08) ---
         let store = SettingsStore::new(assets::appdata_wlbs().join("settings.json"));
         let defaults = Settings {
-            method: "nearest".into(),
+            method: "timealign".into(), // the owner's preferred method (#187)
             hrir_name: arg(&a, "--pack").unwrap_or_else(|| "default".into()),
             backend: "rust".into(),
             comp: "off".into(),
@@ -303,6 +338,7 @@ mod engine {
         // re-apply the ones the user typed after the persisted overlay.
         if arg(&a, "--block").is_some() { settings.block = block; }
         if arg(&a, "--latency-ms").is_some() { settings.cushion_ms = latency_ms; }
+        if let Some(m) = method_cli.clone() { settings.method = m; }
         if camera_id.is_some() { settings.camera = camera_id.clone(); }
         if let Some((w, h)) = cli_res { settings.cam_w = w; settings.cam_h = h; }
         if let Some(f) = cli_fps { settings.cam_fps = f; }
@@ -434,7 +470,7 @@ mod engine {
             println!("SOURCE 5.1 assumed layout L,R,C,LFE,SL,SR (side surrounds)");
         }
 
-        let mut render = build_render(&pack, n_in, block, latency_ms)?;
+        let mut render = build_render(&pack, n_in, block, latency_ms, &settings.method, interp_step)?;
 
         let start = Instant::now();
         let mut in_acc: Vec<f32> = Vec::with_capacity(block * n_in * 4);
@@ -459,6 +495,7 @@ mod engine {
             // --- drain + apply cockpit controls (BUG-01) ---
             let block_before = settings.block;
             let cush_before = settings.cushion_ms;
+            let method_before = settings.method.clone();
             let mut dirty = false;
             for (name, args) in cockpit.take_dispatched() {
                 let a0 = args.get(0);
@@ -471,7 +508,7 @@ mod engine {
                             settings.win_w = w as u32; settings.win_h = h as u32; dirty = true;
                         }
                     }
-                    "set_method" => { if let Some(s) = a0.and_then(|v| v.as_str()) { settings.method = s.into(); dirty = true; } }
+                    "set_method" => { if let Some(s) = a0.and_then(|v| v.as_str()).filter(|s| valid_method(s)) { settings.method = s.into(); dirty = true; } }
                     "set_backend" => { if let Some(s) = a0.and_then(|v| v.as_str()) { settings.backend = s.into(); dirty = true; } }
                     "set_hrir" => { if let Some(s) = a0.and_then(|v| v.as_str()) { settings.hrir_name = s.into(); dirty = true; } }
                     "set_comp" => { if let Some(s) = a0.and_then(|v| v.as_str()) { settings.comp = s.into(); dirty = true; } }
@@ -512,18 +549,27 @@ mod engine {
                 if snapshot.is_none() {
                     let _ = persist_tx.send(settings.to_json());
                 }
-                // Block/cushion are the knobs we can safely re-apply to the live audio graph here on
-                // the capture thread (method/hrir/exclusive/camera need a restart — persisted above).
-                // Only a block change rebuilds the convolver (`render`); a cushion-only change rebuilds
-                // just the FIFO, so changing the cushion doesn't reset the convolution state.
+                // Block/cushion/method are the knobs re-applied to the live audio graph here on the
+                // capture thread (hrir/exclusive/camera need a restart — persisted above). A block or
+                // method change rebuilds the convolver (`render`); a cushion-only change rebuilds just
+                // the FIFO. NOTE: a synthesis-method rebuild runs the ring interpolation inline (~0.3 s
+                // for timealign on the 24k-tap Audeze set), so switching method mid-stream causes a
+                // brief capture gap + FIFO re-prime — acceptable for a deliberate dropdown change, the
+                // same rebuild mechanism block/cushion use.
                 let block_changed = settings.block != block_before;
-                if block_changed || settings.cushion_ms != cush_before {
+                let method_changed = settings.method != method_before;
+                if block_changed || method_changed || settings.cushion_ms != cush_before {
                     let new_block = settings.block;
                     let cushion = cushion_blocks(settings.cushion_ms, pack.samplerate, new_block);
-                    let render_ok = if block_changed {
-                        match build_render(&pack, n_in, new_block, latency_ms) {
+                    let render_ok = if block_changed || method_changed {
+                        match build_render(&pack, n_in, new_block, latency_ms, &settings.method, interp_step) {
                             Ok(r) => { render = r; true }
-                            Err(e) => { eprintln!("RECONFIG_ERROR {e}"); settings.block = block_before; false }
+                            Err(e) => {
+                                eprintln!("RECONFIG_ERROR {e}");
+                                settings.block = block_before;
+                                settings.method = method_before.clone();
+                                false
+                            }
                         }
                     } else {
                         true
@@ -533,7 +579,7 @@ mod engine {
                         *lock_fifo(&fifo) =
                             CushionFifo::new(cushion, cushion * 2, vec![0.0f32; block * 2]);
                         in_acc.clear();
-                        println!("RECONFIG block={block} cushion={cushion}");
+                        println!("RECONFIG block={block} cushion={cushion} method={}", settings.method);
                     }
                 }
             }
@@ -674,43 +720,44 @@ mod engine {
 
     /// Build the world-lock renderer from the pack, adapting to the source channel count (8 = full
     /// 7.1 ring + LFE; 6 = 5.1 ring + LFE; 2 = front L/R only, for a stereo source). The directional
-    /// inputs always steer over the pack's full ring grid, so a 5.1 source still rotates smoothly.
-    fn build_render(pack: &BrirPack, n_in: usize, block: usize, latency_ms: f64) -> Result<GridRender, String> {
+    /// inputs steer over a ring grid: for `nearest` that's the measured 7-speaker ring (cheapest);
+    /// for the synthesis methods it's the dense interpolated ring (`interp`, every `step_deg`), so a
+    /// head turn moves the phantom smoothly through the in-between directions (#187). The grid is
+    /// built once here (off the realtime path); `GridRender` itself stays allocation-free per block.
+    fn build_render(
+        pack: &BrirPack, n_in: usize, block: usize, latency_ms: f64, method: &str, step_deg: f64,
+    ) -> Result<GridRender, String> {
         let fade = (latency_ms * 1e-3 * pack.samplerate as f64).round().max(1.0) as i64;
+        // Steering grid: measured ring for nearest, dense interpolated ring otherwise. `taps` comes
+        // from the grid itself (the interpolation preserves the pack's tap count).
+        let (grid_l, grid_r, grid_az, n_grid, taps) = if method == "nearest" {
+            (pack.ring_left.clone(), pack.ring_right.clone(), pack.ring_az.clone(), pack.n_ring, pack.n_taps)
+        } else {
+            let d = crate::interp::interpolated_ring(
+                &pack.ring_left, &pack.ring_right, &pack.ring_az, pack.n_ring, pack.n_taps,
+                pack.samplerate, method, step_deg, true,
+            );
+            (d.left, d.right, d.az, d.naz, d.n_taps)
+        };
         match n_in {
+            // 7.1: the 7 directional input columns steer over the grid; LFE (col 3) its own convolver.
             8 => {
                 let lfe = Lfe::Brir {
-                    conv: BusConvolverCore::new(&pack.lfe_left, &pack.lfe_right, 1, pack.n_taps, block)?,
+                    conv: BusConvolverCore::new(&pack.lfe_left, &pack.lfe_right, 1, taps, block)?,
                     idx: pack.lfe_idx,
                 };
-                GridRender::new(
-                    &pack.ring_left, &pack.ring_right, pack.n_ring, pack.n_taps,
-                    pack.ring_az.clone(), pack.dir_idx.clone(), 8, fade, block, lfe,
-                )
+                GridRender::new(&grid_l, &grid_r, n_grid, taps, grid_az, pack.dir_idx.clone(), 8, fade, block, lfe)
             }
+            // 5.1 interleave (L,R,C,LFE,SL,SR): directional input columns 0,1,2,4,5; LFE col 3.
             6 => {
-                // 5.1 interleave (L,R,C,LFE,SL,SR): directional input columns 0,1,2,4,5 steer over the
-                // pack's full ring grid; LFE is input column 3. (Assumes the common Windows side-
-                // surround 5.1 layout — logged at startup so a mismatch is diagnosable.)
                 let lfe = Lfe::Brir {
-                    conv: BusConvolverCore::new(&pack.lfe_left, &pack.lfe_right, 1, pack.n_taps, block)?,
+                    conv: BusConvolverCore::new(&pack.lfe_left, &pack.lfe_right, 1, taps, block)?,
                     idx: 3,
                 };
-                GridRender::new(
-                    &pack.ring_left, &pack.ring_right, pack.n_ring, pack.n_taps,
-                    pack.ring_az.clone(), vec![0, 1, 2, 4, 5], 6, fade, block, lfe,
-                )
+                GridRender::new(&grid_l, &grid_r, n_grid, taps, grid_az, vec![0, 1, 2, 4, 5], 6, fade, block, lfe)
             }
-            2 => {
-                // Route the two stereo inputs (L,R) over the pack's FULL ring grid, exactly like the
-                // 5.1/7.1 arms, so a head turn steers them smoothly around the ring instead of
-                // snapping between only the two front buses (BUG-27 — the old 2-bus grid collapsed to
-                // a 2-point layout with no movement until the ±30° bisector).
-                GridRender::new(
-                    &pack.ring_left, &pack.ring_right, pack.n_ring, pack.n_taps,
-                    pack.ring_az.clone(), vec![0, 1], 2, fade, block, Lfe::None,
-                )
-            }
+            // Stereo: L,R over the full ring grid (BUG-27 — no 2-point collapse).
+            2 => GridRender::new(&grid_l, &grid_r, n_grid, taps, grid_az, vec![0, 1], 2, fade, block, Lfe::None),
             other => Err(format!("source has {other} channels; engine handles 8 (7.1), 6 (5.1), or 2 (stereo)")),
         }
     }

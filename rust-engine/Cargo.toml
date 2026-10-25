@@ -15,6 +15,11 @@ binaural_conv = { path = "../rust-conv-core" }
 control_plane = { path = "../rust-control-plane" }
 serde_json = { version = "1", features = ["preserve_order"] }
 hound = "3.5"
+# Ring-interpolation DSP (timealign/minphase/notchwarp): realfft for the real transforms, rustfft
+# for the full complex FFTs (Hilbert envelope, real-cepstrum min-phase). Same versions the conv
+# kernel already resolves, so no new transitive tree.
+realfft = "3.5"
+rustfft = "6"
 
 # WASAPI audio I/O is Windows-only; on other targets the engine builds (for the pack/geometry unit
 # tests) but main() prints a notice.
