@@ -24,6 +24,13 @@ audio_io = { path = "../rust-audio-io" }
 vision_client = { path = "../rust-vision-client", features = ["inference"] }
 # Minimal blocking HTTP (no TLS) to pull the camera MJPEG frames that feed the pose pipeline.
 ureq = { version = "2.12.1", default-features = false }
+# Direct webcam capture (MediaFoundation on Windows) — the product's default pose frame source.
+# `input-native` selects the OS-native backend (no extra runtime); frames decode to RGB for the
+# same pose pipeline the MJPEG path uses.
+nokhwa = { version = "0.10", features = ["input-native"] }
+# JPEG-encode the decoded camera frame for the cockpit `/camera` preview (BUG-07). Same version as
+# vision_client so the compiled `image` crate is shared, not duplicated.
+image = { version = "0.25.5", default-features = false, features = ["jpeg"] }
 
 [profile.release]
 opt-level = 3

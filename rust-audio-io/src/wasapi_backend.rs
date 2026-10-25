@@ -230,3 +230,23 @@ pub fn list_render_endpoints() -> Result<Vec<String>, String> {
     }
     Ok(out)
 }
+
+/// Enumerate render endpoints with their shared-mode mix format (name, channels, sample-rate).
+/// Channels/sr are `0` when an endpoint's format cannot be read. Used by `--list-devices` so the
+/// operator can pick an 8-channel (7.1) `--source` and the right `--output` by name substring.
+pub fn list_render_endpoints_detailed() -> Result<Vec<(String, u16, u32)>, String> {
+    let enumerator = DeviceEnumerator::new().map_err(|e| e.to_string())?;
+    let coll = enumerator.get_device_collection(&Direction::Render).map_err(|e| e.to_string())?;
+    let n = coll.get_nbr_devices().map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for i in 0..n {
+        let d = coll.get_device_at_index(i).map_err(|e| e.to_string())?;
+        let name = d.get_friendlyname().unwrap_or_default();
+        let (ch, sr) = match d.get_iaudioclient().and_then(|c| c.get_mixformat()) {
+            Ok(fmt) => (fmt.get_nchannels(), fmt.get_samplespersec()),
+            Err(_) => (0u16, 0u32),
+        };
+        out.push((name, ch, sr));
+    }
+    Ok(out)
+}
