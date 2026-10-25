@@ -37,3 +37,24 @@ edit the `set` lines at the top of the copied `run.cmd` — the rest is mode dis
 Flags after the mode are forwarded, e.g. `run.cmd listen --method nearest --block 1024`,
 `run.cmd listen --ui console`. `listen`/`test` relaunch automatically on the in-app Reload
 (Enter → exit 97). See `AGENTS.md` → "Running the host GUI apps" for the host-interop gotchas.
+
+## Native app (Tauri shell + installer)
+
+`src-tauri/` is a tiny Tauri shell (`wlbs-shell.exe`) that opens one native WebView2 window on
+the cockpit and spawns the engine via `run.cmd` (hidden, fixed port 8731, `--no-browser`); closing
+the window stops the engine. `host/build-tauri.sh` builds it **and** bundles a Windows installer:
+
+```
+bash host/build-tauri.sh
+# -> C:\Users\ibarz\wlbs-build\src-tauri\target\release\wlbs-shell.exe            (the shell)
+# -> ...\target\release\bundle\nsis\World-Locked Binaural Surround_<ver>_x64-setup.exe  (installer)
+```
+
+Windows `cargo` can't build on the WSL 9P filesystem, so the script syncs `src-tauri/` to a Windows
+build dir and runs `cargo.exe tauri build` there (`cargo tauri` comes from the `tauri-cli` crate,
+which the script installs once if missing). The first bundle run downloads NSIS + the WebView2
+bootstrapper; later runs reuse them and the kept `target/` cache.
+
+**Scope:** the installer packages the *window* (shell + WebView2). The engine it launches still runs
+the WSL Python checkout over `\\wsl.localhost\...` via the installed `run.cmd`, so the app is not yet
+a standalone distributable for a clean machine — it needs the owner's WSL + Python stack at runtime.
