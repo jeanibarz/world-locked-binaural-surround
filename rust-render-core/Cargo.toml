@@ -1,0 +1,16 @@
+[package]
+name = "render_core"
+version = "0.1.0"
+edition = "2021"
+description = "World-lock render core (R0 strangler): steering + crossfade DSP ported from live_render.py, bit-exact, exposed to Python via PyO3."
+publish = false
+
+[lib]
+name = "render_core"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.22", features = ["extension-module", "abi3-py310"] }
+
+[profile.release]
+opt-level = 3
