@@ -12,6 +12,8 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod solve;
+
 /// Protocol major version. Bump only on a breaking change; additive fields do not bump it.
 pub const PROTOCOL_VERSION: u32 = 1;
 
