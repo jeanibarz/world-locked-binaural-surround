@@ -127,9 +127,16 @@ kernel (pose-steered, nearest-over-ring + LFE), outputs to a spare endpoint, and
 **Verified end-to-end on the host** (loopback source, spare Bigscreen output, Idle): live render
 **7501 blocks / 40 s, 0 underruns**; cockpit `GET /` 200; **live SSE pose yaw 39.9°→33.7°**,
 `engine:"rust"`; and **`wlbs_engine.exe` has no child processes / no `py.exe`** — zero interpreter.
-Stage B (next): the `vision-client` camera→pose wire for live head tracking (Stage A uses a demo
-yaw rotator; the owner's camera is held by their running Python engine, so Stage B feeds a face
-image / MJPEG to prove the vision wire without a device conflict).
+**Engine integration — Stage B DONE** (live head tracking). The `vision-client` ONNX pipeline is
+wired into the engine as the pose source (`--camera-mjpeg <url>` pulls live frames; `--face-image`
+loops one; a direct `nokhwa` webcam is the documented product default). `ort` cross-compiles for
+Windows via `cargo-xwin` (onnxruntime static-linked → 22 MB self-contained exe + DirectML.dll; a
+case-mismatch symlink for `DirectML.lib`/`PathCch.lib` was the only fix). **Verified on the host**
+(loopback FiiO, spare output, Idle, pose pulled live from the owner's `:8731/camera`): the cockpit
+SSE shows **real tracked yaw** (−37.8° → 0.8° → 5.1° as the owner moves — not the demo sine),
+`engine:"rust"`, render advancing; `wlbs_engine.exe` still has no `py.exe` in its tree. The cushion
+absorbs the ONNX-thread contention (underruns bounded, mostly model-load warmup, fewer with a larger
+`--latency-ms`; the render threads hold MMCSS Pro Audio — cleaner outside an Idle-capped test run).
 
 5. **Track S (studio):** M-D2's Python baker is the start; OQ1 = grow the core baker in the sibling
    `binaural-localization`; a Rust-native baker makes the *product* zero-Python.

@@ -20,6 +20,10 @@ hound = "3.5"
 # tests) but main() prints a notice.
 [target.'cfg(windows)'.dependencies]
 audio_io = { path = "../rust-audio-io" }
+# The Rust-native head-pose pipeline (ONNX via ort) — the zero-Python tracker.
+vision_client = { path = "../rust-vision-client", features = ["inference"] }
+# Minimal blocking HTTP (no TLS) to pull the camera MJPEG frames that feed the pose pipeline.
+ureq = { version = "2.12.1", default-features = false }
 
 [profile.release]
 opt-level = 3

@@ -16,6 +16,7 @@
 
 mod geometry;
 mod pack;
+mod vision;
 
 #[cfg(not(windows))]
 fn main() {
@@ -66,12 +67,20 @@ mod engine {
         let rotate_demo = flag(&a, "--rotate-demo");
         let web_dir = arg(&a, "--web-dir").unwrap_or_else(|| "apps/web_cockpit".into());
         let run_secs: f64 = arg(&a, "--secs").and_then(|s| s.parse().ok()).unwrap_or(0.0); // 0 = forever
+        // Head-pose source (zero-Python vision-client). --camera-mjpeg pulls live frames from an
+        // MJPEG URL; --face-image loops one image; else the demo rotator / held yaw.
+        let onnx_dir = arg(&a, "--onnx-dir").unwrap_or_else(|| r"C:\Users\ibarz\facemesh_extract".into());
+        let canonical = arg(&a, "--canonical")
+            .unwrap_or_else(|| r"C:\Users\ibarz\canonical_face_model.obj".into());
+        let camera_mjpeg = arg(&a, "--camera-mjpeg");
+        let face_image = arg(&a, "--face-image");
+        let pose_stride: usize = arg(&a, "--pose-stride").and_then(|s| s.parse().ok()).unwrap_or(2);
 
         let pack = Arc::new(BrirPack::load(&brir_dir)?);
         println!("PACK sr={} taps={} ring={} lfe_idx={}", pack.samplerate, pack.n_taps, pack.n_ring, pack.lfe_idx);
 
         // Shared state.
-        let yaw = Arc::new(Mutex::new(0.0f64));
+        let pose = crate::vision::PoseState::new();
         let fifo: Arc<Mutex<CushionFifo<StereoBlock>>> = {
             let cushion = cushion_blocks(latency_ms, pack.samplerate, block);
             Arc::new(Mutex::new(CushionFifo::new(cushion, cushion * 2, vec![0.0f32; block * 2])))
@@ -92,15 +101,23 @@ mod engine {
             std::thread::spawn(move || control_plane::serve_blocking(cockpit, port));
         }
 
-        // --- demo yaw rotator (stands in for the camera until stage B) ---
-        if rotate_demo {
-            let yaw = Arc::clone(&yaw);
+        // --- head-pose source ---
+        if let Some(url) = camera_mjpeg {
+            println!("POSE mjpeg {url}");
+            crate::vision::spawn_mjpeg_pose(
+                url, onnx_dir, canonical, pose_stride, Arc::clone(&pose), Arc::clone(&running),
+            );
+        } else if let Some(img) = face_image {
+            println!("POSE image {img}");
+            crate::vision::spawn_image_pose(img, onnx_dir, canonical, Arc::clone(&pose), Arc::clone(&running));
+        } else if rotate_demo {
+            println!("POSE demo-rotator");
+            let pose = Arc::clone(&pose);
             let running = Arc::clone(&running);
             std::thread::spawn(move || {
                 let t0 = Instant::now();
                 while running.load(Ordering::Relaxed) {
-                    // sweep ±40° at ~0.1 Hz so the world-lock is audible/visible
-                    *yaw.lock().unwrap() = 40.0 * (t0.elapsed().as_secs_f64() * 0.2).sin();
+                    *pose.yaw.lock().unwrap() = 40.0 * (t0.elapsed().as_secs_f64() * 0.2).sin();
                     std::thread::sleep(Duration::from_millis(20));
                 }
             });
@@ -143,7 +160,7 @@ mod engine {
                 continue; // capture event timed out
             }
             in_acc.extend_from_slice(&buf);
-            let cur_yaw = *yaw.lock().unwrap();
+            let cur_yaw = *pose.yaw.lock().unwrap();
             let az = head_relative_azimuths(cur_yaw, yaw_sign);
             while in_acc.len() >= block * n_in {
                 let pcm: Vec<f32> = in_acc.drain(..block * n_in).collect();
