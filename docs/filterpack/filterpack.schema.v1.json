@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jeanibarz/world-locked-binaural-surround/filterpack.schema.v1.json",
+  "title": "filterpack manifest v1",
+  "description": "The engine<->toolkit contract. Primary payload = the measured baked set (per-input-channel stereo BRIRs + 7.1 input layout + non-directional LFE handling). Optional pre-baked grid overlay for comparison. The engine loads this WITHOUT parsing SOFA/HDF5 or doing CTF/DF decomposition (all offline in the toolkit).",
+  "type": "object",
+  "required": ["filterpack_version", "name", "samplerate", "ir_length", "comp", "convention", "gain", "layout", "integrity"],
+  "additionalProperties": true,
+  "properties": {
+    "filterpack_version": {"const": 1},
+    "name": {"type": "string", "minLength": 1},
+    "provenance": {
+      "type": "object",
+      "description": "Metadata only (not engine logic). license governs redistribution (OQ2).",
+      "properties": {
+        "source": {"type": "string"},
+        "subject": {"type": "string"},
+        "license": {"type": "string"}
+      }
+    },
+    "samplerate": {"type": "integer", "enum": [44100, 48000, 88200, 96000]},
+    "ir_length": {"type": "integer", "minimum": 1},
+    "comp": {"type": "string", "enum": ["ctf", "df"], "description": "this pack's compensation variant"},
+    "convention": {
+      "type": "object",
+      "description": "Required and unambiguous, else packs localize backwards across toolkits.",
+      "required": ["azimuth_zero", "azimuth_positive", "angle_units", "yaw_sign", "pitch_sign", "roll_sign"],
+      "properties": {
+        "azimuth_zero": {"type": "string", "enum": ["front"]},
+        "azimuth_positive": {"type": "string", "enum": ["counterclockwise", "clockwise"]},
+        "angle_units": {"type": "string", "enum": ["degrees"]},
+        "yaw_sign": {"enum": [-1, 1]},
+        "pitch_sign": {"enum": [-1, 1]},
+        "roll_sign": {"enum": [-1, 1]}
+      }
+    },
+    "gain": {
+      "type": "object",
+      "description": "For level-matched live set-switching (else switching jumps loudness).",
+      "properties": {
+        "integrated_lufs": {"type": "number"},
+        "peak_dbfs": {"type": "number"}
+      }
+    },
+    "layout": {
+      "type": "object",
+      "required": ["channels", "speakers"],
+      "properties": {
+        "channels": {"type": "array", "items": {"type": "string"}, "minItems": 1,
+                     "description": "input-channel / routing order; manifest order is authoritative"},
+        "lfe": {
+          "type": "object",
+          "properties": {
+            "channel": {"type": "string"},
+            "mode": {"type": "string", "enum": ["brir", "flat"]}
+          }
+        },
+        "speakers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["ir"],
+            "properties": {
+              "azimuth_deg": {"type": ["number", "null"], "description": "null = non-directional (LFE)"},
+              "ir": {"type": "string", "description": "stereo wav: ch0=left ear, ch1=right ear"}
+            }
+          }
+        }
+      }
+    },
+    "grid": {
+      "type": ["object", "null"],
+      "description": "Optional pre-baked direction overlay for comparison/test (dense SOFA baked). Not required for the daily world-locked render, which synthesises the ring at runtime.",
+      "properties": {
+        "step_deg": {"type": "number"},
+        "method": {"type": "string"},
+        "dirs": {"type": "array", "items": {
+          "type": "object", "required": ["azimuth_deg", "ir"],
+          "properties": {"azimuth_deg": {"type": "number"}, "ir": {"type": "string"}}
+        }}
+      }
+    },
+    "integrity": {
+      "type": "object",
+      "required": ["algo", "files"],
+      "properties": {
+        "algo": {"const": "sha256"},
+        "files": {"type": "object", "additionalProperties": {"type": "string"}}
+      }
+    }
+  }
+}
