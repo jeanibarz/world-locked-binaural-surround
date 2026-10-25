@@ -1,0 +1,14 @@
+[package]
+name = "audio_io"
+version = "0.1.0"
+edition = "2021"
+description = "Zero-Python native audio I/O for the world-lock engine: WASAPI loopback capture + event-driven render behind device-agnostic traits, the cushioned drift-FIFO, and MMCSS elevation (R-S2). Replaces sounddevice/PyAudioWPatch; a Track-B SYSVAD capture is a drop-in."
+publish = false
+
+# WASAPI is Windows-only; the FIFO + traits are pure and build everywhere (unit-tested on WSL/CI).
+[target.'cfg(windows)'.dependencies]
+wasapi = "0.26.0"
+
+[[bin]]
+name = "audio_probe"
+path = "src/bin/audio_probe.rs"

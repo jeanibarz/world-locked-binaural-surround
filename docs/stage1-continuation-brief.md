@@ -93,9 +93,20 @@ Add each crate's body **as its code lands** (YAGNI — do NOT stub empty crates)
    **1.7× speedup that crosses into realtime** (removes the numpy BusMixer + marshaling + GIL glue).
    Next (follow-up): wire `RenderGrid`/`binaural_conv` into the live engine + a pure-Rust binary
    (no PyO3 shim) as `audio-io`/`control-plane` land.
-3. **`audio-io`:** `wasapi` loopback capture + output, the cushioned drift-FIFO (journal 81 re-prime),
-   MMCSS elevation (proven in R-S2), behind an `AudioSource`/output trait so Track-B (SYSVAD) is a
-   drop-in. Replaces `sounddevice`/PyAudioWPatch.
+3. **`audio-io`** — **DONE** (slice 3). Native `audio_io` crate replacing `sounddevice`/PyAudioWPatch:
+   - **Traits** `AudioSource`/`AudioOutput` (device-agnostic, so a Track-B SYSVAD capture drops in).
+   - **`CushionFifo`** — pure, cross-platform: the cushioned output drift-FIFO with the journal-81
+     maintained-setpoint **re-prime** (prefill `cushion`; `max_backlog = 2·cushion` drops oldest on
+     drift; on underrun hold silent until rebuilt to `cushion`, then resume). 5 unit tests cover
+     prefill / steady-state / backlog-cap / underrun→reprime (WSL/CI, no audio).
+   - **WASAPI backend** (`cfg(windows)`): `WasapiLoopback` capture + `WasapiRender` event-driven
+     shared-mode output + MMCSS "Pro Audio" elevation. Cross-compiled from WSL via `cargo-xwin`.
+   - **Gate — measured on host (loopback-only, Idle, 30 s)** via the `audio_probe` binary: capture
+     **1,440,960 frames/30 s** (== R-S2's 1.44M), **0 event-timeouts**, 0 silent, drift **+306 ppm**
+     (R-S2 +276; cushion-absorbable), **MMCSS Pro Audio = true from Rust**. The live-driven FIFO:
+     **0 underruns / 0 re-primes / 0 overflow-drops**, mean fill 6.49 blocks (above the 4-block
+     cushion) — stable. (`WasapiRender` compiles + is behind the trait; live output validation is
+     deferred to when the engine drives it, to keep this slice strictly loopback-only.)
 4. **`control-plane`:** `axum` serving the existing web-cockpit assets (`apps/web_cockpit/*`) +
    `/events` SSE + `/camera` MJPEG + `/api` + the crash-safe settings store. **Freeze the wire
    protocol with a conformance test** run against both the Python and Rust servers.
