@@ -315,6 +315,12 @@ def main(argv=None) -> int:
     p.add_argument("--ui", choices=("web",), default="web",
                    help="front-end: the web cockpit (HTTP server + browser/native window). The "
                         "only UI; kept as a flag for forward compatibility.")
+    p.add_argument("--port", type=int, default=0,
+                   help="fixed HTTP port for the cockpit (0 = pick a free one). A native shell "
+                        "(Tauri) uses a fixed port so it knows the window URL without parsing stdout.")
+    p.add_argument("--no-browser", action="store_true",
+                   help="serve only; do not auto-open a browser. Use when a native shell provides "
+                        "the window, or to open the URL in Chrome yourself for inspection.")
     p.add_argument("--log-fifo-fill", type=Path, default=None,
                    help="A0 diagnostic (RFC Track A): log output-FIFO fill vs time to this CSV, "
                         "then run `python -m binaural_headtracker.fifo_drift <csv>` to classify "
@@ -882,7 +888,8 @@ def main(argv=None) -> int:
         except (OSError, ValueError, KeyError, TypeError):
             pass
         win_ck = CW.WebCockpit(
-            title=f"World-Locked Binaural Surround — webcam {cam_index}", width=_w0, height=_h0)
+            title=f"World-Locked Binaural Surround — webcam {cam_index}", width=_w0, height=_h0,
+            port=args.port, open_browser=not args.no_browser)
 
         def _save_window_size(w, h) -> None:  # noqa: ANN001
             try:
