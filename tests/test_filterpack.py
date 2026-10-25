@@ -66,3 +66,15 @@ def test_rejects_wrong_version(tmp_path):
     (d / "manifest.json").write_text(json.dumps(m))
     with pytest.raises(fp.FilterPackError, match="unsupported filterpack_version"):
         fp.load(d)
+
+
+def test_rust_loader_byte_identical():
+    """M-D1 gate: the Rust loader (PyO3) reads the pack byte-identically to Python.
+
+    Skipped when the native `filterpack_rs` module is not built (same pattern as the kernel's
+    optional accelerator); build it with `maturin develop -m rust-filterpack/Cargo.toml`.
+    """
+    filterpack_rs = pytest.importorskip("filterpack_rs")
+    d_py = fp.canonical_digest(fp.load(FIXTURE))
+    d_rs = filterpack_rs.canonical_digest_of(str(FIXTURE))
+    assert d_rs == d_py == GOLDEN_DIGEST  # diff = 0: identical reads from both sides
