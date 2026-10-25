@@ -107,9 +107,18 @@ Add each crate's body **as its code lands** (YAGNI — do NOT stub empty crates)
      **0 underruns / 0 re-primes / 0 overflow-drops**, mean fill 6.49 blocks (above the 4-block
      cushion) — stable. (`WasapiRender` compiles + is behind the trait; live output validation is
      deferred to when the engine drives it, to keep this slice strictly loopback-only.)
-4. **`control-plane`:** `axum` serving the existing web-cockpit assets (`apps/web_cockpit/*`) +
-   `/events` SSE + `/camera` MJPEG + `/api` + the crash-safe settings store. **Freeze the wire
-   protocol with a conformance test** run against both the Python and Rust servers.
+4. **`control-plane`** — **DONE** (slice 4). The `control_plane` axum crate serving the existing
+   web-cockpit assets (`apps/web_cockpit/*`) + `/events` SSE (`data: <json>\n\n`, `: ping` idle) +
+   `/camera` MJPEG (`multipart/x-mixed-replace; boundary=frame`) + `GET /api/get_config` +
+   `POST /api/<name>` + a **crash-safe settings store** (atomic temp+fsync+rename; corrupt→defaults,
+   2 unit tests). The engine drives it via a `Cockpit` handle (`push_state`/`set_frame`/`set_config`,
+   control events in `take_dispatched`); byte-exact framing to the Python server (`_send` headers +
+   `Cache-Control: no-store`). **Gate — wire-protocol conformance run against BOTH servers**
+   (`tests/test_control_plane_conformance.py`: starts the Python `WebCockpit` in-process + the Rust
+   `cockpit_server` subprocess on identical fixtures): **9/9 pass** — `get_config` JSON equal, static
+   (4 assets) status/Content-Type/body equal, 404 equal, `POST /api` 200 `{}` equal, SSE `data:`
+   framing + JSON equal, MJPEG multipart framing equal. The wire protocol is frozen. clippy clean.
+   (Serves stubbed state until the Rust engine is wired in to produce real `Cockpit` state.)
 5. **Track S (studio):** M-D2's Python baker is the start; OQ1 = grow the core baker in the sibling
    `binaural-localization`; a Rust-native baker makes the *product* zero-Python.
 6. **Track D (distributable):** M-D1/M-D2 done; M-D3 bundle + asset bundling + user pack dir

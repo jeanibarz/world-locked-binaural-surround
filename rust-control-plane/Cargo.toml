@@ -1,0 +1,18 @@
+[package]
+name = "control_plane"
+version = "0.1.0"
+edition = "2021"
+description = "Zero-Python control plane: an axum server that serves the existing web cockpit assets + /events SSE + /camera MJPEG + /api, wire-compatible with the Python cockpit server (frozen by a conformance test). Plus a crash-safe settings store."
+publish = false
+
+[dependencies]
+axum = "0.7.9"
+tokio = { version = "1.42.0", features = ["rt-multi-thread", "macros", "net", "time", "sync", "signal"] }
+async-stream = "0.3.6"
+bytes = "1.9.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[[bin]]
+name = "cockpit_server"
+path = "src/bin/cockpit_server.rs"
