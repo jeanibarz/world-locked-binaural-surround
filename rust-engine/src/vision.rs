@@ -68,6 +68,10 @@ impl PoseState {
     /// simply mirrors around 0 — no jump, no re-centre. Applied on startup from the persisted
     /// setting and on the cockpit toggle (BUG #189).
     pub fn set_inverted(&self, invert: bool) {
+        // Hold `yaw0` for the whole flip, the same lock order `update_raw`/`recenter` use (yaw0 then
+        // yaw), so a concurrent pose can't land between the swap and the mirror and leave a
+        // wrong-sign yaw for a frame.
+        let _y0 = self.yaw0.lock().unwrap();
         let was = self.invert.swap(invert, Ordering::Relaxed);
         if was != invert {
             // Reflect the new sign in the already-published yaw immediately, so the radar/audio
