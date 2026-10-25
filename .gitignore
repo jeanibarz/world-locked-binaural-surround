@@ -24,3 +24,7 @@ rust/target/
 
 # Runtime crash-safe settings store (RFC rfc-crash-safe-settings) — user-local, never committed
 cockpit_config/
+
+# Tauri build output
+src-tauri/target/
+src-tauri/gen/
