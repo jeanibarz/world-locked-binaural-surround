@@ -15,6 +15,7 @@ use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use vision_client::image_util::RgbImage;
 use vision_client::pipeline::{decode_image, Pipeline};
 
 /// Shared, recenter-able head yaw (deg). The first valid pose defines neutral (0).
@@ -34,6 +35,99 @@ impl PoseState {
         }
         *self.yaw.lock().unwrap() = raw_yaw - y0.unwrap();
     }
+}
+
+/// Enumerate the local cameras (index, human name) for the cockpit picker. Empty on error / none.
+pub fn enumerate_cameras() -> Vec<(u32, String)> {
+    use nokhwa::query;
+    use nokhwa::utils::{ApiBackend, CameraIndex};
+    match query(ApiBackend::Auto) {
+        Ok(list) => list
+            .iter()
+            .filter_map(|c| match c.index() {
+                CameraIndex::Index(i) => Some((*i, c.human_name())),
+                CameraIndex::String(_) => None,
+            })
+            .collect(),
+        Err(e) => {
+            eprintln!("VISION_ERROR camera query: {e}");
+            Vec::new()
+        }
+    }
+}
+
+/// Open local camera `index`, run the pose pipeline on ~every `stride`-th frame, update `pose`.
+/// Drop-in behind the same yaw loop as the MJPEG path, fed by direct webcam capture (nokhwa).
+pub fn spawn_camera_pose(
+    index: u32,
+    onnx_dir: String,
+    canonical: String,
+    stride: usize,
+    pose: Arc<PoseState>,
+    running: Arc<AtomicBool>,
+) {
+    std::thread::spawn(move || {
+        use nokhwa::pixel_format::RgbFormat;
+        use nokhwa::utils::{CameraIndex, RequestedFormat, RequestedFormatType};
+        use nokhwa::Camera;
+
+        let mut pipe = match Pipeline::new(&onnx_dir, &canonical) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("VISION_ERROR pipeline: {e}");
+                return;
+            }
+        };
+        let fmt = RequestedFormat::new::<RgbFormat>(RequestedFormatType::AbsoluteHighestFrameRate);
+        let mut cam = match Camera::new(CameraIndex::Index(index), fmt) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("VISION_ERROR camera open (index {index}): {e}");
+                return;
+            }
+        };
+        if let Err(e) = cam.open_stream() {
+            eprintln!("VISION_ERROR camera stream: {e}");
+            return;
+        }
+        let res = cam.resolution();
+        println!("POSE camera index={index} {}x{}", res.width(), res.height());
+
+        let (mut ok, mut miss, mut n) = (0u64, 0u64, 0usize);
+        while running.load(Ordering::Relaxed) {
+            let frame = match cam.frame() {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!("VISION_ERROR frame: {e}");
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    continue;
+                }
+            };
+            n += 1;
+            if !n.is_multiple_of(stride) {
+                continue; // sub-sample: pose rate < camera rate (NFR-4b decoupling)
+            }
+            let decoded = match frame.decode_image::<RgbFormat>() {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+            let img = RgbImage {
+                w: decoded.width() as usize,
+                h: decoded.height() as usize,
+                px: decoded.as_raw().iter().map(|&b| b as f32).collect(),
+            };
+            match pipe.estimate(&img) {
+                Ok(Some(est)) => {
+                    ok += 1;
+                    pose.update_raw(est.pose.0);
+                }
+                _ => miss += 1,
+            }
+            if (ok + miss).is_multiple_of(30) {
+                eprintln!("VISION ok={ok} miss={miss} yaw={:.1}", *pose.yaw.lock().unwrap());
+            }
+        }
+    });
 }
 
 /// Extract complete JPEGs (SOI 0xFFD8 … EOI 0xFFD9) from a growing byte buffer, returning the

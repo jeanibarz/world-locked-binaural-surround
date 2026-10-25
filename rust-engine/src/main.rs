@@ -72,6 +72,17 @@ mod engine {
             println!("imported -> {}", dst.display());
             return Ok(());
         }
+        // List WASAPI render endpoints with channel counts, then exit — pick an 8-channel (7.1)
+        // endpoint for --source and your headphone endpoint for --output (name substring, case-insensitive).
+        if flag(&a, "--list-devices") {
+            audio_io::wasapi_backend::init_com().map_err(|e| format!("init_com: {e}"))?;
+            println!("render endpoints (name | channels | sample-rate):");
+            for (name, ch, sr) in audio_io::wasapi_backend::list_render_endpoints_detailed()? {
+                let tag = if ch >= 8 { "  <- 7.1-capable (use for --source)" } else { "" };
+                println!("  {ch}ch  {sr:>6} Hz  {name}{tag}");
+            }
+            return Ok(());
+        }
 
         // BRIR pack: --pack <name> (bundled default / %APPDATA%), else --brir-dir, else the bundled
         // default beside the exe. No hardcoded paths — a clean-machine install resolves itself.
@@ -110,6 +121,14 @@ mod engine {
         let camera_mjpeg = arg(&a, "--camera-mjpeg");
         let face_image = arg(&a, "--face-image");
         let pose_stride: usize = arg(&a, "--pose-stride").and_then(|s| s.parse().ok()).unwrap_or(2);
+        let camera_idx = arg(&a, "--camera").and_then(|s| s.parse::<u32>().ok());
+        // Enumerate local cameras once, for the cockpit picker and the auto-default source.
+        let cameras = crate::vision::enumerate_cameras();
+        for (i, n) in &cameras {
+            println!("CAMERA {i} {n}");
+        }
+        let cameras_json =
+            serde_json::Value::Array(cameras.iter().map(|(i, n)| serde_json::json!([n, i])).collect());
 
         let pack = Arc::new(BrirPack::load(&brir_dir)?);
         println!("PACK sr={} taps={} ring={} lfe_idx={}", pack.samplerate, pack.n_taps, pack.n_ring, pack.lfe_idx);
@@ -126,7 +145,7 @@ mod engine {
         let cockpit = Cockpit::new(
             web_dir,
             serde_json::json!({
-                "cameras": [], "hrir": ["mine"], "methods": ["nearest"],
+                "cameras": cameras_json, "hrir": ["mine"], "methods": ["nearest"],
                 "resolutions": ["default"], "framerates": ["default"], "samplerate": 48000,
                 "win_w": 1320, "win_h": 864, "method": "nearest", "backend": "rust", "block": block
             }),
@@ -136,8 +155,20 @@ mod engine {
             std::thread::spawn(move || control_plane::serve_blocking(cockpit, port));
         }
 
-        // --- head-pose source ---
-        if let Some(url) = camera_mjpeg {
+        // --- head-pose source --- priority: explicit --camera > mjpeg > image > demo > auto-camera > held.
+        // Auto-use the first local camera when no other source was requested (the product default).
+        let auto_cam = camera_idx.or_else(|| {
+            if camera_mjpeg.is_none() && face_image.is_none() && !rotate_demo {
+                cameras.first().map(|(i, _)| *i)
+            } else {
+                None
+            }
+        });
+        if let Some(idx) = auto_cam {
+            crate::vision::spawn_camera_pose(
+                idx, onnx_dir, canonical, pose_stride, Arc::clone(&pose), Arc::clone(&running),
+            );
+        } else if let Some(url) = camera_mjpeg {
             println!("POSE mjpeg {url}");
             crate::vision::spawn_mjpeg_pose(
                 url, onnx_dir, canonical, pose_stride, Arc::clone(&pose), Arc::clone(&running),
