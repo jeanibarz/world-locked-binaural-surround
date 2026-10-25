@@ -41,18 +41,25 @@ fn valid_pack_name(name: &str) -> bool {
         && !name.contains('\\')
         && !name.contains(':')
         && !name.contains('\0')
+        // Win32 strips trailing dots/spaces, so `"..."`/`".. "` could normalise to `..`/empty — reject.
+        && name.trim_end_matches(['.', ' ']) == name
 }
 
-/// Recursively copy `src` into `dst` (both directories), preserving nested files.
+/// Recursively copy `src` into `dst` (both directories), preserving nested files. Symlinked entries
+/// are skipped so a symlink cycle in the source can't make the copy recurse forever.
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
     for entry in std::fs::read_dir(src).map_err(|e| e.to_string())? {
         let p = entry.map_err(|e| e.to_string())?.path();
         let Some(name) = p.file_name() else { continue };
+        let meta = std::fs::symlink_metadata(&p).map_err(|e| format!("stat {}: {e}", p.display()))?;
+        if meta.file_type().is_symlink() {
+            continue; // don't follow symlinks (cycle-safe)
+        }
         let to = dst.join(name);
-        if p.is_dir() {
+        if meta.is_dir() {
             std::fs::create_dir_all(&to).map_err(|e| format!("create {}: {e}", to.display()))?;
             copy_dir_recursive(&p, &to)?;
-        } else if p.is_file() {
+        } else if meta.is_file() {
             std::fs::copy(&p, &to).map_err(|e| format!("copy {}: {e}", p.display()))?;
         }
     }
@@ -112,7 +119,14 @@ pub fn import_pack(src: &Path, name: Option<&str>) -> Result<PathBuf, String> {
         return Err(format!("invalid pack name {name:?} (no path separators, '..', or drive colon)"));
     }
     let dst = user_packs_dir().join(&name);
+    // Refuse importing a pack onto itself (or a nested path): the clear-before-copy below would
+    // otherwise delete the source. Only possible when `dst` already exists (so we can canonicalize).
     if dst.exists() {
+        let src_c = src.canonicalize().map_err(|e| format!("resolve {}: {e}", src.display()))?;
+        let dst_c = dst.canonicalize().map_err(|e| format!("resolve {}: {e}", dst.display()))?;
+        if src_c == dst_c || src_c.starts_with(&dst_c) || dst_c.starts_with(&src_c) {
+            return Err(format!("refusing to import {} onto itself", dst.display()));
+        }
         std::fs::remove_dir_all(&dst).map_err(|e| format!("clear {}: {e}", dst.display()))?;
     }
     std::fs::create_dir_all(&dst).map_err(|e| format!("create {}: {e}", dst.display()))?;
@@ -177,6 +191,10 @@ mod tests {
         assert_eq!(dst2, dst);
         assert!(!dst.join("STALE.wav").exists(), "re-import must clear stale files");
         assert!(dst.join("SR_R.wav").is_file());
+
+        // importing a pack onto itself must be refused, not delete it (clear-before-copy guard)
+        assert!(import_pack(&dst, Some("imported")).is_err());
+        assert!(is_pack_dir(&dst), "a refused self-import must leave the pack intact");
 
         std::env::remove_var("APPDATA");
         let _ = std::fs::remove_dir_all(&root);
