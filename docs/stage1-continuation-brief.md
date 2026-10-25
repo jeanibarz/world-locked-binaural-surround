@@ -119,6 +119,18 @@ Add each crate's body **as its code lands** (YAGNI — do NOT stub empty crates)
    (4 assets) status/Content-Type/body equal, 404 equal, `POST /api` 200 `{}` equal, SSE `data:`
    framing + JSON equal, MJPEG multipart framing equal. The wire protocol is frozen. clippy clean.
    (Serves stubbed state until the Rust engine is wired in to produce real `Cockpit` state.)
+**Engine integration — Stage A DONE** (the four crates → one running zero-Python binary). New
+`wlbs_engine` binary + a pure-Rust `render_core_lib` (the render logic extracted from the PyO3
+`render_core`, now its shim — parity preserved 16/16) + `control_plane::serve_blocking`. It loads the
+baked 7.1 BRIRs (own hound reader), loopback-captures a source, world-lock renders on the native
+kernel (pose-steered, nearest-over-ring + LFE), outputs to a spare endpoint, and serves the cockpit.
+**Verified end-to-end on the host** (loopback source, spare Bigscreen output, Idle): live render
+**7501 blocks / 40 s, 0 underruns**; cockpit `GET /` 200; **live SSE pose yaw 39.9°→33.7°**,
+`engine:"rust"`; and **`wlbs_engine.exe` has no child processes / no `py.exe`** — zero interpreter.
+Stage B (next): the `vision-client` camera→pose wire for live head tracking (Stage A uses a demo
+yaw rotator; the owner's camera is held by their running Python engine, so Stage B feeds a face
+image / MJPEG to prove the vision wire without a device conflict).
+
 5. **Track S (studio):** M-D2's Python baker is the start; OQ1 = grow the core baker in the sibling
    `binaural-localization`; a Rust-native baker makes the *product* zero-Python.
 6. **Track D (distributable):** M-D1/M-D2 done; M-D3 bundle + asset bundling + user pack dir
