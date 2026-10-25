@@ -131,6 +131,11 @@ pub fn import_pack(src: &Path, name: Option<&str>) -> Result<PathBuf, String> {
     }
     std::fs::create_dir_all(&dst).map_err(|e| format!("create {}: {e}", dst.display()))?;
     copy_dir_recursive(src, &dst)?;
+    // Verify the copy actually produced a loadable pack (e.g. symlinked WAVs are skipped), so an
+    // incomplete import fails loudly rather than resolving later to an `L_L.wav` error.
+    if !is_pack_dir(&dst) {
+        return Err(format!("import produced an incomplete pack at {} (missing WAVs?)", dst.display()));
+    }
     Ok(dst)
 }
 
