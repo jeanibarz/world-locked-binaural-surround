@@ -258,7 +258,7 @@ mod engine {
         // Persist off the real-time capture thread: an `fsync` can stall tens of ms, which on the
         // capture thread would be an audio dropout. The thread sends settings JSON to this saver.
         let (persist_tx, persist_rx) = std::sync::mpsc::channel::<serde_json::Value>();
-        std::thread::spawn(move || {
+        let persist_handle = std::thread::spawn(move || {
             while let Ok(v) = persist_rx.recv() {
                 let _ = store.save(&v);
             }
@@ -514,6 +514,9 @@ mod engine {
         }
         running.store(false, Ordering::Relaxed);
         let _ = src.stop();
+        // Flush any pending save (e.g. a settings_commit sent just before shutdown) before exit.
+        drop(persist_tx);
+        let _ = persist_handle.join();
         println!("DONE rendered_blocks={rendered_blocks} elapsed_s={:.2}", start.elapsed().as_secs_f64());
         Ok(())
     }
