@@ -66,4 +66,4 @@ if %errorlevel%==97 goto loop
 goto end
 
 :end
-pause
+if not defined WLBS_HIDDEN pause
