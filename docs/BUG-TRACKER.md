@@ -30,7 +30,9 @@
 | BUG-31 | P2 | Fixed | PR3 (clamp `--pose-stride` ≥ 1) |
 | BUG-32 | P2 | Fixed | PR3 (count + log camera decode failures) |
 | BUG-34 | P3 | Partial | PR3 fixes the stale doc + logs skipped string cameras; live camera-switch/COM confirm pending |
-| BUG-13, 21, 27 | P1/P2 | Open | PR4 (DSP/perf) |
+| BUG-13 | P1 | Fixed | PR4 `fix/dsp-perf` (resident RT scratch in render_core_lib + engine loop; single-thread conv benchmark noted) |
+| BUG-21 | P2 | Fixed | PR4 (output clamp + non-finite drop; reject non-finite IR taps at load) |
+| BUG-27 | P2 | Fixed | PR4 (stereo world-lock over the full ring grid) |
 | BUG-16, 22, 24, 25, 26 | P2 | Open | PR5 (lifecycle/packs) |
 
 > Baseline: the uncommitted "direct webcam capture (nokhwa) + `--list-devices`" edits were applied

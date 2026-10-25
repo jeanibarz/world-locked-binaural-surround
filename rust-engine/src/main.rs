@@ -395,6 +395,8 @@ mod engine {
         let start = Instant::now();
         let mut in_acc: Vec<f32> = Vec::with_capacity(block * n_in * 4);
         let mut buf: Vec<f32> = Vec::with_capacity(block * n_in * 4);
+        let mut pcm64: Vec<f64> = Vec::with_capacity(block * n_in); // reused render input (BUG-13)
+        let mut out64: Vec<f64> = vec![0.0; block * 2]; // reused render output (BUG-13)
         let mut last_tele = Instant::now();
         let mut last_audio = Instant::now();
         let mut rendered_blocks = 0u64;
@@ -522,15 +524,27 @@ mod engine {
                 };
                 let block_time = block as f64 / pack.samplerate.max(1) as f64;
                 while in_acc.len() >= block * n_in {
-                    let pcm: Vec<f32> = in_acc.drain(..block * n_in).collect();
-                    let pcm64: Vec<f64> = pcm.iter().map(|&v| v as f64).collect();
-                    let mut out = vec![0.0f64; block * 2];
+                    // Reuse the transient scratch across blocks (BUG-13): drain straight into the f64
+                    // input buffer and render into a resident output buffer; only the FIFO payload
+                    // (`stereo`, which the FIFO owns) is freshly allocated.
+                    pcm64.clear();
+                    pcm64.extend(in_acc.drain(..block * n_in).map(|v| v as f64));
+                    out64.resize(block * 2, 0.0);
                     let t0 = Instant::now();
-                    render.process_into(&pcm64, &az, &mut out);
+                    render.process_into(&pcm64, &az, &mut out64);
                     let pct = if block_time > 0.0 { t0.elapsed().as_secs_f64() / block_time * 100.0 } else { 0.0 };
                     render_ema = render_ema * 0.9 + pct * 0.1;
                     if pct > render_peak { render_peak = pct; }
-                    let stereo: StereoBlock = out.iter().map(|&v| v as f32).collect();
+                    // Clamp to [-1,1] and drop non-finite samples before the device: the Float32
+                    // output path does no clamping, so an overshoot would clip and a stray NaN/Inf
+                    // (e.g. from a bad render) would reach the endpoint (BUG-21).
+                    let stereo: StereoBlock = out64
+                        .iter()
+                        .map(|&v| {
+                            let s = v as f32;
+                            if s.is_finite() { s.clamp(-1.0, 1.0) } else { 0.0 }
+                        })
+                        .collect();
                     lock_fifo(&fifo).push(stereo);
                     rendered_blocks += 1;
                 }
@@ -637,12 +651,14 @@ mod engine {
                 )
             }
             2 => {
-                // front L,R are ring grid buses 0,1 (az +30/-30); route the two input columns to them.
-                let taps = pack.n_taps;
-                let left = [&pack.ring_left[0..taps], &pack.ring_left[taps..2 * taps]].concat();
-                let right = [&pack.ring_right[0..taps], &pack.ring_right[taps..2 * taps]].concat();
-                GridRender::new(&left, &right, 2, taps, vec![pack.ring_az[0], pack.ring_az[1]],
-                    vec![0, 1], 2, fade, block, Lfe::None)
+                // Route the two stereo inputs (L,R) over the pack's FULL ring grid, exactly like the
+                // 5.1/7.1 arms, so a head turn steers them smoothly around the ring instead of
+                // snapping between only the two front buses (BUG-27 — the old 2-bus grid collapsed to
+                // a 2-point layout with no movement until the ±30° bisector).
+                GridRender::new(
+                    &pack.ring_left, &pack.ring_right, pack.n_ring, pack.n_taps,
+                    pack.ring_az.clone(), vec![0, 1], 2, fade, block, Lfe::None,
+                )
             }
             other => Err(format!("source has {other} channels; engine handles 8 (7.1), 6 (5.1), or 2 (stereo)")),
         }

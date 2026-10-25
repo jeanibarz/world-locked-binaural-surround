@@ -24,6 +24,10 @@ pub struct BusMixerState {
     fade: f64,
     gain: Vec<f64>, // row-major [c*n_bus + b]
     started: bool,
+    // Resident scratch, reused every block so `mix_into` allocates nothing on the real-time path
+    // (BUG-13). Both are fully (re)written each call, so no stale state leaks between blocks.
+    desired: Vec<f64>,
+    new_gain: Vec<f64>,
 }
 
 impl BusMixerState {
@@ -34,6 +38,8 @@ impl BusMixerState {
             fade: fade_samples.max(1) as f64,
             gain: vec![0.0; n_in * n_bus],
             started: false,
+            desired: vec![0.0; n_in * n_bus],
+            new_gain: vec![0.0; n_in * n_bus],
         }
     }
 
@@ -43,24 +49,25 @@ impl BusMixerState {
         assert_eq!(pcm.len(), block * self.n_in);
         assert_eq!(targets.len(), self.n_in);
         assert_eq!(bus_in.len(), self.n_bus * block);
-        let mut desired = vec![0.0f64; self.n_in * self.n_bus];
+        for v in self.desired.iter_mut() {
+            *v = 0.0;
+        }
         for (c, &t) in targets.iter().enumerate() {
             assert!(t < self.n_bus, "target bus out of range");
-            desired[c * self.n_bus + t] = 1.0;
+            self.desired[c * self.n_bus + t] = 1.0;
         }
         if !self.started {
-            self.gain.copy_from_slice(&desired);
+            self.gain.copy_from_slice(&self.desired);
             self.started = true;
         }
         for v in bus_in.iter_mut() {
             *v = 0.0;
         }
-        let mut new_gain = vec![0.0f64; self.n_in * self.n_bus];
         // c outer so the += into bus_in[b,n] accumulates c ascending == einsum's contraction order.
         for c in 0..self.n_in {
             for b in 0..self.n_bus {
                 let start = self.gain[c * self.n_bus + b];
-                let des = desired[c * self.n_bus + b];
+                let des = self.desired[c * self.n_bus + b];
                 let step = (if des >= start { 1.0 } else { -1.0 }) / self.fade;
                 let (lo, hi) = if des >= start { (start, des) } else { (des, start) };
                 let mut last = start;
@@ -69,10 +76,10 @@ impl BusMixerState {
                     last = r;
                     bus_in[b * block + n] += r * pcm[n * self.n_in + c];
                 }
-                new_gain[c * self.n_bus + b] = last;
+                self.new_gain[c * self.n_bus + b] = last;
             }
         }
-        self.gain = new_gain;
+        std::mem::swap(&mut self.gain, &mut self.new_gain);
     }
 }
 
@@ -97,9 +104,15 @@ pub struct GridRender {
     n_in: usize,
     block: usize,
     lfe: Lfe,
-    // scratch reused per block
+    // scratch reused per block (BUG-13: nothing allocated on the render path)
     pcm_dir: Vec<f64>, // (block, k)
     bus_in: Vec<f64>,  // (M, block)
+    targets: Vec<usize>, // (k) nearest grid bus per directional input
+    l: Vec<f64>,       // (block) left ear accumulator
+    r: Vec<f64>,       // (block) right ear accumulator
+    lfe_in: Vec<f64>,  // (block) LFE input column
+    ll: Vec<f64>,      // (block) LFE conv left
+    lr: Vec<f64>,      // (block) LFE conv right
 }
 
 impl GridRender {
@@ -132,21 +145,13 @@ impl GridRender {
             lfe,
             pcm_dir: vec![0.0; block * k],
             bus_in: vec![0.0; n_grid * block],
+            targets: vec![0; k],
+            l: vec![0.0; block],
+            r: vec![0.0; block],
+            lfe_in: vec![0.0; block],
+            ll: vec![0.0; block],
+            lr: vec![0.0; block],
         })
-    }
-
-    /// Nearest grid bus to `az` (deg). `np.argmin` semantics: first minimum wins.
-    fn nearest_grid(&self, az: f64) -> usize {
-        let mut best_i = 0usize;
-        let mut best_d = f64::INFINITY;
-        for (m, &g) in self.grid_az.iter().enumerate() {
-            let d = wrapped_deg(g - az).abs();
-            if d < best_d {
-                best_d = d;
-                best_i = m;
-            }
-        }
-        best_i
     }
 
     /// Render one block. `pcm` row-major `(block, n_in)`, `az` the per-input-channel head-relative
@@ -156,46 +161,57 @@ impl GridRender {
         assert_eq!(az.len(), self.n_in);
         assert_eq!(out.len(), self.block * 2);
         let k = self.dir_idx.len();
-        let targets: Vec<usize> =
-            self.dir_idx.iter().map(|&i| self.nearest_grid(az[i])).collect();
+        // nearest grid bus per directional input (into resident `targets`; `grid_az` borrow only)
+        for j in 0..k {
+            self.targets[j] = nearest_grid_in(&self.grid_az, az[self.dir_idx[j]]);
+        }
         // pcm_dir[n, j] = pcm[n, dir_idx[j]]
         for n in 0..self.block {
             for j in 0..k {
                 self.pcm_dir[n * k + j] = pcm[n * self.n_in + self.dir_idx[j]];
             }
         }
-        self.mixer.mix_into(&self.pcm_dir, self.block, &targets, &mut self.bus_in);
-        let mut l = vec![0.0; self.block];
-        let mut r = vec![0.0; self.block];
-        self.conv.process_into(&self.bus_in, &mut l, &mut r);
+        self.mixer.mix_into(&self.pcm_dir, self.block, &self.targets, &mut self.bus_in);
+        self.conv.process_into(&self.bus_in, &mut self.l, &mut self.r);
         match &mut self.lfe {
             Lfe::None => {}
             Lfe::Brir { conv, idx } => {
-                let mut lfe_in = vec![0.0; self.block];
                 for n in 0..self.block {
-                    lfe_in[n] = pcm[n * self.n_in + *idx];
+                    self.lfe_in[n] = pcm[n * self.n_in + *idx];
                 }
-                let mut ll = vec![0.0; self.block];
-                let mut lr = vec![0.0; self.block];
-                conv.process_into(&lfe_in, &mut ll, &mut lr);
+                conv.process_into(&self.lfe_in, &mut self.ll, &mut self.lr);
                 for n in 0..self.block {
-                    l[n] += ll[n];
-                    r[n] += lr[n];
+                    self.l[n] += self.ll[n];
+                    self.r[n] += self.lr[n];
                 }
             }
             Lfe::Flat { idx, gl, gr } => {
                 for n in 0..self.block {
                     let s = pcm[n * self.n_in + *idx];
-                    l[n] += s * *gl;
-                    r[n] += s * *gr;
+                    self.l[n] += s * *gl;
+                    self.r[n] += s * *gr;
                 }
             }
         }
         for n in 0..self.block {
-            out[n * 2] = l[n];
-            out[n * 2 + 1] = r[n];
+            out[n * 2] = self.l[n];
+            out[n * 2 + 1] = self.r[n];
         }
     }
+}
+
+/// Nearest grid bus to `az` (deg) over `grid_az`. `np.argmin` semantics: first minimum wins.
+fn nearest_grid_in(grid_az: &[f64], az: f64) -> usize {
+    let mut best_i = 0usize;
+    let mut best_d = f64::INFINITY;
+    for (m, &g) in grid_az.iter().enumerate() {
+        let d = wrapped_deg(g - az).abs();
+        if d < best_d {
+            best_d = d;
+            best_i = m;
+        }
+    }
+    best_i
 }
 
 #[cfg(test)]
@@ -230,6 +246,6 @@ mod tests {
             Lfe::None,
         )
         .unwrap();
-        assert_eq!(gr.nearest_grid(5.0), 0);
+        assert_eq!(nearest_grid_in(&gr.grid_az, 5.0), 0);
     }
 }
