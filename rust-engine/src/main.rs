@@ -273,8 +273,9 @@ mod engine {
         let running = Arc::new(AtomicBool::new(true));
         let out_status: Arc<Mutex<OutputStatus>> = Arc::new(Mutex::new(OutputStatus::default()));
 
-        // Ctrl-C / console-close flips `running` so the threads wind down and the WASAPI devices are
-        // released cleanly instead of being leaked on an abrupt exit (BUG-15).
+        // Ctrl-C flips `running` so the threads wind down and the WASAPI devices are released cleanly
+        // instead of being leaked (BUG-15). (On a Windows console-close the handler fires but may not
+        // finish the join before the OS reaps the process — Ctrl-C / `--secs` expiry is the clean path.)
         {
             let running = Arc::clone(&running);
             if let Err(e) = ctrlc::set_handler(move || running.store(false, Ordering::Relaxed)) {
@@ -581,8 +582,8 @@ mod engine {
     }
 
     /// Output-thread status shared with the capture thread for cockpit health telemetry: the opened
-    /// endpoint's format and any fatal error. (BUG-04's full fix — flipping `running` on output
-    /// death — lands in the audio-robustness batch; this is the telemetry surface it needs.)
+    /// endpoint's format and any fatal error. The output thread also flips `running` on exit (BUG-04),
+    /// so a dead output stops the render loop; this struct carries the error text to the cockpit.
     #[derive(Default, Clone)]
     struct OutputStatus {
         sr: u32,
