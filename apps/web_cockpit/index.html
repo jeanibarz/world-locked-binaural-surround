@@ -71,7 +71,13 @@
       <div class="panel ring-stage">
         <div class="ring-head">
           <div class="ring-head-l"><div class="panel-head">WORLD-LOCKED RING</div><span id="facing-pill" class="pill pill-amber">Facing C</span></div>
-          <button id="recenter-btn" type="button" class="btn btn-amber">Recenter</button>
+          <div class="ring-head-r">
+            <div class="invert-wrap">
+              <button id="invert-toggle" type="button" role="switch" aria-checked="false" class="switch" aria-label="Invert head tracking"><span class="switch-knob"></span></button>
+              <span class="switch-label">Invert tracking</span>
+            </div>
+            <button id="recenter-btn" type="button" class="btn btn-amber">Recenter</button>
+          </div>
         </div>
         <div class="ring-canvas">
           <svg class="radar" viewBox="0 0 320 320" role="img" aria-label="Speaker ring with the listener's head and the active speaker.">

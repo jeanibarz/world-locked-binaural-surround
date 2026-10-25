@@ -70,6 +70,8 @@ pub struct TeleInput<'a> {
     pub title: &'a str,
     pub yaw_deg: f64,
     pub predict: bool,
+    /// Head-tracking direction inverted (#189) — mirrored to the cockpit so the switch reflects it.
+    pub invert_tracking: bool,
     pub block: usize,
     pub sample_rate: u32,
     pub cushion_blocks: usize,
@@ -264,6 +266,7 @@ pub fn build_state(t: &TeleInput) -> Value {
         "buffer": buffer,
         "dropouts": dropouts,
         "predict": t.predict,
+        "invert_tracking": t.invert_tracking,
         "pose": {
             "yaw": format!("{:+.0}°", t.yaw_deg),
             "pitch": "0°",
@@ -300,6 +303,7 @@ mod tests {
             title: "wlbs",
             yaw_deg: 12.0,
             predict: true,
+            invert_tracking: false,
             block: 256,
             sample_rate: 48_000,
             cushion_blocks: 4,
@@ -344,7 +348,7 @@ mod tests {
         let lat = LatencyHistogram::new(64, 20, 0.0, 120.0);
         let s = build_state(&sample_input(&lat));
         for key in ["title", "cam_res", "face_badge", "face_locked", "health", "render_load",
-                    "buffer", "dropouts", "predict", "pose", "facing", "latency"] {
+                    "buffer", "dropouts", "predict", "invert_tracking", "pose", "facing", "latency"] {
             assert!(s.get(key).is_some(), "missing state field {key}");
         }
         assert_eq!(s["buffer"]["cushion_blocks"], 4);
