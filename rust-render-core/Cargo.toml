@@ -12,6 +12,9 @@ crate-type = ["cdylib"]
 [dependencies]
 pyo3 = { version = "0.22", features = ["extension-module", "abi3-py310"] }
 numpy = "0.22"
+# The pure-Rust convolution core (shared with binaural_kernel), so the full per-block render
+# (BusMixer + grid conv + LFE) composes in Rust — the engine's hot loop with no Python in it.
+binaural_conv = { path = "../rust-conv-core" }
 
 [profile.release]
 opt-level = 3

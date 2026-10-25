@@ -1,0 +1,22 @@
+# Separate maturin-built PyO3 extension (R0 render-core). The main project stays a pure-Python
+# setuptools package; this crate is the Rust world-lock render core, built into the venv with
+# `maturin develop -m rust-render-core/Cargo.toml`. It is NOT part of the Python wheel and never
+# required on CI — tests import it with `pytest.importorskip("render_core")`.
+#
+# Without this per-crate pyproject, maturin walks up to the repo-root (setuptools) pyproject and
+# produces a broken mixed-layout install where `render_core` is not importable; this mirrors the
+# sibling kernel's `rust/pyproject.toml` so the documented build command works.
+[build-system]
+requires = ["maturin>=1.5,<2"]
+build-backend = "maturin"
+
+[project]
+name = "render_core"
+version = "0.1.0"
+description = "World-lock render core (PyO3) for binaural-headtracker"
+requires-python = ">=3.10,<3.13"
+classifiers = ["Private :: Do Not Upload"]
+
+[tool.maturin]
+manifest-path = "Cargo.toml"
+module-name = "render_core"

@@ -1,0 +1,20 @@
+[package]
+name = "binaural_conv"
+version = "0.1.0"
+edition = "2021"
+description = "Pure-Rust batched partitioned-convolution render core (no Python). Shared by the binaural_kernel PyO3 shim and the render_core Rust render, so the standalone engine convolves with no interpreter in the loop."
+publish = false
+
+[lib]
+name = "binaural_conv"
+# rlib so both binaural_kernel (PyO3 shim) and render_core (Rust render) link it directly.
+crate-type = ["rlib"]
+
+[dependencies]
+realfft = "3.4"
+rayon = "1.10"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

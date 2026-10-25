@@ -15,8 +15,9 @@ crate-type = ["cdylib"]
 # from Linux/WSL (via cargo-xwin) without a Windows Python install.
 pyo3 = { version = "0.22", features = ["extension-module", "abi3-py310", "generate-import-lib"] }
 numpy = "0.22"
-realfft = "3.4"
-rayon = "1.10"
+# The convolution compute now lives in the pure-Rust `binaural_conv` core (shared with render_core,
+# so the standalone engine convolves with no interpreter); this crate is the thin PyO3 wrapper.
+binaural_conv = { path = "../rust-conv-core" }
 
 [profile.release]
 opt-level = 3
