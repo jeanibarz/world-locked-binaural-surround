@@ -25,6 +25,11 @@ import numpy as np
 AXES = ("yaw", "pitch", "roll")
 
 
+def _wrap_deg(d):
+    """Wrap angle(s) to (-180, 180] so circular residuals (esp. roll) aren't inflated by ±360 wraps."""
+    return (np.asarray(d, float) + 180.0) % 360.0 - 180.0
+
+
 def align_axis(ref: np.ndarray, model: np.ndarray) -> tuple[float, float, np.ndarray]:
     """Return ``(sign, offset, aligned_model)`` minimising RMS of ``ref - (sign*model + offset)``.
 
@@ -34,8 +39,8 @@ def align_axis(ref: np.ndarray, model: np.ndarray) -> tuple[float, float, np.nda
     """
     best = None
     for sign in (1.0, -1.0):
-        offset = float(np.mean(ref - sign * model))
-        resid = ref - (sign * model + offset)
+        offset = float(np.mean(_wrap_deg(ref - sign * model)))
+        resid = _wrap_deg(ref - (sign * model + offset))  # angular: +179 vs -179 is a 2° error
         rms = float(np.sqrt(np.mean(resid**2)))
         if best is None or rms < best[0]:
             best = (rms, sign, offset)
@@ -52,7 +57,7 @@ def parity_rms(ref: dict[str, np.ndarray], model: dict[str, np.ndarray]) -> dict
             raise ValueError(
                 f"axis {ax}: ref/model shape mismatch or empty ({r.shape} vs {m.shape})")
         sign, offset, aligned = align_axis(r, m)
-        resid = r - aligned
+        resid = _wrap_deg(r - aligned)  # wrap so circular angles (esp. roll) don't inflate RMS
         out[ax] = {
             "rms_deg": round(float(np.sqrt(np.mean(resid**2))), 3),
             "max_abs_deg": round(float(np.max(np.abs(resid))), 3),
@@ -199,7 +204,7 @@ def main(argv: list[str] | None = None) -> int:
     for ax in AXES:
         s = rms[ax]
         aligned = s["sign"] * np.asarray(mdl[ax], float) + s["offset_deg"]
-        resid[ax] = refa[ax] - aligned
+        resid[ax] = _wrap_deg(refa[ax] - aligned)
     op_mask = np.ones(used, bool)
     for ax in AXES:
         op_mask &= np.abs(refa[ax]) <= OP[ax]
