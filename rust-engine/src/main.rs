@@ -96,6 +96,15 @@ mod engine {
         win_h: u32,
     }
 
+    /// Settings file schema. Bumped to 2 when the ring-interp methods (#187) shipped: a v1 file's
+    /// persisted `method` is a stale pre-feature default, migrated in [`Settings::overlay`].
+    const SETTINGS_SCHEMA: u64 = 2;
+
+    /// Is `s` a method the engine implements?
+    fn valid_method(s: &str) -> bool {
+        matches!(s, "nearest" | "timealign" | "minphase" | "notchwarp")
+    }
+
     impl Settings {
         /// Overlay the persisted JSON (from [`SettingsStore::load`]) onto the CLI/computed defaults.
         /// Persisted UI choices win for the knobs the cockpit owns; delete the settings file (or use
@@ -105,7 +114,16 @@ mod engine {
                 Some(o) => o,
                 None => return,
             };
-            if let Some(s) = o.get("method").and_then(|x| x.as_str()) { self.method = s.into(); }
+            // A pre-v2 settings file predates the ring-interp methods (#187) — back then "nearest"
+            // was the only method, so a persisted "nearest" is the old implicit default, not a user
+            // choice; don't let it override the new timealign default. A valid method from a v2+ file
+            // (a real dropdown choice) is honored. Unknown strings are ignored.
+            let schema = o.get("schema").and_then(|x| x.as_u64()).unwrap_or(1);
+            if let Some(s) = o.get("method").and_then(|x| x.as_str()) {
+                if valid_method(s) && (schema >= SETTINGS_SCHEMA || s != "nearest") {
+                    self.method = s.into();
+                }
+            }
             if let Some(s) = o.get("hrir_name").and_then(|x| x.as_str()) { self.hrir_name = s.into(); }
             if let Some(s) = o.get("backend").and_then(|x| x.as_str()) { self.backend = s.into(); }
             if let Some(s) = o.get("comp").and_then(|x| x.as_str()) { self.comp = s.into(); }
@@ -132,6 +150,7 @@ mod engine {
         /// Serialise for [`SettingsStore::save`] (the same keys [`Settings::overlay`] reads).
         fn to_json(&self) -> serde_json::Value {
             serde_json::json!({
+                "schema": SETTINGS_SCHEMA,
                 "method": self.method, "hrir_name": self.hrir_name, "backend": self.backend,
                 "comp": self.comp, "block": self.block, "cushion_ms": self.cushion_ms,
                 "exclusive": self.exclusive, "hp_eq": self.hp_eq, "hp_model": self.hp_model,
@@ -219,7 +238,11 @@ mod engine {
                 return Err(format!("--method must be nearest|timealign|minphase|notchwarp; got {m:?}").into());
             }
         }
-        let interp_step: f64 = arg_num::<f64>(&a, "--interp-step")?.unwrap_or(15.0).clamp(1.0, 90.0);
+        let interp_step: f64 = match arg_num::<f64>(&a, "--interp-step")? {
+            Some(v) if v.is_finite() && v > 0.0 => v.clamp(1.0, 90.0),
+            Some(v) => return Err(format!("invalid --interp-step {v} (want a positive number of degrees)").into()),
+            None => 15.0,
+        };
         let rotate_demo = flag(&a, "--rotate-demo");
         // Install-relative asset resolution (no hardcoded paths): CLI → env → <exe>/… → %APPDATA%.
         let web_dir =
@@ -485,7 +508,7 @@ mod engine {
                             settings.win_w = w as u32; settings.win_h = h as u32; dirty = true;
                         }
                     }
-                    "set_method" => { if let Some(s) = a0.and_then(|v| v.as_str()) { settings.method = s.into(); dirty = true; } }
+                    "set_method" => { if let Some(s) = a0.and_then(|v| v.as_str()).filter(|s| valid_method(s)) { settings.method = s.into(); dirty = true; } }
                     "set_backend" => { if let Some(s) = a0.and_then(|v| v.as_str()) { settings.backend = s.into(); dirty = true; } }
                     "set_hrir" => { if let Some(s) = a0.and_then(|v| v.as_str()) { settings.hrir_name = s.into(); dirty = true; } }
                     "set_comp" => { if let Some(s) = a0.and_then(|v| v.as_str()) { settings.comp = s.into(); dirty = true; } }
