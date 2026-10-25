@@ -1,0 +1,10 @@
+[package]
+name = "vision_client"
+version = "0.1.0"
+edition = "2021"
+description = "Versioned wire protocol for the engine <-> head-pose helper boundary (R-engine vision-client). Isolates the engine from which pose model/runtime produces pose, so R-S1's model choice can't churn the engine."
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
