@@ -115,6 +115,39 @@ def _elevate_to_pro_audio() -> str:
         return "normal (elevation unavailable)"
 
 
+def _raise_process_priority() -> str:
+    """Raise the WHOLE process to HIGH priority class so *every* engine thread beats normal-priority
+    background work (a compiler, a file indexer, a Windows-update task). MMCSS boosts only the one
+    render-worker thread (`_elevate_to_pro_audio`), but that worker still needs the GIL for its
+    per-block Python glue, and the GIL is held by the camera/detect/main-loop threads — which run at
+    the process base priority. Under a CPU-saturating normal-priority competitor those GIL holders
+    starve, so the worker misses its deadline and audio drops out *despite* MMCSS (observed live: a
+    background ``cargo build`` at normal priority made the DSP inaudible with constant dropouts).
+    Raising the process class lifts all of them together. HIGH is what pro-audio hosts use;
+    REALTIME is deliberately avoided — it outranks kernel/driver threads and can stall audio I/O and
+    the whole machine. Best-effort, Windows-only; the class reverts when the process exits. Returns
+    a short status for the startup log."""
+    import sys
+    if not sys.platform.startswith("win"):
+        return "normal (non-Windows)"
+    import ctypes
+    from ctypes import wintypes
+    HIGH_PRIORITY_CLASS = 0x0000_0080
+    try:
+        k32 = ctypes.WinDLL("kernel32")
+        # Set the signatures explicitly: GetCurrentProcess returns a 64-bit HANDLE, and ctypes
+        # truncates it to a 32-bit int without restype=c_void_p — the call then fails silently and
+        # the process stays at normal priority. (HIGH needs no privilege; only REALTIME does.)
+        k32.GetCurrentProcess.restype = ctypes.c_void_p
+        k32.SetPriorityClass.argtypes = [ctypes.c_void_p, wintypes.DWORD]
+        k32.SetPriorityClass.restype = wintypes.BOOL
+        if k32.SetPriorityClass(k32.GetCurrentProcess(), HIGH_PRIORITY_CLASS):
+            return "HIGH"
+    except Exception:  # noqa: BLE001 — scheduling is a best-effort bonus, never fatal
+        pass
+    return "normal (elevation unavailable)"
+
+
 FG = (245, 237, 232)
 MUTED = (171, 151, 139)
 ACCENT = (214, 214, 56)
@@ -836,6 +869,11 @@ def main(argv=None) -> int:
     # a deep cushion. Process-global and harmless to the console/bench paths (no contention there).
     import sys
     sys.setswitchinterval(0.0005)
+    # Whole-process HIGH priority (journal 82): MMCSS above only covers the render worker, but it
+    # needs the GIL from the camera/detect/main-loop threads, which run at the process base class. A
+    # normal-priority CPU hog starves those and drops audio despite MMCSS, so lift the whole proc.
+    _proc_prio = _raise_process_priority()
+    print(f"process priority: {_proc_prio}")
     worker = threading.Thread(target=render_worker, name="render", daemon=True)
     worker.start()
     in_stream.start_stream()
