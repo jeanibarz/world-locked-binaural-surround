@@ -333,7 +333,8 @@ def main(argv=None) -> int:
     import settings_binding as _SB
     from pathlib import Path as _CfgPath
     from binaural_headtracker.config_store import ConfigStore as _ConfigStore
-    _cfg_dir = (_CfgPath(args.model).parent if args.model else _CfgPath(".")) / "cockpit_config"
+    # resolve to absolute so the config dir never depends on the launch cwd
+    _cfg_dir = (_CfgPath(args.model).resolve().parent if args.model else _CfgPath.home()) / "cockpit_config"
     ensure_single_instance(_cfg_dir / ".instance.lock")  # replace any previous live engine first
     settings_store = _ConfigStore(_cfg_dir)
     saved_cfg, _dropped_keys, _settings_backstop = _SB.load_effective(settings_store, args)

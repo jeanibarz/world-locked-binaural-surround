@@ -1,5 +1,7 @@
 @echo off
 setlocal
+REM %~dp0 is reliable only before the SHIFT loop below, so capture it now.
+set "HERE=%~dp0"
 REM ============================================================================
 REM  world-locked-binaural-surround — THE single host start script.
 REM
@@ -39,9 +41,9 @@ set "ROOT=\\wsl.localhost\Ubuntu-22.04\home\jean\git\world-locked-binaural-surro
 set "LAUNCH=%ROOT%\apps\launch.py"
 
 REM --- host assets (kept next to this .cmd) + device config -------------------
-set "MODEL=%~dp0face_landmarker.task"
-set "SOURCE=%~dp0dry_snare.wav"
-set "HRIRSETS=%~dp0hrir_sets"
+set "MODEL=%HERE%face_landmarker.task"
+set "SOURCE=%HERE%dry_snare.wav"
+set "HRIRSETS=%HERE%hrir_sets"
 set "BRIR=C:\Program Files\EqualizerAPO\config\audeze-lcd-gx-binaural-surround\eqapo_config\baked_7p1_test"
 set "OUTEQ=C:\Program Files\EqualizerAPO\config\audeze-lcd-gx-binaural-surround\eqapo_config\baked_7p1_rev26_final.txt"
 REM 2048 gives timealign + the cockpit headroom; drop to 1024/512 for lower

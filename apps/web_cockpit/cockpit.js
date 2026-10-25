@@ -210,6 +210,8 @@
     const alive = () => { if (gone) { clearTimeout(gone); gone = null; } };
     const lost = () => {
       if (gone) return;
+      // grace long enough that a reset-to-defaults relaunch (exit 97 -> re-open on the same port,
+      // ~8 s to re-load) reconnects before we give up and close the window.
       gone = setTimeout(() => {
         try { window.close(); } catch (_) { /* blocked */ }
         try {
@@ -218,7 +220,7 @@
             'height:100vh;display:flex;align-items:center;justify-content:center">' +
             'Engine stopped — you can close this window.</div>';
         } catch (_) { /* ignore */ }
-      }, 3000);
+      }, 11000);
     };
     try {
       const es = new EventSource("/events");
