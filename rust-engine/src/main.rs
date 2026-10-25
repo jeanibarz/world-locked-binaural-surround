@@ -247,8 +247,22 @@ mod engine {
         };
         let mut settings = defaults.clone();
         settings.overlay(&store.load());
+        // An explicitly-passed CLI flag beats a persisted value (least surprise for a debug launch):
+        // re-apply the ones the user typed after the persisted overlay.
+        if arg(&a, "--block").is_some() { settings.block = block; }
+        if arg(&a, "--latency-ms").is_some() { settings.cushion_ms = latency_ms; }
+        if camera_idx.is_some() { settings.camera_idx = camera_idx; }
         let hrir_list: Vec<String> = packs::list_packs().into_iter().map(|p| p.name).collect();
         let mut block = settings.block; // the live block size (the settings dialog can change it)
+
+        // Persist off the real-time capture thread: an `fsync` can stall tens of ms, which on the
+        // capture thread would be an audio dropout. The thread sends settings JSON to this saver.
+        let (persist_tx, persist_rx) = std::sync::mpsc::channel::<serde_json::Value>();
+        std::thread::spawn(move || {
+            while let Ok(v) = persist_rx.recv() {
+                let _ = store.save(&v);
+            }
+        });
 
         // Shared state.
         let pose = crate::vision::PoseState::new();
@@ -266,15 +280,16 @@ mod engine {
             std::thread::spawn(move || control_plane::serve_blocking(cockpit, port));
         }
 
-        // --- head-pose source --- priority: explicit/persisted camera > mjpeg > image > demo > auto-camera > held.
-        // Auto-use the first local camera when no other source was requested (the product default).
-        let auto_cam = settings.camera_idx.or_else(|| {
-            if camera_mjpeg.is_none() && face_image.is_none() && !rotate_demo {
-                cameras.first().map(|(i, _)| *i)
-            } else {
-                None
-            }
-        });
+        // --- head-pose source --- priority: explicit --camera > explicit mjpeg/image/demo >
+        // persisted camera > first local camera (the product default) > held. A persisted camera must
+        // NOT override an explicit `--rotate-demo`/`--face-image`/`--camera-mjpeg` (WSL + test flows).
+        let auto_cam = if let Some(c) = camera_idx {
+            Some(c)
+        } else if camera_mjpeg.is_some() || face_image.is_some() || rotate_demo {
+            None
+        } else {
+            settings.camera_idx.or_else(|| cameras.first().map(|(i, _)| *i))
+        };
         let pose_source: &str;
         if let Some(idx) = auto_cam {
             pose_source = "camera";
@@ -382,13 +397,15 @@ mod engine {
                         }
                     }
                     "settings_begin" => snapshot = Some(settings.clone()),
-                    "settings_commit" => { let _ = store.save(&settings.to_json()); snapshot = None; }
+                    "settings_commit" => { let _ = persist_tx.send(settings.to_json()); snapshot = None; }
                     "settings_cancel" => {
                         if let Some(prev) = snapshot.take() {
                             if prev != settings { settings = prev; dirty = true; }
                         }
                     }
-                    "reset_defaults" => { settings = defaults.clone(); dirty = true; let _ = store.save(&settings.to_json()); }
+                    // Reset previews live and persists through the same session gate below (Confirm
+                    // commits it; a mid-dialog crash does not leave defaults saved).
+                    "reset_defaults" => { settings = defaults.clone(); dirty = true; }
                     _ => {} // blind_* A/B-test + any unknown control: no engine effect yet
                 }
             }
@@ -397,34 +414,44 @@ mod engine {
                 // Persist immediately for the main-cockpit controls (predict/recenter/window/tab);
                 // settings-dialog changes are held until Confirm (while a snapshot is active).
                 if snapshot.is_none() {
-                    let _ = store.save(&settings.to_json());
+                    let _ = persist_tx.send(settings.to_json());
                 }
                 // Block/cushion are the knobs we can safely re-apply to the live audio graph here on
                 // the capture thread (method/hrir/exclusive/camera need a restart — persisted above).
-                if settings.block != block_before || settings.cushion_ms != cush_before {
-                    block = settings.block;
-                    let cushion = cushion_blocks(settings.cushion_ms, pack.samplerate, block);
-                    match build_render(&pack, n_in, block, latency_ms) {
-                        Ok(r) => {
-                            render = r;
-                            *fifo.lock().unwrap() =
-                                CushionFifo::new(cushion, cushion * 2, vec![0.0f32; block * 2]);
-                            in_acc.clear();
-                            println!("RECONFIG block={block} cushion={cushion}");
+                // Only a block change rebuilds the convolver (`render`); a cushion-only change rebuilds
+                // just the FIFO, so changing the cushion doesn't reset the convolution state.
+                let block_changed = settings.block != block_before;
+                if block_changed || settings.cushion_ms != cush_before {
+                    let new_block = settings.block;
+                    let cushion = cushion_blocks(settings.cushion_ms, pack.samplerate, new_block);
+                    let render_ok = if block_changed {
+                        match build_render(&pack, n_in, new_block, latency_ms) {
+                            Ok(r) => { render = r; true }
+                            Err(e) => { eprintln!("RECONFIG_ERROR {e}"); settings.block = block_before; false }
                         }
-                        Err(e) => eprintln!("RECONFIG_ERROR {e}"),
+                    } else {
+                        true
+                    };
+                    if render_ok {
+                        block = settings.block; // only advance the live block once render matches it
+                        *fifo.lock().unwrap() =
+                            CushionFifo::new(cushion, cushion * 2, vec![0.0f32; block * 2]);
+                        in_acc.clear();
+                        println!("RECONFIG block={block} cushion={cushion}");
                     }
                 }
             }
 
-            let cur_yaw = *pose.yaw.lock().unwrap();
-            let az = head_relative_azimuths(cur_yaw, yaw_sign);
             buf.clear();
             // A capture timeout no longer skips telemetry: we fall through to the heartbeat below so
-            // an idle source keeps the cockpit live (BUG-05).
-            if src.read(&mut buf, 1000)?.is_some() {
+            // an idle source keeps the cockpit live (BUG-05). A short timeout keeps the control drain
+            // and heartbeat responsive (~20 Hz) even when an idle loopback emits no capture events.
+            if src.read(&mut buf, 50)?.is_some() {
                 last_audio = Instant::now();
                 in_acc.extend_from_slice(&buf);
+                // Sample the head yaw now, after the blocking read, so the azimuths the block renders
+                // with are fresh (not up to a device period / timeout stale).
+                let az = head_relative_azimuths(*pose.yaw.lock().unwrap(), yaw_sign);
                 let block_time = block as f64 / pack.samplerate.max(1) as f64;
                 while in_acc.len() >= block * n_in {
                     let pcm: Vec<f32> = in_acc.drain(..block * n_in).collect();
@@ -443,6 +470,7 @@ mod engine {
 
             // --- telemetry heartbeat (time-driven, runs even when the source is idle) ---
             if last_tele.elapsed() >= Duration::from_millis(50) {
+                let cur_yaw = *pose.yaw.lock().unwrap();
                 let source_idle = last_audio.elapsed() >= Duration::from_millis(250);
                 render_peak = (render_peak * 0.95).max(render_ema); // slow decay toward the mean
                 let (cushion_now, fill_now, st) = {
