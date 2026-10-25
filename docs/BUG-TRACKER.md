@@ -21,7 +21,15 @@
 | BUG-20 | P2 | Fixed | PR2 (Int24; reject unsupported formats at open) |
 | BUG-23 | P2 | Fixed | PR2 (poison-tolerant FIFO lock; lock-free ring noted as follow-up) |
 | BUG-33 | P3 | Partial | PR2 surfaces capture discontinuity flags; buffer-period tuning needs a live A/B |
-| BUG-10–12, 28–32, 34 | P1/P2/P3 | Open | PR3 (vision) |
+| BUG-10 | P1 | Fixed | PR3 `fix/vision-robustness` (`--no-camera` opt-out + "camera unavailable" telemetry) |
+| BUG-11 | P1 | Fixed | PR3 (`load_canonical_rigid`/`Pipeline::new` → `Result`; pose liveness already in PR1) |
+| BUG-12 | P1 | Fixed | PR3 (ONNX intra-threads capped; DirectML EP noted as follow-up) |
+| BUG-28 | P2 | Fixed | PR3 (explicit resolution/fps; `--resolution`/`--framerate`; controlled default) |
+| BUG-29 | P2 | Fixed | PR3 (reuse the frame f32 buffer; zero-copy crop noted as follow-up) |
+| BUG-30 | P2 | Fixed | PR3 (`stop_stream` on exit; reopen on unplug; blocked-`frame()` interrupt noted) |
+| BUG-31 | P2 | Fixed | PR3 (clamp `--pose-stride` ≥ 1) |
+| BUG-32 | P2 | Fixed | PR3 (count + log camera decode failures) |
+| BUG-34 | P3 | Partial | PR3 fixes the stale doc + logs skipped string cameras; live camera-switch/COM confirm pending |
 | BUG-13, 21, 27 | P1/P2 | Open | PR4 (DSP/perf) |
 | BUG-16, 22, 24, 25, 26 | P2 | Open | PR5 (lifecycle/packs) |
 

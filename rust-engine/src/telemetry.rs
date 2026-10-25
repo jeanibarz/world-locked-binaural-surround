@@ -94,6 +94,8 @@ pub struct TeleInput<'a> {
     pub tracking: bool,
     pub pose_stale: bool,
     pub cam_res: Option<(u32, u32)>,
+    /// A camera/pipeline open failure, shown as "camera unavailable" (BUG-10).
+    pub cam_error: Option<&'a str>,
     pub mmcss: bool,
     pub lat: &'a LatencyHistogram,
 }
@@ -209,17 +211,23 @@ pub fn build_state(t: &TeleInput) -> Value {
             },
         }),
     ];
-    let pose_dot = if !t.tracking {
+    let pose_dot = if t.cam_error.is_some() {
+        red
+    } else if !t.tracking {
         amber
     } else if t.pose_stale {
         red
     } else {
         green
     };
-    let pose_val = match (t.pose_source, t.cam_res) {
-        ("camera", Some((w, h))) => format!("camera {w}×{h}{}", if t.pose_stale { " · stale" } else if t.tracking { " · locked" } else { " · searching" }),
-        ("held", _) => "no tracker (held yaw 0)".to_string(),
-        (src, _) => format!("{src}{}", if t.pose_stale { " · stale" } else if t.tracking { " · locked" } else { " · searching" }),
+    let pose_val = if let Some(e) = t.cam_error {
+        format!("camera unavailable — {e}")
+    } else {
+        match (t.pose_source, t.cam_res) {
+            ("camera", Some((w, h))) => format!("camera {w}×{h}{}", if t.pose_stale { " · stale" } else if t.tracking { " · locked" } else { " · searching" }),
+            ("held", _) => "no tracker (held yaw 0)".to_string(),
+            (src, _) => format!("{src}{}", if t.pose_stale { " · stale" } else if t.tracking { " · locked" } else { " · searching" }),
+        }
     };
     health.push(json!({"dot": pose_dot, "label": "Head pose", "value": pose_val}));
     health.push(json!({
@@ -231,8 +239,10 @@ pub fn build_state(t: &TeleInput) -> Value {
     }));
 
     // --- camera badge ---
-    let face_locked = t.tracking && !t.pose_stale;
-    let face_badge = if t.pose_source == "held" {
+    let face_locked = t.tracking && !t.pose_stale && t.cam_error.is_none();
+    let face_badge = if t.cam_error.is_some() {
+        "camera unavailable"
+    } else if t.pose_source == "held" {
         "no camera"
     } else if !t.tracking {
         "searching…"
@@ -310,6 +320,7 @@ mod tests {
             tracking: true,
             pose_stale: false,
             cam_res: Some((640, 480)),
+            cam_error: None,
             mmcss: true,
             lat,
         }
