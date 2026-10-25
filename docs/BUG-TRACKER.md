@@ -20,7 +20,7 @@
 | BUG-19 | P2 | Fixed | PR2 (5.1 source; output endpoints with >2 channels) |
 | BUG-20 | P2 | Fixed | PR2 (Int24; reject unsupported formats at open) |
 | BUG-23 | P2 | Fixed | PR2 (poison-tolerant FIFO lock; lock-free ring noted as follow-up) |
-| BUG-33 | P3 | Partial | PR2 surfaces capture discontinuity flags; buffer-period tuning needs a live A/B |
+| BUG-33 | P3 | Fixed | PR7 `fix/p3-buffer-strcam` (shared buffer = engine default `0`; discontinuity + silent flags surfaced) |
 | BUG-10 | P1 | Fixed | PR3 `fix/vision-robustness` (`--no-camera` opt-out + "camera unavailable" telemetry) |
 | BUG-11 | P1 | Fixed | PR3 (`load_canonical_rigid`/`Pipeline::new` → `Result`; pose liveness already in PR1) |
 | BUG-12 | P1 | Fixed | PR3 (ONNX intra-threads capped; DirectML EP noted as follow-up) |
@@ -29,7 +29,7 @@
 | BUG-30 | P2 | Fixed | PR3 (`stop_stream` on exit; reopen on unplug; blocked-`frame()` interrupt noted) |
 | BUG-31 | P2 | Fixed | PR3 (clamp `--pose-stride` ≥ 1) |
 | BUG-32 | P2 | Fixed | PR3 (count + log camera decode failures) |
-| BUG-34 | P3 | Partial | PR3 fixes the stale doc + logs skipped string cameras; live camera-switch/COM confirm pending |
+| BUG-34 | P3 | Partial | PR3 doc + PR7 string-indexed cameras now listed & selectable; live cockpit camera-switch + nokhwa COM reconfirm remain host-only follow-ups |
 | BUG-13 | P1 | Fixed | PR4 `fix/dsp-perf` (resident RT scratch in render_core_lib + engine loop; single-thread conv benchmark noted) |
 | BUG-21 | P2 | Fixed | PR4 (output clamp + non-finite drop; reject non-finite IR taps at load) |
 | BUG-27 | P2 | Fixed | PR4 (stereo world-lock over the full ring grid) |

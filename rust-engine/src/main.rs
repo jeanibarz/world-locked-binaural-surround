@@ -85,7 +85,8 @@ mod engine {
         hp_eq: bool,
         hp_model: Option<String>,
         predict: bool,
-        camera_idx: Option<u32>,
+        /// Selected camera id (decimal index or opaque string, per nokhwa `CameraIndex`).
+        camera: Option<String>,
         cam_w: u32,
         cam_h: u32,
         cam_fps: u32,
@@ -113,7 +114,12 @@ mod engine {
             if let Some(b) = o.get("hp_eq").and_then(|x| x.as_bool()) { self.hp_eq = b; }
             if let Some(s) = o.get("hp_model").and_then(|x| x.as_str()) { self.hp_model = Some(s.into()); }
             if let Some(b) = o.get("predict").and_then(|x| x.as_bool()) { self.predict = b; }
-            if let Some(n) = o.get("camera_idx").and_then(|x| x.as_u64()) { self.camera_idx = Some(n as u32); }
+            // New string `camera` id; fall back to the legacy numeric `camera_idx` for old settings.
+            if let Some(s) = o.get("camera").and_then(|x| x.as_str()) {
+                self.camera = Some(s.into());
+            } else if let Some(n) = o.get("camera_idx").and_then(|x| x.as_u64()) {
+                self.camera = Some(n.to_string());
+            }
             if let Some(n) = o.get("cam_w").and_then(|x| x.as_u64()) { self.cam_w = n as u32; }
             if let Some(n) = o.get("cam_h").and_then(|x| x.as_u64()) { self.cam_h = n as u32; }
             if let Some(n) = o.get("cam_fps").and_then(|x| x.as_u64()) { self.cam_fps = n as u32; }
@@ -128,7 +134,7 @@ mod engine {
                 "method": self.method, "hrir_name": self.hrir_name, "backend": self.backend,
                 "comp": self.comp, "block": self.block, "cushion_ms": self.cushion_ms,
                 "exclusive": self.exclusive, "hp_eq": self.hp_eq, "hp_model": self.hp_model,
-                "predict": self.predict, "camera_idx": self.camera_idx,
+                "predict": self.predict, "camera": self.camera,
                 "cam_w": self.cam_w, "cam_h": self.cam_h, "cam_fps": self.cam_fps,
                 "drawer_tab": self.drawer_tab, "win_w": self.win_w, "win_h": self.win_h,
             })
@@ -225,7 +231,9 @@ mod engine {
         let face_image = arg(&a, "--face-image");
         // Clamp stride to ≥1: 0 would make `is_multiple_of(0)` disable all pose updates (BUG-31).
         let pose_stride: usize = arg_num(&a, "--pose-stride")?.unwrap_or(2).max(1);
-        let camera_idx: Option<u32> = arg_num(&a, "--camera")?;
+        // Camera id string (decimal index or an opaque nokhwa string index), not parsed to u32, so a
+        // string-indexed camera can be selected too (BUG-34).
+        let camera_id: Option<String> = arg(&a, "--camera");
         let no_camera = flag(&a, "--no-camera"); // privacy opt-out of the auto webcam (BUG-10)
         // Optional explicit capture format (BUG-28): --resolution WxH, --framerate N (bad → error).
         let cli_res: Option<(u32, u32)> = match arg(&a, "--resolution") {
@@ -242,11 +250,11 @@ mod engine {
         let cli_fps: Option<u32> = arg_num(&a, "--framerate")?;
         // Enumerate local cameras once, for the cockpit picker and the auto-default source.
         let cameras = crate::vision::enumerate_cameras();
-        for (i, n) in &cameras {
-            println!("CAMERA {i} {n}");
+        for (id, n) in &cameras {
+            println!("CAMERA {id} {n}");
         }
         let cameras_json =
-            serde_json::Value::Array(cameras.iter().map(|(i, n)| serde_json::json!([n, i])).collect());
+            serde_json::Value::Array(cameras.iter().map(|(id, n)| serde_json::json!([n, id])).collect());
 
         // Startup asset existence check (BUG-24): surface missing dirs/files with a clear log line up
         // front, instead of a 404 at the browser or a failure buried in the vision thread. These are
@@ -281,7 +289,7 @@ mod engine {
             hp_eq: false,
             hp_model: None,
             predict: false,
-            camera_idx,
+            camera: camera_id.clone(),
             cam_w: 0,
             cam_h: 0,
             cam_fps: 0,
@@ -295,7 +303,7 @@ mod engine {
         // re-apply the ones the user typed after the persisted overlay.
         if arg(&a, "--block").is_some() { settings.block = block; }
         if arg(&a, "--latency-ms").is_some() { settings.cushion_ms = latency_ms; }
-        if camera_idx.is_some() { settings.camera_idx = camera_idx; }
+        if camera_id.is_some() { settings.camera = camera_id.clone(); }
         if let Some((w, h)) = cli_res { settings.cam_w = w; settings.cam_h = h; }
         if let Some(f) = cli_fps { settings.cam_fps = f; }
         let hrir_list: Vec<String> = packs::list_packs().into_iter().map(|p| p.name).collect();
@@ -341,18 +349,18 @@ mod engine {
         // NOT override an explicit `--rotate-demo`/`--face-image`/`--camera-mjpeg` (WSL + test flows).
         // `--no-camera` disables the auto webcam entirely (privacy opt-out, BUG-10); an explicit
         // `--camera` still forces a specific one.
-        let auto_cam = if let Some(c) = camera_idx {
+        let auto_cam: Option<String> = if let Some(c) = camera_id.clone() {
             Some(c)
         } else if no_camera || camera_mjpeg.is_some() || face_image.is_some() || rotate_demo {
             None
         } else {
-            settings.camera_idx.or_else(|| cameras.first().map(|(i, _)| *i))
+            settings.camera.clone().or_else(|| cameras.first().map(|(id, _)| id.clone()))
         };
         let pose_source: &str;
-        if let Some(idx) = auto_cam {
+        if let Some(id) = auto_cam {
             pose_source = "camera";
             crate::vision::spawn_camera_pose(
-                idx, onnx_dir, canonical, pose_stride,
+                id, onnx_dir, canonical, pose_stride,
                 settings.cam_w, settings.cam_h, settings.cam_fps,
                 Arc::clone(&pose), Arc::clone(&running), Some(Arc::clone(&cockpit)),
             );
@@ -442,6 +450,7 @@ mod engine {
         let mut snapshot: Option<Settings> = None; // live edit-session snapshot (begin/commit/cancel)
         let mut read_errs = 0u32; // consecutive capture-read errors (transient → retry; BUG-14)
         let mut discontinuities = 0u64; // device-signalled capture glitches (BUG-33)
+        let mut source_silent = false; // last capture buffer was device-flagged silent (BUG-33)
         while running.load(Ordering::Relaxed) {
             if run_secs > 0.0 && start.elapsed().as_secs_f64() >= run_secs {
                 break;
@@ -471,7 +480,11 @@ mod engine {
                     "set_hp_model" => { if let Some(s) = a0.and_then(|v| v.as_str()) { settings.hp_model = Some(s.into()); dirty = true; } }
                     "set_block" => { if let Some(n) = a0.and_then(|v| v.as_u64()) { settings.block = (n as usize).clamp(64, 8192); dirty = true; } }
                     "set_cushion" => { if let Some(n) = a0.and_then(|v| v.as_f64()) { settings.cushion_ms = n.clamp(1.0, 500.0); dirty = true; } }
-                    "set_camera" => { if let Some(n) = a0.and_then(|v| v.as_u64()) { settings.camera_idx = Some(n as u32); dirty = true; } }
+                    "set_camera" => {
+                        // The picker sends the camera id as a string; tolerate a legacy numeric value.
+                        let id = a0.and_then(|v| v.as_str().map(String::from).or_else(|| v.as_u64().map(|n| n.to_string())));
+                        if let Some(id) = id { settings.camera = Some(id); dirty = true; }
+                    }
                     "set_cam_format" => {
                         if let (Some(w), Some(h)) = (a0.and_then(|v| v.as_u64()), args.get(1).and_then(|v| v.as_u64())) {
                             settings.cam_w = w as u32; settings.cam_h = h as u32;
@@ -548,6 +561,7 @@ mod engine {
                 if flags.discontinuity {
                     discontinuities += 1; // device-signalled glitch (BUG-33) — surfaced in telemetry
                 }
+                source_silent = flags.silent; // device-flagged digital silence (BUG-33)
                 last_audio = Instant::now();
                 in_acc.extend_from_slice(&buf);
                 // Sample the head yaw now, after the blocking read, so the azimuths the block renders
@@ -615,6 +629,7 @@ mod engine {
                     render_load_pct: render_ema,
                     render_peak_pct: render_peak,
                     source_idle,
+                    source_silent,
                     source_name: &source,
                     source_sr: sfmt.sample_rate,
                     source_ch: sfmt.channels,

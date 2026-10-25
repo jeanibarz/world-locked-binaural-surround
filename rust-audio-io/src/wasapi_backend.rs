@@ -136,8 +136,10 @@ impl WasapiLoopback {
         let sr = format.get_samplespersec();
         let ch = format.get_nchannels();
         let blockalign = format.get_blockalign() as usize;
-        let (_def, min_time) = client.get_device_period().map_err(|e| e.to_string())?;
-        let mode = StreamMode::EventsShared { autoconvert: false, buffer_duration_hns: min_time };
+        // Shared event-driven mode: pass 0 for the buffer duration so the audio engine picks the
+        // default (minimum) buffer matching its period, the MS-recommended value. The device `min_time`
+        // we used before was aggressively small and risked underruns on some endpoints (BUG-33).
+        let mode = StreamMode::EventsShared { autoconvert: false, buffer_duration_hns: 0 };
         // Direction::Capture on a *render* endpoint == loopback capture.
         client.initialize_client(&format, &Direction::Capture, &mode).map_err(|e| e.to_string())?;
         let event = client.set_get_eventhandle().map_err(|e| e.to_string())?;
@@ -206,8 +208,10 @@ impl WasapiRender {
         let sr = format.get_samplespersec();
         let ch = format.get_nchannels();
         let blockalign = format.get_blockalign() as usize;
-        let (_def, min_time) = client.get_device_period().map_err(|e| e.to_string())?;
-        let mode = StreamMode::EventsShared { autoconvert: false, buffer_duration_hns: min_time };
+        // Shared event-driven mode: pass 0 for the buffer duration so the audio engine picks the
+        // default (minimum) buffer matching its period, the MS-recommended value. The device `min_time`
+        // we used before was aggressively small and risked underruns on some endpoints (BUG-33).
+        let mode = StreamMode::EventsShared { autoconvert: false, buffer_duration_hns: 0 };
         client.initialize_client(&format, &Direction::Render, &mode).map_err(|e| e.to_string())?;
         let event = client.set_get_eventhandle().map_err(|e| e.to_string())?;
         let render = client.get_audiorenderclient().map_err(|e| e.to_string())?;

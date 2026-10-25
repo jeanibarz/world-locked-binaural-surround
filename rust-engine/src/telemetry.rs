@@ -83,6 +83,8 @@ pub struct TeleInput<'a> {
     pub render_load_pct: f64,
     pub render_peak_pct: f64,
     pub source_idle: bool,
+    /// The most recent capture buffer carried the device "silent" flag (BUG-33).
+    pub source_silent: bool,
     pub source_name: &'a str,
     pub source_sr: u32,
     pub source_ch: u16,
@@ -200,7 +202,7 @@ pub fn build_state(t: &TeleInput) -> Value {
             "dot": if t.source_idle { amber } else { green },
             "label": "Source",
             "value": format!("{} · {} Hz · {}ch{}", t.source_name, t.source_sr, t.source_ch,
-                             if t.source_idle { " · idle" } else { "" }),
+                             if t.source_idle { " · idle" } else if t.source_silent { " · silent" } else { "" }),
         }),
         json!({
             "dot": if t.output_err.is_some() { red } else { green },
@@ -310,6 +312,7 @@ mod tests {
             render_load_pct: 22.0,
             render_peak_pct: 38.0,
             source_idle: false,
+            source_silent: false,
             source_name: "VoiceMeeter",
             source_sr: 48_000,
             source_ch: 8,
