@@ -86,6 +86,10 @@ mod engine {
         hp_eq: bool,
         hp_model: Option<String>,
         predict: bool,
+        /// Head-tracking direction (BUG #189). `false` is the corrected default (world-lock tracks
+        /// the head); `true` inverts for a camera/mount of the opposite handedness. Applied at the
+        /// pose source so the radar and the audio flip together.
+        invert_tracking: bool,
         /// Selected camera id (decimal index or opaque string, per nokhwa `CameraIndex`).
         camera: Option<String>,
         cam_w: u32,
@@ -133,6 +137,7 @@ mod engine {
             if let Some(b) = o.get("hp_eq").and_then(|x| x.as_bool()) { self.hp_eq = b; }
             if let Some(s) = o.get("hp_model").and_then(|x| x.as_str()) { self.hp_model = Some(s.into()); }
             if let Some(b) = o.get("predict").and_then(|x| x.as_bool()) { self.predict = b; }
+            if let Some(b) = o.get("invert_tracking").and_then(|x| x.as_bool()) { self.invert_tracking = b; }
             // New string `camera` id; fall back to the legacy numeric `camera_idx` for old settings.
             if let Some(s) = o.get("camera").and_then(|x| x.as_str()) {
                 self.camera = Some(s.into());
@@ -154,7 +159,7 @@ mod engine {
                 "method": self.method, "hrir_name": self.hrir_name, "backend": self.backend,
                 "comp": self.comp, "block": self.block, "cushion_ms": self.cushion_ms,
                 "exclusive": self.exclusive, "hp_eq": self.hp_eq, "hp_model": self.hp_model,
-                "predict": self.predict, "camera": self.camera,
+                "predict": self.predict, "invert_tracking": self.invert_tracking, "camera": self.camera,
                 "cam_w": self.cam_w, "cam_h": self.cam_h, "cam_fps": self.cam_fps,
                 "drawer_tab": self.drawer_tab, "win_w": self.win_w, "win_h": self.win_h,
             })
@@ -179,7 +184,7 @@ mod engine {
             "backend": s.backend, "method": s.method, "hrir_name": s.hrir_name, "comp": s.comp,
             "block": s.block, "cushion_ms": s.cushion_ms, "exclusive": s.exclusive,
             "hp_eq": s.hp_eq, "hp_models": s.hp_model.clone().map(|m| vec![m]),
-            "predict": s.predict,
+            "predict": s.predict, "invert_tracking": s.invert_tracking,
             "win_w": s.win_w, "win_h": s.win_h,
         })
     }
@@ -324,6 +329,7 @@ mod engine {
             hp_eq: false,
             hp_model: None,
             predict: false,
+            invert_tracking: false,
             camera: camera_id.clone(),
             cam_w: 0,
             cam_h: 0,
@@ -356,6 +362,7 @@ mod engine {
 
         // Shared state.
         let pose = crate::vision::PoseState::new();
+        pose.set_inverted(settings.invert_tracking); // apply the persisted tracking direction (#189)
         let fifo: Arc<Mutex<CushionFifo<StereoBlock>>> = {
             let cushion = cushion_blocks(settings.cushion_ms, pack.samplerate, block);
             Arc::new(Mutex::new(CushionFifo::new(cushion, cushion * 2, vec![0.0f32; block * 2])))
@@ -501,6 +508,10 @@ mod engine {
                 let a0 = args.get(0);
                 match name.as_str() {
                     "set_predict" => { if let Some(b) = a0.and_then(|v| v.as_bool()) { settings.predict = b; dirty = true; } }
+                    // Invert head tracking (#189): the pose source is reconciled to this in the
+                    // `dirty` block below, so the direction flips live and stays consistent across
+                    // settings-dialog cancel/reset too. Persisted like `predict`.
+                    "set_invert_tracking" => { if let Some(b) = a0.and_then(|v| v.as_bool()) { settings.invert_tracking = b; dirty = true; } }
                     "recenter" => pose.recenter(),
                     "set_drawer_tab" => { if let Some(s) = a0.and_then(|v| v.as_str()) { settings.drawer_tab = s.into(); dirty = true; } }
                     "window_size" => {
@@ -544,6 +555,10 @@ mod engine {
             }
             if dirty {
                 cockpit.set_config(build_config(&settings, &cameras_json, &hrir_list, pack.samplerate));
+                // Reconcile the pose source's tracking direction to the (possibly just reverted)
+                // setting, so a toggle, a settings-dialog cancel, and reset-to-defaults all agree
+                // with the live radar/audio direction (#189). A no-op when unchanged.
+                pose.set_inverted(settings.invert_tracking);
                 // Persist immediately for the main-cockpit controls (predict/recenter/window/tab);
                 // settings-dialog changes are held until Confirm (while a snapshot is active).
                 if snapshot.is_none() {
@@ -663,6 +678,7 @@ mod engine {
                     title: "WLBS Engine",
                     yaw_deg: cur_yaw,
                     predict: settings.predict,
+                    invert_tracking: settings.invert_tracking,
                     block,
                     sample_rate: pack.samplerate,
                     cushion_blocks: cushion_now,

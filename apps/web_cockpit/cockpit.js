@@ -124,6 +124,9 @@
     // predict toggle
     if (s.predict != null) { const t = $("predict-toggle"); if (t) t.setAttribute("aria-checked", s.predict ? "true" : "false"); }
 
+    // invert-head-tracking toggle (#189)
+    if (s.invert_tracking != null) { const t = $("invert-toggle"); if (t) t.setAttribute("aria-checked", s.invert_tracking ? "true" : "false"); }
+
     // ring / pose
     if (s.pose) {
       setText("pose-yaw", s.pose.yaw); setText("pose-pitch", s.pose.pitch); setText("pose-roll", s.pose.roll);
@@ -182,6 +185,11 @@
     if (pt) pt.addEventListener("click", () => {
       const on = pt.getAttribute("aria-checked") !== "true";
       pt.setAttribute("aria-checked", on ? "true" : "false"); call("set_predict", on);
+    });
+    const it = $("invert-toggle");
+    if (it) it.addEventListener("click", () => {
+      const on = it.getAttribute("aria-checked") !== "true";
+      it.setAttribute("aria-checked", on ? "true" : "false"); call("set_invert_tracking", on);
     });
     const sb = $("settings-btn"); if (sb) sb.addEventListener("click", () => window.open("/settings.html", "cockpit-settings", "width=576,height=1012"));
     const rc = $("recenter-btn"); if (rc) rc.addEventListener("click", () => call("recenter"));

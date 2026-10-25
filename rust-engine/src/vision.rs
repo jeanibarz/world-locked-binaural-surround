@@ -26,7 +26,17 @@ fn now_ms() -> u64 {
 /// tracker liveness (last-update timestamp) and the camera resolution, for cockpit telemetry.
 pub struct PoseState {
     pub yaw: Mutex<f64>,
+    /// Neutral reference, stored in the solver's **raw** convention (sign not yet applied), so the
+    /// tracking-direction sign can flip live (see `invert`) by simply mirroring the output around
+    /// this neutral — no re-centre, no discontinuity.
     yaw0: Mutex<Option<f64>>,
+    /// Head-tracking direction. The ONNX solver's raw yaw runs opposite the world-lock convention
+    /// (BUG #189: turning the head made the world anti-track), so the corrected default negates it:
+    /// the published `yaw` is `sign * (raw - neutral)` with `sign = -1` by default. `invert = true`
+    /// restores `sign = +1` for a camera/mount whose handedness is the other way. This sign is the
+    /// single source of truth for *both* the radar (rotates by `-yaw`) and the audio azimuths
+    /// (`speaker_az - yaw`), so they can never disagree in direction.
+    invert: AtomicBool,
     /// Epoch-millis of the last pose update, or 0 if no pose has been produced yet.
     last_update: AtomicU64,
     /// The active camera resolution, once a camera stream is open.
@@ -41,17 +51,43 @@ impl PoseState {
         Arc::new(Self {
             yaw: Mutex::new(0.0),
             yaw0: Mutex::new(None),
+            invert: AtomicBool::new(false),
             last_update: AtomicU64::new(0),
             cam_res: Mutex::new(None),
             cam_error: Mutex::new(None),
         })
     }
+
+    /// Current tracking-direction state (`true` = inverted). Mirrored into cockpit telemetry so the
+    /// "Invert head tracking" switch reflects the live value.
+    pub fn inverted(&self) -> bool {
+        self.invert.load(Ordering::Relaxed)
+    }
+
+    /// Flip the tracking direction live. Neutral is stored in raw units, so the published `yaw`
+    /// simply mirrors around 0 — no jump, no re-centre. Applied on startup from the persisted
+    /// setting and on the cockpit toggle (BUG #189).
+    pub fn set_inverted(&self, invert: bool) {
+        // Hold `yaw0` for the whole flip, the same lock order `update_raw`/`recenter` use (yaw0 then
+        // yaw), so a concurrent pose can't land between the swap and the mirror and leave a
+        // wrong-sign yaw for a frame.
+        let _y0 = self.yaw0.lock().unwrap();
+        let was = self.invert.swap(invert, Ordering::Relaxed);
+        if was != invert {
+            // Reflect the new sign in the already-published yaw immediately, so the radar/audio
+            // flip on the same frame the toggle is pressed rather than on the next pose.
+            let mut y = self.yaw.lock().unwrap();
+            *y = -*y;
+        }
+    }
+
     fn update_raw(&self, raw_yaw: f64) {
         let mut y0 = self.yaw0.lock().unwrap();
         if y0.is_none() {
-            *y0 = Some(raw_yaw); // first pose = neutral
+            *y0 = Some(raw_yaw); // first pose = neutral (stored raw, sign-independent)
         }
-        *self.yaw.lock().unwrap() = raw_yaw - y0.unwrap();
+        *self.yaw.lock().unwrap() =
+            crate::geometry::published_yaw(raw_yaw, y0.unwrap(), self.inverted());
         self.last_update.store(now_ms(), Ordering::Relaxed);
     }
 
@@ -61,7 +97,7 @@ impl PoseState {
         let mut y0 = self.yaw0.lock().unwrap();
         let mut y = self.yaw.lock().unwrap();
         if let Some(cur0) = *y0 {
-            *y0 = Some(cur0 + *y);
+            *y0 = Some(crate::geometry::recenter_neutral(cur0, *y, self.inverted()));
             *y = 0.0;
         }
     }
