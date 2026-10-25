@@ -29,13 +29,15 @@ for the full requirements and architecture before doing anything else.
      negative results included) and update its index + `LEARNINGS.md`.
    - Tick/advance the **backlog**: mark the block done, add any follow-ups or
      newly-discovered blocks.
+   - If the block shipped, changed, or retired a **user-facing capability**,
+     add or flip its one-line entry in `docs/FEATURES.md` (status, with a ref).
    - Commit with a Conventional-Commits message.
 5. **Deliver** per the delivery policy below, then **hand off** (continue the
    chain or stop) per the self-continuation policy below.
 
 Do **one** block per task. Do not batch blocks because setup is warm.
 
-## Durable state = the three files
+## Durable state = the files
 
 - **`docs/backlog.md`** — the ordered, checkbox list of work blocks grouped by
   milestone. This is the queue. The "next eligible block" is the first unchecked
@@ -44,6 +46,13 @@ Do **one** block per task. Do not batch blocks because setup is warm.
   decision, an index (`README.md`), and `LEARNINGS.md`. This is *why* and *what
   changed*, written for a cold reader. Mirror the maintenance protocol used by
   the sibling project `binaural-localization`.
+- **`docs/FEATURES.md`** — the *capability* view: what the app can do today, grouped
+  as you'd describe it to a user, each a one-line entry with a status
+  (`✅ shipped` / `🟡 partial` / `⬜ planned` / `🔮 vision`) and a ref. Beside the
+  *spec* view (`docs/requirements.md`) and the *work* view (`docs/backlog.md`): it
+  reuses the `agent-notebook` *pattern* (bounded, read-whole, atomic, ritual-maintained)
+  but is a plain git-tracked file — it does **not** touch the `nb` tool. Read it to
+  answer "what works now?"; keep it current via the one-block loop.
 - **`git` history** — commits and (if a remote exists) PRs are the completion
   evidence. Prefer "a merged change exists" over "I remember doing it".
 
