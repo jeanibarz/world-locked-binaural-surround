@@ -40,6 +40,9 @@ html,body{margin:0;background:var(--bg)}
   border-radius:12px;overflow:hidden}
 .cam-ph{width:100%;height:100%;display:block}
 #cam-img{width:100%;height:100%;object-fit:cover}
+/* FaceMesh overlay (#185): sits exactly over the preview image; it is drawn to match the img's
+   object-fit:cover crop, so landmarks land on the face. Non-interactive; under the badges. */
+.cam-overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
 .cam-badge{position:absolute;left:10px;top:10px;display:flex;align-items:center;gap:6px;
   background:rgba(13,17,23,.85);border:1px solid var(--border2);border-radius:999px;padding:4px 10px;
   font-size:12px;font-weight:600;color:var(--green)}

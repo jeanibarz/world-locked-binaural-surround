@@ -107,6 +107,18 @@ pub struct TeleInput<'a> {
     /// A camera/pipeline open failure, shown as "camera unavailable" (BUG-10).
     pub cam_error: Option<&'a str>,
     pub mmcss: bool,
+    /// Draw-landmarks setting (#185) — mirrored to the cockpit so the settings switch reflects the
+    /// live/persisted value, exactly like `predict`/`flip_h`.
+    pub show_landmarks: bool,
+    /// FaceMesh landmark overlay for the camera preview (#185): interleaved `[x0,y0,x1,y1,…]` in
+    /// per-mille (0..1000) of the **un-mirrored** frame's width/height. `None` when there is no face,
+    /// tracking is stale, or the overlay is switched off — the cockpit then clears the overlay.
+    /// Captured on the vision thread at the pose rate and carried here at the telemetry cadence,
+    /// never per audio block.
+    pub landmarks: Option<&'a [u16]>,
+    /// Face bounding box for the overlay (#185): `[x, y, w, h]` in per-mille of the frame, derived
+    /// from the landmark extent. Present exactly when `landmarks` is.
+    pub face_box: Option<[u16; 4]>,
     pub lat: &'a LatencyHistogram,
 }
 
@@ -263,11 +275,12 @@ pub fn build_state(t: &TeleInput) -> Value {
         "tracking"
     };
 
-    json!({
+    let mut out = json!({
         "title": t.title,
         "cam_res": t.cam_res.map(|(w, h)| format!("{w}×{h}")).unwrap_or_else(|| "—".into()),
         "face_badge": face_badge,
         "face_locked": face_locked,
+        "show_landmarks": t.show_landmarks,
         "health": health,
         "render_load": render_load,
         "buffer": buffer,
@@ -295,7 +308,18 @@ pub fn build_state(t: &TeleInput) -> Value {
             "axis_hi": t.lat.axis_hi,
             "note": format!("end-to-end estimate at block {} @ {} Hz", t.block, t.sample_rate),
         },
-    })
+    });
+
+    // FaceMesh overlay (#185): only present when the engine decided to show it (face present,
+    // tracking fresh, toggle on) — the UI clears the overlay whenever the arrays are absent. Emitted
+    // as compact per-mille integer arrays rather than floats to keep the 20 Hz state frame small.
+    if let (Value::Object(map), Some(pts)) = (&mut out, t.landmarks) {
+        map.insert("landmarks".into(), json!(pts));
+        if let Some(b) = t.face_box {
+            map.insert("face_box".into(), json!(b));
+        }
+    }
+    out
 }
 
 /// Nest a state object as the `{"type":"state","state":{…}}` wire frame the cockpit UI expects.
@@ -341,6 +365,9 @@ mod tests {
             cam_res: Some((640, 480)),
             cam_error: None,
             mmcss: true,
+            show_landmarks: true,
+            landmarks: None,
+            face_box: None,
             lat,
         }
     }
@@ -359,15 +386,35 @@ mod tests {
     fn builds_every_field_the_ui_reads() {
         let lat = LatencyHistogram::new(64, 20, 0.0, 120.0);
         let s = build_state(&sample_input(&lat));
-        for key in ["title", "cam_res", "face_badge", "face_locked", "health", "render_load",
-                    "buffer", "dropouts", "predict", "invert_tracking", "flip_h", "flip_v",
-                    "pose", "facing", "latency"] {
+        for key in ["title", "cam_res", "face_badge", "face_locked", "show_landmarks", "health",
+                    "render_load", "buffer", "dropouts", "predict", "invert_tracking", "flip_h",
+                    "flip_v", "pose", "facing", "latency"] {
             assert!(s.get(key).is_some(), "missing state field {key}");
         }
         assert_eq!(s["buffer"]["cushion_blocks"], 4);
         assert_eq!(s["buffer"]["capacity"], 8);
         assert!(s["buffer"]["resample_ppm"].is_number());
         assert!(s["latency"]["segments"].as_array().unwrap().len() == 4);
+    }
+
+    #[test]
+    fn landmarks_present_only_when_supplied() {
+        let lat = LatencyHistogram::new(64, 20, 0.0, 120.0);
+        // Absent by default (no face / stale / toggle off): the overlay arrays are omitted, but the
+        // toggle-reflection flag is always present.
+        let s = build_state(&sample_input(&lat));
+        assert_eq!(s["show_landmarks"], true);
+        assert!(s.get("landmarks").is_none());
+        assert!(s.get("face_box").is_none());
+
+        // Supplied: the flat per-mille array and the box are carried verbatim for the canvas overlay.
+        let pts: [u16; 6] = [100, 200, 300, 400, 500, 600];
+        let mut inp = sample_input(&lat);
+        inp.landmarks = Some(&pts);
+        inp.face_box = Some([90, 190, 420, 420]);
+        let s = build_state(&inp);
+        assert_eq!(s["landmarks"], json!([100, 200, 300, 400, 500, 600]));
+        assert_eq!(s["face_box"], json!([90, 190, 420, 420]));
     }
 
     #[test]

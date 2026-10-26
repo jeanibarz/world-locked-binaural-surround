@@ -86,9 +86,69 @@ pub fn recenter_neutral(neutral_raw: f64, cur_yaw: f64, invert: bool) -> f64 {
     neutral_raw + cur_yaw * sign
 }
 
+/// A captured FaceMesh overlay for the cockpit camera preview (#185). Coordinates are per-mille
+/// (0..1000) of the **un-mirrored** frame — the same frame fed to the pose pipeline and the
+/// `/camera` preview, so the overlay aligns with the face — packed compactly for the 20 Hz
+/// telemetry frame.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LandmarkFrame {
+    /// Interleaved `[x0,y0,x1,y1,…]`, each per-mille of frame width/height.
+    pub pts: Vec<u16>,
+    /// Bounding box `[x, y, w, h]` in per-mille, derived from the landmark extent (a small margin
+    /// added), so the preview can draw a face box without plumbing the detector ROI through.
+    pub box_xywh: [u16; 4],
+}
+
+/// Pack the pipeline's normalized FaceMesh landmarks (`x,y` ∈ [0,1] of width/height; the `z` is
+/// unused by the overlay) into a compact per-mille [`LandmarkFrame`] with a derived, slightly-padded
+/// bounding box. `None` for an empty landmark set. Pure (lives here, not in the `#![cfg(windows)]`
+/// vision module) so native `cargo test` covers it.
+pub fn pack_landmarks(landmarks: &[[f64; 3]]) -> Option<LandmarkFrame> {
+    if landmarks.is_empty() {
+        return None;
+    }
+    let q = |v: f64| -> u16 { (v.clamp(0.0, 1.0) * 1000.0).round() as u16 };
+    let mut pts = Vec::with_capacity(landmarks.len() * 2);
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (1000u16, 1000u16, 0u16, 0u16);
+    for lm in landmarks {
+        let (x, y) = (q(lm[0]), q(lm[1]));
+        pts.push(x);
+        pts.push(y);
+        min_x = min_x.min(x);
+        min_y = min_y.min(y);
+        max_x = max_x.max(x);
+        max_y = max_y.max(y);
+    }
+    // Pad the raw landmark extent by ~3% of the frame so the box frames the face rather than
+    // clipping its outline, clamped to the frame.
+    const PAD: u16 = 30;
+    let bx = min_x.saturating_sub(PAD);
+    let by = min_y.saturating_sub(PAD);
+    let bw = (max_x + PAD).min(1000).saturating_sub(bx);
+    let bh = (max_y + PAD).min(1000).saturating_sub(by);
+    Some(LandmarkFrame { pts, box_xywh: [bx, by, bw, bh] })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pack_landmarks_quantizes_and_boxes() {
+        // Empty set → nothing to draw.
+        assert!(pack_landmarks(&[]).is_none());
+        // Two points spanning a face region: per-mille rounding + a padded, clamped box.
+        let lm = [[0.25, 0.40, 0.0], [0.75, 0.80, 0.0]];
+        let f = pack_landmarks(&lm).unwrap();
+        assert_eq!(f.pts, vec![250, 400, 750, 800]);
+        // box = extent [250..750]×[400..800] padded by 30, clamped to [0,1000].
+        assert_eq!(f.box_xywh, [220, 370, 560, 460]);
+        // A point at the frame edge stays in range and the box never exceeds the frame.
+        let edge = pack_landmarks(&[[0.0, 0.0, 0.0], [1.2, 1.0, 0.0]]).unwrap();
+        assert_eq!(edge.pts, vec![0, 0, 1000, 1000]); // 1.2 clamps to 1000
+        let [bx, by, bw, bh] = edge.box_xywh;
+        assert!(bx as u32 + bw as u32 <= 1000 && by as u32 + bh as u32 <= 1000);
+    }
 
     #[test]
     fn neutral_pose_is_the_speaker_layout() {
