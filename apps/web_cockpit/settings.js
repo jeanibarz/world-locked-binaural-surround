@@ -76,7 +76,10 @@
     cfg = cfg || {};
     // --- camera / resolution / fps ---
     const cams = (cfg.cameras || [["Camera 0", 0]]).map(([label, idx]) => ({ label, value: idx }));
-    wireDropdown("set-camera", () => cams, "set_camera", () => $("set-camera").firstChild.nodeValue);
+    // No custom render: the picked camera's own label (its name) is what we show. (The old render
+    // returned `firstChild.nodeValue`, but the field's first child is the <span> element — whose
+    // nodeValue is null — so choosing a camera blanked the field.)
+    wireDropdown("set-camera", () => cams, "set_camera");
     const RES = cfg.resolutions || ["default", "320×240", "640×480", "848×480", "1280×720"];
     const FPS = cfg.framerates || ["default", "30 fps", "60 fps"];
     $("set-resolution").addEventListener("click", () => openMenu($("set-resolution"), RES, (v) => { fieldText($("set-resolution"), v); call("set_cam_format", ...parseFmt(v, curFps())); }));
@@ -130,6 +133,10 @@
     if (cfg.comp) selectSeg("set-comp", cfg.comp);
     if (cfg.method) fieldText($("set-method"), cfg.method);
     if (cfg.hrir_name) fieldText($("set-hrir"), cfg.hrir_name);
+    if (cfg.camera != null) {
+      const cur = cams.find((c) => String(c.value) === String(cfg.camera));
+      if (cur) fieldText($("set-camera"), cur.label);  // show the live camera, not the HTML default
+    }
     const setToggle = (id, on) => { const t = $(id); if (t) t.setAttribute("aria-checked", on ? "true" : "false"); };
     if (cfg.exclusive != null) setToggle("exclusive-toggle", cfg.exclusive);
     if (cfg.hp_eq != null) setToggle("hpeq-toggle", cfg.hp_eq);
