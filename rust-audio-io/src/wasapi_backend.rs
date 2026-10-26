@@ -16,6 +16,27 @@ extern "system" {
     fn AvSetMmThreadCharacteristicsW(task: *const u16, taskindex: *mut u32) -> isize;
 }
 
+#[link(name = "kernel32")]
+extern "system" {
+    fn GetCurrentProcess() -> isize;
+    fn SetPriorityClass(process: isize, class: u32) -> i32;
+}
+
+/// Raise the WHOLE process to the Windows HIGH priority class, so every engine thread beats
+/// normal-priority background work (a compiler, a file indexer, a Windows-update task). MMCSS
+/// ([`set_pro_audio`]) boosts only the render + output threads, but those depend on the other
+/// threads that run at the process base priority (capture servicing, the control-plane, the pose
+/// pipeline); a CPU-saturating *normal*-priority competitor preempts those, the shared WASAPI device
+/// buffers overflow/underflow, and audio drops out in bursts *despite* MMCSS (journal 82: a
+/// background `cargo build` made the DSP inaudible). Lifting the whole process class raises them
+/// together. HIGH is what pro-audio hosts use; REALTIME is deliberately avoided — it outranks
+/// kernel/driver threads and can stall audio I/O and the whole machine. Best-effort; the class
+/// reverts when the process exits. Returns whether it succeeded.
+pub fn set_high_priority() -> bool {
+    const HIGH_PRIORITY_CLASS: u32 = 0x0000_0080;
+    unsafe { SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS) != 0 }
+}
+
 /// Elevate the calling thread to the MMCSS "Pro Audio" class (glitch-resistant scheduling), exactly
 /// as the engine's render thread relies on. Returns whether it succeeded. Proven to work from Rust
 /// in R-S2. Call from the thread that does the real-time I/O.
