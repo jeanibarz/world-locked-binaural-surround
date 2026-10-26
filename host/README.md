@@ -38,13 +38,20 @@ Flags after the mode are forwarded, e.g. `run.cmd listen --method nearest --bloc
 `run.cmd listen --ui console`. `listen`/`test` relaunch automatically on the in-app Reload
 (Enter → exit 97). See `AGENTS.md` → "Running the host GUI apps" for the host-interop gotchas.
 
-## Native window (the standalone shell) — nominal UI
+## Native window + live HTTP inspection — both at once
 
-The nominal way to run the app is a **native OS window** (the Tauri shell in `src-tauri/`), not a
-browser. Chrome is only for **inspection/debugging**. The shell starts the engine itself (hidden, on a
-fixed port, `--no-browser`) and shows one window pointing at the local cockpit; closing the window
-stops the engine. The cockpit HTTP server stays reachable, so you can still open the same URL in Chrome
-to inspect.
+The nominal UI is a **native OS window** (the Tauri shell in `src-tauri/`). But the window and
+browser-based inspection are **not** an either/or — they run **simultaneously, off the one engine**:
+
+- The engine always serves the cockpit over HTTP on a **fixed port (8731)** and accepts **multiple
+  concurrent clients** (the SSE subscriber list + per-connection MJPEG in `apps/cockpit_web.py`).
+- The native window is simply **one** client — a WebView pointed at `http://127.0.0.1:8731`.
+- **Any browser opening that same URL is another client, at the same time, on the same live session.**
+  So you can watch the app in its native window *and* inspect/debug it in Chrome concurrently.
+- `--no-browser` (what the shell passes) only means "don't *auto-launch* a browser" — it does **not**
+  disable the server. The HTTP surface is always there to attach to.
+- The engine shuts down only when **every** client disconnects (autoquit grace), so a browser can
+  attach and detach freely while the native window stays open. Closing the native window stops the app.
 
 **Cross-platform.** The window runs on Windows (WebView2), macOS (WKWebView) and Linux (WebKitGTK) from
 the same source. Build it:
@@ -67,5 +74,8 @@ works on any host):
 | `WLBS_LAUNCH` | Unix | launcher prefix. Default: `python3 apps/launch.py`. |
 | `WLBS_HOME` | Unix | working directory the launcher resolves against (e.g. the repo root). |
 
-**Inspection in Chrome:** the cockpit stays on `http://127.0.0.1:8731/index.html` while the shell runs —
-open it in any browser. Or launch `run.cmd` directly, which opens the cockpit in Chrome `--app`.
+**Inspecting while the native window is open:** the cockpit stays on `http://127.0.0.1:8731/index.html`
+for as long as the shell runs — just open it in any browser; it attaches to the same live engine
+alongside the window. (The legacy `run.cmd` path, with no shell, instead auto-opens the cockpit in
+Chrome `--app` on a random port — fine for a quick look, but the shell's fixed 8731 is what makes
+"window + browser, simultaneously" reliable.)
