@@ -131,9 +131,11 @@ mod engine {
         win_h: u32,
     }
 
-    /// Settings file schema. Bumped to 2 when the ring-interp methods (#187) shipped: a v1 file's
-    /// persisted `method` is a stale pre-feature default, migrated in [`Settings::overlay`].
-    const SETTINGS_SCHEMA: u64 = 2;
+    /// Settings file schema. Bumped to 2 when the ring-interp methods (#187) shipped (a v1 file's
+    /// persisted `method` is a stale pre-feature default), and to 3 for in-engine HP-EQ (#193): a
+    /// pre-v3 file's persisted `hp_eq: false` is the old implicit default, not a user choice.
+    /// Both are migrated in [`Settings::overlay`].
+    const SETTINGS_SCHEMA: u64 = 3;
 
     /// Is `s` a method the engine implements?
     fn valid_method(s: &str) -> bool {
@@ -165,7 +167,14 @@ mod engine {
             if let Some(n) = o.get("block").and_then(|x| x.as_u64()) { self.block = (n as usize).clamp(64, 8192); }
             if let Some(n) = o.get("cushion_ms").and_then(|x| x.as_f64()) { self.cushion_ms = n.clamp(1.0, 500.0); }
             if let Some(b) = o.get("exclusive").and_then(|x| x.as_bool()) { self.exclusive = b; }
-            if let Some(b) = o.get("hp_eq").and_then(|x| x.as_bool()) { self.hp_eq = b; }
+            // A pre-v3 file predates in-engine HP-EQ (#193): back then `hp_eq` defaulted off and was
+            // persisted regardless, so a persisted `false` from such a file is the old implicit
+            // default, not a user choice — don't let it override the new default-on. A persisted
+            // `true`, or any value from a v3+ file, is a real choice and is honored (mirrors the
+            // `method`/"nearest" migration above).
+            if let Some(b) = o.get("hp_eq").and_then(|x| x.as_bool()) {
+                if schema >= SETTINGS_SCHEMA || b { self.hp_eq = b; }
+            }
             if let Some(s) = o.get("hp_model").and_then(|x| x.as_str()) { self.hp_model = Some(s.into()); }
             if let Some(b) = o.get("predict").and_then(|x| x.as_bool()) { self.predict = b; }
             if let Some(b) = o.get("invert_tracking").and_then(|x| x.as_bool()) { self.invert_tracking = b; }
@@ -729,6 +738,15 @@ mod engine {
                         if let Some(eq) = output_eq.as_mut() {
                             if !hp_eq_was_on {
                                 eq.reset();
+                            }
+                            // Guard the EQ's persistent state (biquad memory + FIR delay line) from a
+                            // stray non-finite render sample: unlike the per-sample BUG-21 clamp
+                            // below, a NaN/Inf that enters the EQ poisons every later output on that
+                            // ear until a reset — so drop it to zero before it can (BUG-21 kin).
+                            for v in out64.iter_mut() {
+                                if !v.is_finite() {
+                                    *v = 0.0;
+                                }
                             }
                             eq.process_interleaved(&mut out64);
                         }

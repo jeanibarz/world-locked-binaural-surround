@@ -711,6 +711,31 @@ mod tests {
     }
 
     #[test]
+    fn copy_onto_bus_clears_prior_accumulation() {
+        // The owner's config never lands an op on L/R before the final downmix Copy, so the parity
+        // gate can't exercise the "Copy clears the bus" rule (it's a no-op there). Pin it directly:
+        // a Preamp + biquad on L, then a Copy onto L (the downmix), then a Preamp — only the ops
+        // AFTER the Copy must survive (the pre-Copy accumulation is the engine's own convolution).
+        let pk = BiquadSpec { ftype: "PK".into(), fc: 1000.0, gain_db: 3.0, q: Some(1.0), bw_oct: None, slope_db: None };
+        let cleared = vec![
+            Cmd::Channel("L".into()),
+            Cmd::Preamp(6.0),
+            Cmd::Filter(pk.clone()),
+            Cmd::Copy(vec!["L".into()]),
+            Cmd::Preamp(-3.0),
+        ];
+        let (l, _r) = extract_ear_chains(&cleared, 48000).unwrap();
+        assert!((l.gain - 10f64.powf(-3.0 / 20.0)).abs() < 1e-12, "only the post-Copy gain survives, got {}", l.gain);
+        assert!(l.specs.is_empty(), "the pre-Copy biquad must be cleared by the Copy");
+
+        // Control: the identical ops WITHOUT the Copy accumulate both preamps and the biquad.
+        let kept = vec![Cmd::Channel("L".into()), Cmd::Preamp(6.0), Cmd::Filter(pk), Cmd::Preamp(-3.0)];
+        let (l2, _) = extract_ear_chains(&kept, 48000).unwrap();
+        assert_eq!(l2.specs.len(), 1);
+        assert!((l2.gain - 10f64.powf(6.0 / 20.0) * 10f64.powf(-3.0 / 20.0)).abs() < 1e-12);
+    }
+
+    #[test]
     fn loads_the_owner_config_chain() {
         // The bundled baked config must yield a non-trivial per-ear chain: a comp FIR + biquads on
         // both ears, and the right ear's extra -1.2 dB comp preamp (so its gain differs from L).
