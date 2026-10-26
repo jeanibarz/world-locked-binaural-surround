@@ -60,6 +60,13 @@ pub struct PoseState {
     /// is purely cosmetic — it never feeds the world-lock — so a missed update just leaves the last
     /// frame until the next telemetry tick re-reads it.
     landmarks: Mutex<Option<LandmarkFrame>>,
+    /// The camera the capture thread should run: `(id, w, h, fps)` (0 = the controlled default,
+    /// see `open_camera`). Settings changes write this; the running thread reopens the new
+    /// device/format without an engine restart (BUG-34 live camera switch).
+    cam_req: Mutex<(String, u32, u32, u32)>,
+    /// Bumps on every real change to `cam_req`. The capture loop polls it per frame and reopens
+    /// when it differs from the generation it opened with.
+    cam_req_gen: AtomicU64,
 }
 
 impl PoseState {
@@ -74,7 +81,37 @@ impl PoseState {
             cam_res: Mutex::new(None),
             cam_error: Mutex::new(None),
             landmarks: Mutex::new(None),
+            cam_req: Mutex::new((String::new(), 0, 0, 0)),
+            cam_req_gen: AtomicU64::new(0),
         })
+    }
+
+    /// Set the camera the capture thread should run — its `id` plus resolution/fps (0 = the
+    /// controlled default). Bumps the generation only on a real change, so the running camera
+    /// thread reopens the new device/format without an engine restart (BUG-34), and a no-op
+    /// request (e.g. an unrelated settings change re-applying the same camera) is ignored.
+    pub fn set_cam_request(&self, id: String, w: u32, h: u32, fps: u32) {
+        let mut r = self.cam_req.lock().unwrap();
+        let next = (id, w, h, fps);
+        if *r != next {
+            *r = next;
+            self.cam_req_gen.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// The current camera request `(id, w, h, fps)` paired with the generation it belongs to —
+    /// read once per (re)open so the capture loop knows which generation it is serving. The tuple
+    /// and the generation are read **under the same held lock** (the explicit `guard` scope), so
+    /// they are a consistent snapshot: the loop can never pair a new generation with a stale tuple,
+    /// nor miss a switch. Do not refactor this to drop the guard before the `load`.
+    fn cam_request(&self) -> ((String, u32, u32, u32), u64) {
+        let guard = self.cam_req.lock().unwrap();
+        (guard.clone(), self.cam_req_gen.load(Ordering::Relaxed))
+    }
+
+    /// The current camera-request generation (cheap; the capture loop polls this per frame).
+    pub fn cam_req_gen(&self) -> u64 {
+        self.cam_req_gen.load(Ordering::Relaxed)
     }
 
     /// Store the latest FaceMesh overlay (`Some` = a face was found this frame, `None` = a miss).
@@ -241,19 +278,16 @@ fn camera_index_from_id(id: &str) -> nokhwa::utils::CameraIndex {
     }
 }
 
-/// Open camera `id` (decimal index or opaque string) at the requested resolution/fps (0 = a sane
-/// default), run the pose pipeline on ~every `stride`-th frame, update `pose`, and feed the cockpit
-/// preview. Stride is clamped to ≥1 by the caller. Reopens the device if it is unplugged, and
-/// releases it on exit.
-#[allow(clippy::too_many_arguments)]
+/// Run the webcam pose source: open the camera named by `pose`'s current request (its id +
+/// resolution/fps, 0 = a sane default), run the pose pipeline on ~every `stride`-th frame, update
+/// `pose`, and feed the cockpit preview. Stride is clamped to ≥1 by the caller. Reopens the device
+/// if it is unplugged, **or when the camera request changes** (a live camera/format switch from the
+/// settings dialog — BUG-34), and releases it on exit. Seed the request with
+/// [`PoseState::set_cam_request`] before spawning.
 pub fn spawn_camera_pose(
-    id: String,
     onnx_dir: String,
     canonical: String,
     stride: usize,
-    req_w: u32,
-    req_h: u32,
-    req_fps: u32,
     pose: Arc<PoseState>,
     running: Arc<AtomicBool>,
     cockpit: Option<Arc<Cockpit>>,
@@ -281,17 +315,24 @@ pub fn spawn_camera_pose(
         let mut last_preview = std::time::Instant::now() - std::time::Duration::from_secs(1);
         let (mut ok, mut miss, mut decode_fail, mut n) = (0u64, 0u64, 0u64, 0usize);
 
-        // Outer loop: (re)open the camera, so an unplug/replug recovers instead of freezing (BUG-30).
+        // Outer loop: (re)open the camera, so an unplug/replug recovers instead of freezing (BUG-30)
+        // and a settings-dialog camera/format switch takes effect live (BUG-34). The request (id +
+        // resolution/fps) is re-read here each time, so the newest selection wins on every reopen.
         while running.load(Ordering::Relaxed) {
+            let ((id, req_w, req_h, req_fps), open_gen) = pose.cam_request();
             let mut cam = match open_camera(&id, req_w, req_h, req_fps) {
                 Ok(c) => c,
                 Err(e) => {
                     pose.set_cam_error(format!("camera unavailable: {e}"));
                     eprintln!("VISION_ERROR camera open (id {id}): {e}");
-                    // Back off ~2 s, then retry — unless we're shutting down.
+                    // Back off ~2 s, then retry — unless we're shutting down or the user picked a
+                    // different camera meanwhile (then retry immediately with the new request).
                     for _ in 0..20 {
                         if !running.load(Ordering::Relaxed) {
                             return;
+                        }
+                        if pose.cam_req_gen() != open_gen {
+                            break;
                         }
                         std::thread::sleep(std::time::Duration::from_millis(100));
                     }
@@ -305,6 +346,10 @@ pub fn spawn_camera_pose(
 
             let mut consec_frame_err = 0u32;
             while running.load(Ordering::Relaxed) {
+                // A camera/format switch arrived → drop this device and reopen with the new request.
+                if pose.cam_req_gen() != open_gen {
+                    break;
+                }
                 let frame = match cam.frame() {
                     Ok(f) => {
                         consec_frame_err = 0;

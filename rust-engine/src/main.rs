@@ -468,9 +468,16 @@ mod engine {
         let pose_source: &str;
         if let Some(id) = auto_cam {
             pose_source = "camera";
+            // Record the resolved camera as the live selection (even when it came from the
+            // first-camera default), so the `dirty` reconcile below also switches on a
+            // resolution/fps-only change — its `if let Some(camera)` would otherwise skip a
+            // never-explicitly-picked device.
+            settings.camera = Some(id.clone());
+            // Seed the capture thread's request; the settings dialog later rewrites it to switch
+            // the live camera/format without a restart (BUG-34, reconciled in the `dirty` block).
+            pose.set_cam_request(id, settings.cam_w, settings.cam_h, settings.cam_fps);
             crate::vision::spawn_camera_pose(
-                id, onnx_dir, canonical, pose_stride,
-                settings.cam_w, settings.cam_h, settings.cam_fps,
+                onnx_dir, canonical, pose_stride,
                 Arc::clone(&pose), Arc::clone(&running), Some(Arc::clone(&cockpit)),
             );
         } else if let Some(url) = camera_mjpeg {
@@ -659,13 +666,21 @@ mod engine {
                 // with the live radar/audio direction (#189). A no-op when unchanged.
                 pose.set_inverted(settings.invert_tracking);
                 pose.set_flips(settings.flip_h, settings.flip_v); // reconcile the camera un-mirror (#191)
+                // Reconcile the live camera to the (possibly just reverted) selection + format, so a
+                // camera or resolution/fps change switches the running capture thread without an
+                // engine restart — and a dialog cancel/reset switches it back too (BUG-34). The
+                // capture thread only reopens when the request actually changed; a no-op is ignored.
+                if let Some(cam_id) = settings.camera.clone() {
+                    pose.set_cam_request(cam_id, settings.cam_w, settings.cam_h, settings.cam_fps);
+                }
                 // Persist immediately for the main-cockpit controls (predict/recenter/window/tab);
                 // settings-dialog changes are held until Confirm (while a snapshot is active).
                 if snapshot.is_none() {
                     let _ = persist_tx.send(settings.to_json());
                 }
                 // Block/cushion/method are the knobs re-applied to the live audio graph here on the
-                // capture thread (hrir/exclusive/camera need a restart — persisted above). A block or
+                // capture thread (the camera is switched live just above; hrir/exclusive still need a
+                // restart — persisted above). A block or
                 // method change rebuilds the convolver (`render`); a cushion-only change rebuilds just
                 // the FIFO. NOTE: a synthesis-method rebuild runs the ring interpolation inline (~0.3 s
                 // for timealign on the 24k-tap Audeze set), so switching method mid-stream causes a
