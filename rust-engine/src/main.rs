@@ -575,14 +575,22 @@ mod engine {
         // The endpoint must run at the source/pack rate (checked in output_loop). On ANY output exit
         // — error or clean — `running` is flipped so the render loop stops filling a FIFO nobody
         // drains ("running but no sound"), and surfaces the error to telemetry (BUG-04).
+        // Set while the capture source produces no frames (idle/silent loopback). The output loop
+        // freezes the drift controller while it's set, so an idle source — which the capture loop
+        // keeps the FIFO primed against with silence (see the `else` branch below) — never winds the
+        // drift loop to its clamp. Without this an idle source starves the FIFO and the controller
+        // saturates chasing a fill it can't reach, a continuous "underrun storm" in the telemetry
+        // that clears only when real audio resumes.
+        let src_idle = Arc::new(AtomicBool::new(false));
         let output_handle = {
             let fifo = Arc::clone(&fifo);
             let running = Arc::clone(&running);
             let output = output.clone();
             let out_status = Arc::clone(&out_status);
+            let src_idle = Arc::clone(&src_idle);
             let expected_sr = pack.samplerate;
             std::thread::spawn(move || {
-                if let Err(e) = output_loop(&output, fifo, Arc::clone(&running), block, expected_sr, &out_status) {
+                if let Err(e) = output_loop(&output, fifo, Arc::clone(&running), block, expected_sr, &out_status, &src_idle) {
                     eprintln!("OUTPUT_ERROR {e}");
                     out_status.lock().unwrap().err = Some(e);
                 }
@@ -765,6 +773,7 @@ mod engine {
                 }
                 source_silent = flags.silent; // device-flagged digital silence (BUG-33)
                 last_audio = Instant::now();
+                src_idle.store(false, Ordering::Relaxed); // real frames → unfreeze the drift loop
                 in_acc.extend_from_slice(&buf);
                 // Sample the head yaw now, after the blocking read, so the azimuths the block renders
                 // with are fresh (not up to a device period / timeout stale). The azimuth layout
@@ -820,6 +829,22 @@ mod engine {
                         .collect();
                     lock_fifo(&fifo).push(stereo);
                     rendered_blocks += 1;
+                }
+            } else if last_audio.elapsed() >= Duration::from_millis(250) {
+                // Sustained idle: an idle/silent loopback (e.g. VoiceMeeter with nothing playing)
+                // delivers no capture frames, so `src.read` returns `None`. The output thread keeps
+                // draining the FIFO to play continuous silence, so without feeding it the buffer
+                // starves and the drift controller saturates chasing a fill it can't reach — a
+                // continuous underrun storm that clears only when real audio resumes. Keep the FIFO
+                // primed with silence (up to its backlog cap) and freeze the drift loop (`src_idle`)
+                // so an idle source neither underruns nor winds the controller, and real audio
+                // resumes seamlessly from a primed buffer. A transient sub-250ms gap during active
+                // playback is left to the normal underrun/reprime path (this branch doesn't fire).
+                src_idle.store(true, Ordering::Relaxed);
+                let mut f = lock_fifo(&fifo);
+                let target = f.cushion() * 2; // the FIFO's backlog cap — full headroom (loop frozen)
+                while f.len() < target {
+                    f.push(vec![0.0f32; block * 2]);
                 }
             }
 
@@ -1053,6 +1078,7 @@ mod engine {
         block: usize,
         expected_sr: u32,
         status: &Arc<Mutex<OutputStatus>>,
+        src_idle: &Arc<AtomicBool>,
     ) -> Result<(), String> {
         init_com()?;
         set_pro_audio();
@@ -1154,11 +1180,12 @@ mod engine {
                 last_silent = is_silent;
 
                 // Drive the drift ratio from the pre-pull fill, then resample this block. Freeze the
-                // controller while the FIFO has no real data to give (underrun / repriming): the fill
-                // is 0 there because the source has stalled, not because of clock drift, so
-                // integrating it would wind the integral to its clamp and leave the ratio saturated
-                // for seconds after the source resumes (a latency swell). Hold the last ratio instead.
-                let rel = if pull == Pull::Block {
+                // controller while the FIFO has no real data to give (underrun / repriming), or while
+                // the capture source is idle: the fill is then low because the source has stalled, not
+                // because of clock drift, so integrating it would wind the integral to its clamp and
+                // leave the ratio saturated for seconds after the source resumes (a latency swell /
+                // the idle "underrun storm"). Hold the last ratio instead.
+                let rel = if pull == Pull::Block && !src_idle.load(Ordering::Relaxed) {
                     ctrl.update((fill_blocks * cur_block) as f64)
                 } else {
                     last_rel
