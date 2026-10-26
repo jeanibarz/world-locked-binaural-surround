@@ -132,6 +132,23 @@ impl BusConvolverCore {
         self.c
     }
 
+    /// Clear all streaming state (frequency-domain delay line, overlap-save history, partition
+    /// position) so the next block starts as if freshly constructed — the pre-transformed filter
+    /// partitions are kept. Used when a convolver is re-enabled after a bypass (e.g. the #193
+    /// headphone-EQ toggle) so a stale tail from before the bypass can't leak into the resumed
+    /// stream as a click.
+    pub fn reset(&mut self) {
+        self.pos = 0;
+        for b in &mut self.buses {
+            for v in b.fdl.iter_mut() {
+                *v = C64::new(0.0, 0.0);
+            }
+            for v in b.prev.iter_mut() {
+                *v = 0.0;
+            }
+        }
+    }
+
     /// Convolve one `(C, block)` bus block (row-major `bus_in[ch*block + n]`) → summed stereo,
     /// written into `out_l`/`out_r` (each length `block`, **overwritten**). Frequency-domain delay
     /// line advances by one block.
@@ -224,6 +241,30 @@ mod tests {
         assert!((r[0] - 1.0).abs() < 1e-12, "right delta at 0");
         assert!((l[1] - 1.0).abs() < 1e-12, "left delayed by 1");
         assert!(l[0].abs() < 1e-12 && r[1].abs() < 1e-12);
+    }
+
+    #[test]
+    fn reset_clears_streaming_state() {
+        // A convolver fed an impulse, then reset, must behave exactly like a fresh one on the next
+        // stream — no leaked tail from before the reset.
+        let block = 4;
+        let left = vec![0.5, 0.25, 0.125, 0.0]; // some tail past block 0
+        let right = left.clone();
+        let mk = || BusConvolverCore::new(&left, &right, 1, 4, block).unwrap();
+        let mut used = mk();
+        let mut bus_in = vec![0.0; block];
+        bus_in[0] = 1.0;
+        let _ = used.process(&bus_in); // leaves a tail in the FDL
+        used.reset();
+        let mut fresh = mk();
+        // Same input stream through both; outputs must match block-for-block.
+        for _ in 0..3 {
+            let (lu, ru) = used.process(&bus_in);
+            let (lf, rf) = fresh.process(&bus_in);
+            for i in 0..block {
+                assert!((lu[i] - lf[i]).abs() < 1e-12 && (ru[i] - rf[i]).abs() < 1e-12);
+            }
+        }
     }
 
     #[test]

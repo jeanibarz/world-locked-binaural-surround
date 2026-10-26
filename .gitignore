@@ -13,6 +13,8 @@ data/
 models/
 *.sofa
 *.wav
+# The bundled headphone-comp FIRs for the in-engine EQ (#193) are shipped assets, not sample data.
+!rust-engine/hp_eq/binaural/**/*.wav
 *.keras
 *.onnx
 *.task
