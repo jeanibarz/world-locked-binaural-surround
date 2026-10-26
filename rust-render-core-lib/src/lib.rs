@@ -15,6 +15,19 @@ pub fn wrapped_deg(delta: f64) -> f64 {
     (delta + 180.0).rem_euclid(360.0) - 180.0
 }
 
+/// Replace a non-finite (NaN/±Inf) sample with silence. A single poisoned input sample would
+/// otherwise propagate into every bus's convolver state (`0.0 * NaN == NaN`, so even gain-0 buses
+/// are hit) and persist in the FFT delay line for the whole IR length — turning one glitch into
+/// seconds of dead output. Scrubbing at the input is cheap and keeps the convolver state clean.
+#[inline]
+fn finite_or_zero(x: f64) -> f64 {
+    if x.is_finite() {
+        x
+    } else {
+        0.0
+    }
+}
+
 /// The world-lock crossfade mixer: routes `n_in` inputs into `n_bus` buses, each channel's gain
 /// ramping toward a one-hot on its current target bus over `fade` samples. Bit-exact port of
 /// `live_render.BusMixer` (ascending-`c` accumulation == numpy `einsum("cbn,nc->bn")`).
@@ -161,14 +174,20 @@ impl GridRender {
         assert_eq!(az.len(), self.n_in);
         assert_eq!(out.len(), self.block * 2);
         let k = self.dir_idx.len();
-        // nearest grid bus per directional input (into resident `targets`; `grid_az` borrow only)
+        // nearest grid bus per directional input (into resident `targets`; `grid_az` borrow only).
+        // A non-finite azimuth (e.g. a NaN yaw from a failed pose solve) would make every distance
+        // comparison false and silently snap the whole field to bus 0; hold the previous target
+        // instead so a transient tracker glitch doesn't jerk the image to front-centre.
         for j in 0..k {
-            self.targets[j] = nearest_grid_in(&self.grid_az, az[self.dir_idx[j]]);
+            let a = az[self.dir_idx[j]];
+            if a.is_finite() {
+                self.targets[j] = nearest_grid_in(&self.grid_az, a);
+            }
         }
-        // pcm_dir[n, j] = pcm[n, dir_idx[j]]
+        // pcm_dir[n, j] = pcm[n, dir_idx[j]] — scrub non-finite samples (see `finite_or_zero`).
         for n in 0..self.block {
             for j in 0..k {
-                self.pcm_dir[n * k + j] = pcm[n * self.n_in + self.dir_idx[j]];
+                self.pcm_dir[n * k + j] = finite_or_zero(pcm[n * self.n_in + self.dir_idx[j]]);
             }
         }
         self.mixer.mix_into(&self.pcm_dir, self.block, &self.targets, &mut self.bus_in);
@@ -177,7 +196,7 @@ impl GridRender {
             Lfe::None => {}
             Lfe::Brir { conv, idx } => {
                 for n in 0..self.block {
-                    self.lfe_in[n] = pcm[n * self.n_in + *idx];
+                    self.lfe_in[n] = finite_or_zero(pcm[n * self.n_in + *idx]);
                 }
                 conv.process_into(&self.lfe_in, &mut self.ll, &mut self.lr);
                 for n in 0..self.block {
@@ -187,7 +206,7 @@ impl GridRender {
             }
             Lfe::Flat { idx, gl, gr } => {
                 for n in 0..self.block {
-                    let s = pcm[n * self.n_in + *idx];
+                    let s = finite_or_zero(pcm[n * self.n_in + *idx]);
                     self.l[n] += s * *gl;
                     self.r[n] += s * *gr;
                 }
@@ -247,5 +266,35 @@ mod tests {
         )
         .unwrap();
         assert_eq!(nearest_grid_in(&gr.grid_az, 5.0), 0);
+    }
+
+    #[test]
+    fn non_finite_input_is_scrubbed_and_does_not_persist() {
+        // 1 input -> 2 buses, 1-tap identity IRs. A NaN sample in one block must not reach the
+        // output, and must not poison the convolver state for the following clean block.
+        let mut gr = GridRender::new(
+            &[1.0, 1.0], &[1.0, 1.0], 2, 1, vec![0.0, 90.0], vec![0], 1, 1, 2, Lfe::None,
+        )
+        .unwrap();
+        let mut out = vec![0.0; 2 * 2];
+        gr.process_into(&[f64::NAN, 1.0], &[0.0], &mut out);
+        assert!(out.iter().all(|v| v.is_finite()), "NaN input leaked to output: {out:?}");
+        gr.process_into(&[0.5, 0.5], &[0.0], &mut out);
+        assert!(out.iter().all(|v| v.is_finite()), "convolver state stayed poisoned: {out:?}");
+        assert!(out.iter().any(|v| *v != 0.0), "clean block produced only silence");
+    }
+
+    #[test]
+    fn non_finite_azimuth_holds_the_last_target() {
+        // A NaN/Inf yaw must hold the previous steering target, not silently snap to bus 0.
+        let mut gr = GridRender::new(
+            &[1.0, 1.0], &[1.0, 1.0], 2, 1, vec![0.0, 90.0], vec![0], 1, 1, 1, Lfe::None,
+        )
+        .unwrap();
+        let mut out = vec![0.0; 2];
+        gr.process_into(&[1.0], &[90.0], &mut out); // steer to bus 1
+        assert_eq!(gr.targets[0], 1);
+        gr.process_into(&[1.0], &[f64::NAN], &mut out); // NaN yaw holds bus 1
+        assert_eq!(gr.targets[0], 1, "NaN azimuth snapped the field to bus 0");
     }
 }
