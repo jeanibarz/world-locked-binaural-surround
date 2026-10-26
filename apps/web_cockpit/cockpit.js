@@ -91,7 +91,7 @@
   function drawOverlay(s) {
     const cv = $("cam-overlay"), img = $("cam-img");
     if (!cv || !img) return;
-    if (s) lastOverlay = { show: s.show_landmarks !== false, pts: s.landmarks, box: s.face_box, yaw: s.pose && s.pose.yaw_deg };
+    if (s) lastOverlay = { show: s.show_landmarks !== false, pts: s.landmarks, box: s.face_box };
     const o = lastOverlay || {};
 
     const ctx = cv.getContext("2d");
@@ -119,13 +119,6 @@
       ctx.strokeStyle = "rgba(53,208,208,.9)"; ctx.lineWidth = 1.5;
       if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(bx, by, bbw, bbh, 6); ctx.stroke(); }
       else ctx.strokeRect(bx, by, bbw, bbh);
-      // coarse yaw needle from the box top-center — just a turn cue; the ring radar is the precise
-      // readout. Leans toward the turn side (yaw+ = turned left), clamped to ±45°.
-      if (typeof o.yaw === "number") {
-        const cx = bx + bbw / 2, a = Math.max(-45, Math.min(45, o.yaw)) * Math.PI / 180, len = 16;
-        ctx.strokeStyle = "rgba(76,217,138,.95)"; ctx.lineWidth = 2;
-        ctx.beginPath(); ctx.moveTo(cx, by); ctx.lineTo(cx - Math.sin(a) * len, by - Math.cos(a) * len); ctx.stroke();
-      }
     }
 
     // landmark cloud — tiny squares (cheaper than arcs at ~478 points × 20 Hz), size scaled to the
@@ -274,6 +267,7 @@
     let gone = null;
     const alive = () => { if (gone) { clearTimeout(gone); gone = null; } };
     const lost = () => {
+      lastOverlay = null; drawOverlay();  // clear stale landmark dots if the feed drops (#185)
       if (gone) return;
       // grace long enough that a reset-to-defaults relaunch (exit 97 -> re-open on the same port,
       // ~8 s to re-load) reconnects before we give up and close the window.
