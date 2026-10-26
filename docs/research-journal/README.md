@@ -93,6 +93,8 @@ The ordered work blocks live in [`../backlog.md`](../backlog.md).
 
 | 50 | [Cockpit on the live engine](50-cockpit-live-engine.md) | B6.12 slice 2: the cockpit drives the **real** passthrough engine, not synthetic data. `voicemeeter_passthrough.py --ui {console,cockpit}` (default console, untouched); a nested `_run_cockpit()` runs the same per-frame compute as the cv2 loop and feeds `cockpit.build_view` + `CockpitWindow`, with the control hooks mutating live engine state under the audio lock — method/backend switch **live** (`build_main_renderer` gained a `backend` arg), predict toggles, the test source is placed/dragged on the radar, Recenter recalibrates; `set_test_state` mirrors the engine's test state (and the checkbox) back. A display swap, not a rewrite — the console path is byte-for-byte unchanged, so a cockpit bug can't break it. GUI host-verified; the **live audio is owner-verified** (WSL has no loopback/headphone). 364 tests. |
 
+| 82 | [WASAPI capture recovery](82-wasapi-coalesced-event-recovery.md) | A real 300 ms capture stall left the old backend at ~35 kHz indefinitely. Drain all queued packets before waiting; host gate passes at blocks 256/512/1024, with production-pipeline regression coverage. |
+
 See also [`LEARNINGS.md`](LEARNINGS.md) — the cumulative, numbered lessons.
 
 ## Maintenance protocol (the contract)

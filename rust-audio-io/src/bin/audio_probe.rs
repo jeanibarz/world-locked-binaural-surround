@@ -31,6 +31,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let block: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(256);
     let latency_ms: f64 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(20.0);
 
+    // Optional one-shot capture-thread stall, reproducing an inline renderer rebuild.
+    let stall_ms: u64 = args.get(5).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let mut stalled = false;
     init_com()?;
     let mmcss = set_pro_audio();
     println!("MMCSS_PRO_AUDIO {mmcss}");
@@ -58,7 +61,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let block_dt = block as f64 / sr; // nominal output-block period (s)
     let mut buf: Vec<f32> = Vec::with_capacity(block * ch * 4);
 
+    let mut window_start = Instant::now();
+    let (mut window_frames, mut window_discont) = (0u64, 0u64);
     while start.elapsed().as_secs_f64() < secs {
+        if !stalled && stall_ms > 0 && start.elapsed().as_secs_f64() >= 3.0 {
+            println!("INJECT_STALL ms={stall_ms}");
+            std::thread::sleep(std::time::Duration::from_millis(stall_ms));
+            stalled = true;
+        }
         buf.clear();
         match src.read(&mut buf, 1000)? {
             None => {
@@ -94,6 +104,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             pulled += 1;
         }
 
+        if window_start.elapsed().as_secs_f64() >= 1.0 {
+            println!("WINDOW t={:.2} rate_hz={:.1} discontinuities={} frames_per_read={frames}",
+                start.elapsed().as_secs_f64(),
+                (total_frames - window_frames) as f64 / window_start.elapsed().as_secs_f64(),
+                discont - window_discont);
+            window_frames = total_frames;
+            window_discont = discont;
+            window_start = Instant::now();
+        }
         let now = Instant::now();
         let gap = (now - last).as_secs_f64() * 1000.0;
         if gap > max_gap_ms {
