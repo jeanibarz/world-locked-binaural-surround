@@ -29,7 +29,8 @@ pub fn resolve_dir(cli: Option<&str>, env_key: &str, rel: &str) -> PathBuf {
     if let Some(c) = cli {
         return PathBuf::from(c);
     }
-    if let Some(e) = std::env::var_os(env_key) {
+    // A set-but-empty variable counts as unset (else it'd be the current dir and beat the fallbacks).
+    if let Some(e) = std::env::var_os(env_key).filter(|v| !v.is_empty()) {
         return PathBuf::from(e);
     }
     let near = exe_dir().join(rel);
@@ -44,7 +45,8 @@ pub fn resolve_file(cli: Option<&str>, env_key: &str, rel: &str) -> PathBuf {
     if let Some(c) = cli {
         return PathBuf::from(c);
     }
-    if let Some(e) = std::env::var_os(env_key) {
+    // A set-but-empty variable counts as unset (else it'd be the current dir and beat the fallbacks).
+    if let Some(e) = std::env::var_os(env_key).filter(|v| !v.is_empty()) {
         return PathBuf::from(e);
     }
     let near = exe_dir().join(rel);
@@ -68,6 +70,14 @@ mod tests {
         std::env::set_var("WLBS_TEST_ENV_X", "/from/env");
         assert_eq!(resolve_dir(None, "WLBS_TEST_ENV_X", "assets"), PathBuf::from("/from/env"));
         std::env::remove_var("WLBS_TEST_ENV_X");
+    }
+
+    #[test]
+    fn empty_env_is_unset() {
+        std::env::set_var("WLBS_TEST_ENV_EMPTY", "");
+        assert_ne!(resolve_dir(None, "WLBS_TEST_ENV_EMPTY", "assets"), PathBuf::new());
+        assert_ne!(resolve_file(None, "WLBS_TEST_ENV_EMPTY", "x.onnx"), PathBuf::new());
+        std::env::remove_var("WLBS_TEST_ENV_EMPTY");
     }
 
     #[test]
