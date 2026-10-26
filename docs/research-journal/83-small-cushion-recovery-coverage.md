@@ -136,3 +136,9 @@ available independently; the owner does not need to restart the working engine f
 - Results: 54 engine tests passed (two existing tests ignored); 21 audio-I/O tests passed.
 - Windows probe release cross-build and Windows engine cross-check passed.
 - Review and delivery PR recorded after verification.
+
+Delivery: [PR #218](https://github.com/jeanibarz/world-locked-binaural-surround/pull/218).
+Independent correctness and test reviews passed. Review follow-ups formatted the new test
+snippets and strengthened the output loop's no-progress assertion; all eight output-stage
+tests and all 21 audio-I/O tests passed again afterward. The production engine requires no
+restart for this coverage change. Follow-up timing instrumentation is tracked in #217.
