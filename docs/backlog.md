@@ -455,8 +455,12 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
     `cfg(windows)` and the engine launch resolved per-OS from the env (`WLBS_ENGINE_CMD`/`WLBS_RUN_CMD`/
     `WLBS_LAUNCH`/`WLBS_HOME`); `build-tauri.sh` gained a native build mode. Unix path compile-verified;
     full per-OS Tauri build is a host step. See journal 82. _(operator: "cross-platform shell first")_
-  - [ ] **B9.2b** Wire the native window as the **default** launcher; demote Chrome to explicit
-    inspection (next slice, per the operator's ordering).
+  - [x] **B9.2b** Native window is the **default** launch, with HTTP inspection **always concurrent**
+    (not either/or): `start-hidden.vbs` (Windows) + new `host/run-app.sh` (macOS/Linux) launch the Tauri
+    shell, which runs the engine headless on the fixed port 8731 so any browser can inspect the same
+    live session alongside the window. Shell sets `WLBS_HIDDEN=1` so `run.cmd` skips its `pause`.
+    `run.cmd` is now the explicit console/Chrome dev path. See journal 83. _(operator: "bake both into
+    the default launch path")_
 
 ---
 

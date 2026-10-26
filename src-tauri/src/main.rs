@@ -42,6 +42,7 @@ fn spawn_engine(port: u16) -> Option<Child> {
         return Command::new("cmd")
             .args(["/c", &cmd])
             .env("WLBS_PORT", &port)
+            .env("WLBS_HIDDEN", "1")
             .creation_flags(CREATE_NO_WINDOW)
             .spawn()
             .ok();
@@ -53,6 +54,7 @@ fn spawn_engine(port: u16) -> Option<Child> {
     Command::new("cmd")
         .args(["/c", &run_cmd, "listen", "--port", &port, "--no-browser"])
         .env("WLBS_PORT", &port)
+        .env("WLBS_HIDDEN", "1") // tell run.cmd to skip its trailing `pause` (we drive it headless)
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .ok()

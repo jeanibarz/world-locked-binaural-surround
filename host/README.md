@@ -53,6 +53,19 @@ browser-based inspection are **not** an either/or — they run **simultaneously,
 - The engine shuts down only when **every** client disconnects (autoquit grace), so a browser can
   attach and detach freely while the native window stays open. Closing the native window stops the app.
 
+**Default launch = the native window.** Starting the app gives you the native window, with the HTTP
+inspection surface live at the same time — one launch, both:
+
+| OS | start the app | then inspect |
+| --- | --- | --- |
+| Windows | double-click the built `wlbs-shell.exe`, or `host/start-hidden.vbs` | open `http://127.0.0.1:8731` in any browser |
+| macOS / Linux | `host/run-app.sh` | open `http://127.0.0.1:8731` in any browser |
+
+Both launchers run the **native shell**, which starts the engine headless on the fixed port and shows
+the window; the cockpit stays browsable the whole time. `host/run.cmd` is now the **explicit
+console/Chrome path** for dev (it opens the cockpit in Chrome `--app` on a random port, with a console
+and the in-app Reload loop) — not the nominal way to run the app.
+
 **Cross-platform.** The window runs on Windows (WebView2), macOS (WKWebView) and Linux (WebKitGTK) from
 the same source. Build it:
 
