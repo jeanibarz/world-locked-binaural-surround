@@ -30,13 +30,22 @@ pub struct PoseState {
     /// tracking-direction sign can flip live (see `invert`) by simply mirroring the output around
     /// this neutral — no re-centre, no discontinuity.
     yaw0: Mutex<Option<f64>>,
-    /// Head-tracking direction. The ONNX solver's raw yaw runs opposite the world-lock convention
-    /// (BUG #189: turning the head made the world anti-track), so the corrected default negates it:
-    /// the published `yaw` is `sign * (raw - neutral)` with `sign = -1` by default. `invert = true`
-    /// restores `sign = +1` for a camera/mount whose handedness is the other way. This sign is the
-    /// single source of truth for *both* the radar (rotates by `-yaw`) and the audio azimuths
-    /// (`speaker_az - yaw`), so they can never disagree in direction.
+    /// Head-tracking direction override. The published `yaw` is `sign * (raw - neutral)` with
+    /// `sign = +1` by default (the raw offset, the solver's own handedness). The tracking direction
+    /// is corrected upstream by un-mirroring the camera frame (see `flip_h`, BUG #191); `invert =
+    /// true` is an advanced override that sets `sign = -1`, for a mount still reversed after the
+    /// flip. This sign is the single source of truth for *both* the radar (rotates by `-yaw`) and
+    /// the audio azimuths (`speaker_az - yaw`), so they can never disagree in direction.
     invert: AtomicBool,
+    /// Un-mirror the camera frame horizontally before the pose pipeline (BUG #191). A typical webcam
+    /// delivers a selfie-mirrored image, which reverses the detected yaw *and* the landmark/ear
+    /// handedness; flipping it once at the source corrects all of them together, and the cockpit
+    /// preview then matches what the solver sees. On by default; the live cockpit toggle and
+    /// `--flip-h` set it. Only the direct-camera source honors it (MJPEG/image sources are passive).
+    flip_h: AtomicBool,
+    /// Un-mirror the camera frame vertically (an upside-down mount). Off by default; `--flip-v` /
+    /// the cockpit toggle set it. Same source-side application as `flip_h`.
+    flip_v: AtomicBool,
     /// Epoch-millis of the last pose update, or 0 if no pose has been produced yet.
     last_update: AtomicU64,
     /// The active camera resolution, once a camera stream is open.
@@ -52,6 +61,8 @@ impl PoseState {
             yaw: Mutex::new(0.0),
             yaw0: Mutex::new(None),
             invert: AtomicBool::new(false),
+            flip_h: AtomicBool::new(false),
+            flip_v: AtomicBool::new(false),
             last_update: AtomicU64::new(0),
             cam_res: Mutex::new(None),
             cam_error: Mutex::new(None),
@@ -79,6 +90,22 @@ impl PoseState {
             let mut y = self.yaw.lock().unwrap();
             *y = -*y;
         }
+    }
+
+    /// Horizontal camera un-mirror state (`true` = flip applied). Mirrored into cockpit telemetry.
+    pub fn flip_h(&self) -> bool {
+        self.flip_h.load(Ordering::Relaxed)
+    }
+    /// Vertical camera flip state (`true` = flip applied). Mirrored into cockpit telemetry.
+    pub fn flip_v(&self) -> bool {
+        self.flip_v.load(Ordering::Relaxed)
+    }
+    /// Set the camera flips live (BUG #191). The camera thread reads each flag fresh at the next
+    /// frame, so a cockpit toggle takes effect without a restart; no lock is needed because each
+    /// flag is an independent atomic bool and a one-frame stale read is harmless.
+    pub fn set_flips(&self, flip_h: bool, flip_v: bool) {
+        self.flip_h.store(flip_h, Ordering::Relaxed);
+        self.flip_v.store(flip_v, Ordering::Relaxed);
     }
 
     fn update_raw(&self, raw_yaw: f64) {
@@ -216,6 +243,9 @@ pub fn spawn_camera_pose(
         // Reused across frames so we don't allocate (and free) a full-frame f32 buffer every frame
         // (~11 MB/frame at 720p) — BUG-29. Only the buffer's contents change.
         let mut img = RgbImage { w: 0, h: 0, px: Vec::new() };
+        // Reused scratch for the un-mirrored frame (BUG #191), so flipping doesn't allocate a
+        // full-frame buffer every frame (BUG-29). Empty until a flip is first active.
+        let mut flip_buf: Vec<u8> = Vec::new();
         let mut last_preview = std::time::Instant::now() - std::time::Duration::from_secs(1);
         let (mut ok, mut miss, mut decode_fail, mut n) = (0u64, 0u64, 0u64, 0usize);
 
@@ -273,18 +303,31 @@ pub fn spawn_camera_pose(
                         continue;
                     }
                 };
+                // Un-mirror the camera at the source (BUG #191) BEFORE the preview and the pose
+                // pipeline, so the detected yaw, the landmarks, the ear handedness and the cockpit
+                // preview all share one orientation. With no flip active, the decoded bytes pass
+                // straight through (no copy).
+                let (w, h) = (decoded.width() as usize, decoded.height() as usize);
+                let raw = decoded.as_raw();
+                let (fh, fv) = (pose.flip_h(), pose.flip_v());
+                let rgb: &[u8] = if (fh || fv) && raw.len() >= w * h * 3 {
+                    flip_rgb_into(&mut flip_buf, raw, w, h, fh, fv);
+                    &flip_buf
+                } else {
+                    raw
+                };
                 if let Some(cp) = &cockpit {
                     if last_preview.elapsed() >= std::time::Duration::from_millis(80) {
-                        if let Some(jpeg) = encode_jpeg(decoded.as_raw(), decoded.width(), decoded.height()) {
+                        if let Some(jpeg) = encode_jpeg(rgb, w as u32, h as u32) {
                             cp.set_frame(jpeg);
                         }
                         last_preview = std::time::Instant::now();
                     }
                 }
-                img.w = decoded.width() as usize;
-                img.h = decoded.height() as usize;
+                img.w = w;
+                img.h = h;
                 img.px.clear();
-                img.px.extend(decoded.as_raw().iter().map(|&b| b as f32));
+                img.px.extend(rgb.iter().map(|&b| b as f32));
                 match pipe.estimate(&img) {
                     Ok(Some(est)) => {
                         ok += 1;
@@ -313,6 +356,27 @@ fn open_camera(id: &str, w: u32, h: u32, fps: u32) -> Result<nokhwa::Camera, Str
     let mut cam = nokhwa::Camera::new(camera_index_from_id(id), fmt).map_err(|e| e.to_string())?;
     cam.open_stream().map_err(|e| e.to_string())?;
     Ok(cam)
+}
+
+/// Write `src` (interleaved RGB8, `w`×`h`, row-major) into `dst` with a horizontal and/or vertical
+/// flip (BUG #191 camera un-mirror). `dst` is resized in place and reused across frames. The caller
+/// guarantees `src.len() >= w*h*3` and that at least one of `fh`/`fv` is set.
+fn flip_rgb_into(dst: &mut Vec<u8>, src: &[u8], w: usize, h: usize, fh: bool, fv: bool) {
+    let stride = w * 3;
+    dst.resize(h * stride, 0);
+    for y in 0..h {
+        let sy = if fv { h - 1 - y } else { y };
+        let srow = &src[sy * stride..sy * stride + stride];
+        let drow = &mut dst[y * stride..y * stride + stride];
+        if fh {
+            for x in 0..w {
+                let sx = w - 1 - x;
+                drow[x * 3..x * 3 + 3].copy_from_slice(&srow[sx * 3..sx * 3 + 3]);
+            }
+        } else {
+            drow.copy_from_slice(srow);
+        }
+    }
 }
 
 /// Encode an interleaved RGB8 buffer to a baseline JPEG for the cockpit preview. `None` on any

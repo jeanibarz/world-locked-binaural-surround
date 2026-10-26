@@ -86,10 +86,17 @@ mod engine {
         hp_eq: bool,
         hp_model: Option<String>,
         predict: bool,
-        /// Head-tracking direction (BUG #189). `false` is the corrected default (world-lock tracks
-        /// the head); `true` inverts for a camera/mount of the opposite handedness. Applied at the
-        /// pose source so the radar and the audio flip together.
+        /// Head-tracking direction override (BUG #189/#191). `false` passes the pose through with the
+        /// solver's own handedness; the tracking direction is corrected by un-mirroring the camera
+        /// (`flip_h`). `true` is an advanced override that inverts the direction for a mount still
+        /// reversed after the flip. Applied at the pose source so the radar and audio flip together.
         invert_tracking: bool,
+        /// Un-mirror the camera horizontally before the pose pipeline (BUG #191). On by default: a
+        /// typical webcam delivers a selfie-mirrored image, which otherwise reverses the yaw and the
+        /// landmark handedness.
+        flip_h: bool,
+        /// Un-mirror the camera vertically (upside-down mount). Off by default.
+        flip_v: bool,
         /// Selected camera id (decimal index or opaque string, per nokhwa `CameraIndex`).
         camera: Option<String>,
         cam_w: u32,
@@ -138,6 +145,8 @@ mod engine {
             if let Some(s) = o.get("hp_model").and_then(|x| x.as_str()) { self.hp_model = Some(s.into()); }
             if let Some(b) = o.get("predict").and_then(|x| x.as_bool()) { self.predict = b; }
             if let Some(b) = o.get("invert_tracking").and_then(|x| x.as_bool()) { self.invert_tracking = b; }
+            if let Some(b) = o.get("flip_h").and_then(|x| x.as_bool()) { self.flip_h = b; }
+            if let Some(b) = o.get("flip_v").and_then(|x| x.as_bool()) { self.flip_v = b; }
             // New string `camera` id; fall back to the legacy numeric `camera_idx` for old settings.
             if let Some(s) = o.get("camera").and_then(|x| x.as_str()) {
                 self.camera = Some(s.into());
@@ -159,7 +168,8 @@ mod engine {
                 "method": self.method, "hrir_name": self.hrir_name, "backend": self.backend,
                 "comp": self.comp, "block": self.block, "cushion_ms": self.cushion_ms,
                 "exclusive": self.exclusive, "hp_eq": self.hp_eq, "hp_model": self.hp_model,
-                "predict": self.predict, "invert_tracking": self.invert_tracking, "camera": self.camera,
+                "predict": self.predict, "invert_tracking": self.invert_tracking,
+                "flip_h": self.flip_h, "flip_v": self.flip_v, "camera": self.camera,
                 "cam_w": self.cam_w, "cam_h": self.cam_h, "cam_fps": self.cam_fps,
                 "drawer_tab": self.drawer_tab, "win_w": self.win_w, "win_h": self.win_h,
             })
@@ -185,6 +195,7 @@ mod engine {
             "block": s.block, "cushion_ms": s.cushion_ms, "exclusive": s.exclusive,
             "hp_eq": s.hp_eq, "hp_models": s.hp_model.clone().map(|m| vec![m]),
             "predict": s.predict, "invert_tracking": s.invert_tracking,
+            "flip_h": s.flip_h, "flip_v": s.flip_v,
             "win_w": s.win_w, "win_h": s.win_h,
         })
     }
@@ -330,6 +341,8 @@ mod engine {
             hp_model: None,
             predict: false,
             invert_tracking: false,
+            flip_h: true, // mirrored webcam is the common case (BUG #191); operator confirms on host
+            flip_v: false,
             camera: camera_id.clone(),
             cam_w: 0,
             cam_h: 0,
@@ -348,6 +361,12 @@ mod engine {
         if camera_id.is_some() { settings.camera = camera_id.clone(); }
         if let Some((w, h)) = cli_res { settings.cam_w = w; settings.cam_h = h; }
         if let Some(f) = cli_fps { settings.cam_fps = f; }
+        // Camera un-mirror (BUG #191): `--flip-h`/`--flip-v` force on, `--no-flip-h`/`--no-flip-v`
+        // force off, each beating the persisted value for this launch (least surprise for a debug run).
+        if flag(&a, "--flip-h") { settings.flip_h = true; }
+        if flag(&a, "--no-flip-h") { settings.flip_h = false; }
+        if flag(&a, "--flip-v") { settings.flip_v = true; }
+        if flag(&a, "--no-flip-v") { settings.flip_v = false; }
         let hrir_list: Vec<String> = packs::list_packs().into_iter().map(|p| p.name).collect();
         let mut block = settings.block; // the live block size (the settings dialog can change it)
 
@@ -363,6 +382,7 @@ mod engine {
         // Shared state.
         let pose = crate::vision::PoseState::new();
         pose.set_inverted(settings.invert_tracking); // apply the persisted tracking direction (#189)
+        pose.set_flips(settings.flip_h, settings.flip_v); // apply the persisted camera un-mirror (#191)
         let fifo: Arc<Mutex<CushionFifo<StereoBlock>>> = {
             let cushion = cushion_blocks(settings.cushion_ms, pack.samplerate, block);
             Arc::new(Mutex::new(CushionFifo::new(cushion, cushion * 2, vec![0.0f32; block * 2])))
@@ -512,6 +532,10 @@ mod engine {
                     // `dirty` block below, so the direction flips live and stays consistent across
                     // settings-dialog cancel/reset too. Persisted like `predict`.
                     "set_invert_tracking" => { if let Some(b) = a0.and_then(|v| v.as_bool()) { settings.invert_tracking = b; dirty = true; } }
+                    // Camera un-mirror (#191): reconciled to the pose source in the `dirty` block
+                    // below, so the flip is live and survives settings-dialog cancel/reset. Persisted.
+                    "set_flip_h" => { if let Some(b) = a0.and_then(|v| v.as_bool()) { settings.flip_h = b; dirty = true; } }
+                    "set_flip_v" => { if let Some(b) = a0.and_then(|v| v.as_bool()) { settings.flip_v = b; dirty = true; } }
                     "recenter" => pose.recenter(),
                     "set_drawer_tab" => { if let Some(s) = a0.and_then(|v| v.as_str()) { settings.drawer_tab = s.into(); dirty = true; } }
                     "window_size" => {
@@ -559,6 +583,7 @@ mod engine {
                 // setting, so a toggle, a settings-dialog cancel, and reset-to-defaults all agree
                 // with the live radar/audio direction (#189). A no-op when unchanged.
                 pose.set_inverted(settings.invert_tracking);
+                pose.set_flips(settings.flip_h, settings.flip_v); // reconcile the camera un-mirror (#191)
                 // Persist immediately for the main-cockpit controls (predict/recenter/window/tab);
                 // settings-dialog changes are held until Confirm (while a snapshot is active).
                 if snapshot.is_none() {
@@ -679,6 +704,8 @@ mod engine {
                     yaw_deg: cur_yaw,
                     predict: settings.predict,
                     invert_tracking: settings.invert_tracking,
+                    flip_h: settings.flip_h,
+                    flip_v: settings.flip_v,
                     block,
                     sample_rate: pack.samplerate,
                     cushion_blocks: cushion_now,

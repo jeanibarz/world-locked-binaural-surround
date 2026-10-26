@@ -81,6 +81,8 @@
     const FPS = cfg.framerates || ["default", "30 fps", "60 fps"];
     $("set-resolution").addEventListener("click", () => openMenu($("set-resolution"), RES, (v) => { fieldText($("set-resolution"), v); call("set_cam_format", ...parseFmt(v, curFps())); }));
     $("set-fps").addEventListener("click", () => openMenu($("set-fps"), FPS, (v) => { fieldText($("set-fps"), v); call("set_cam_format", ...parseFmt(curRes(), v)); }));
+    wireToggle("fliph-toggle", "set_flip_h");  // camera un-mirror (#191)
+    wireToggle("flipv-toggle", "set_flip_v");
 
     // --- engine ---
     wireDropdown("set-method", () => cfg.methods || ["nearest", "timealign", "minphase", "notchwarp"], "set_method");
@@ -130,6 +132,8 @@
     const setToggle = (id, on) => { const t = $(id); if (t) t.setAttribute("aria-checked", on ? "true" : "false"); };
     if (cfg.exclusive != null) setToggle("exclusive-toggle", cfg.exclusive);
     if (cfg.hp_eq != null) setToggle("hpeq-toggle", cfg.hp_eq);
+    if (cfg.flip_h != null) setToggle("fliph-toggle", cfg.flip_h);
+    if (cfg.flip_v != null) setToggle("flipv-toggle", cfg.flip_v);
 
     // --- edit session --- changes apply live but are saved only on Confirm; Cancel / ✕ / closing
     // the window restores the engine to how it was when the dialog opened (the snapshot + revert
