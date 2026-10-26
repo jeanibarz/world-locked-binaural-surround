@@ -95,6 +95,8 @@ The ordered work blocks live in [`../backlog.md`](../backlog.md).
 
 | 82 | [WASAPI capture recovery](82-wasapi-coalesced-event-recovery.md) | A real 300 ms capture stall left the old backend at ~35 kHz indefinitely. Drain all queued packets before waiting; host gate passes at blocks 256/512/1024, with production-pipeline regression coverage. |
 
+| 83 | [Small-cushion recovery coverage](83-small-cushion-recovery-coverage.md) | Three/four-block recovery, mixed rates and packet timing, per-ear signal checks, real Windows capture-gap measurements, and an explicit output-burst boundary. |
+
 See also [`LEARNINGS.md`](LEARNINGS.md) — the cumulative, numbered lessons.
 
 ## Maintenance protocol (the contract)

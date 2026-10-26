@@ -123,4 +123,70 @@ mod tests {
         assert!(read_available(&mut d, &mut pcm, 50).unwrap().is_none());
         assert!(pcm.is_empty());
     }
+    struct FaultyDevice {
+        inner: Device,
+        failure: &'static str,
+        reads: usize,
+    }
+    impl PacketSource for FaultyDevice {
+        fn pending_frames(&self) -> Result<usize, String> {
+            if self.failure == "pending" {
+                return Err("device invalidated on query".into());
+            }
+            self.inner.pending_frames()
+        }
+        fn wait(&mut self, timeout: u32) -> Result<bool, String> {
+            if self.failure == "wait" {
+                return Err("wait failed".into());
+            }
+            if self.failure == "arrival during wait" {
+                self.inner.push(240, 0.25, false, false);
+            }
+            self.inner.wait(timeout)
+        }
+        fn read_packet(&mut self, out: &mut Vec<f32>) -> Result<CaptureFlags, String> {
+            if self.failure == "read" || (self.failure == "second read" && self.reads == 1) {
+                return Err("device invalidated on read".into());
+            }
+            self.reads += 1;
+            self.inner.read_packet(out)
+        }
+    }
+
+    #[test]
+    fn arrivals_during_event_wait_are_serviced_in_the_same_call() {
+        let mut d = FaultyDevice {
+            inner: Device::new(),
+            failure: "arrival during wait",
+            reads: 0,
+        };
+        let mut pcm = vec![0.75]; // callers may append; preserve their existing samples
+        assert!(read_available(&mut d, &mut pcm, 50).unwrap().is_some());
+        assert_eq!(d.inner.waits, 1);
+        assert_eq!(d.reads, 1);
+        assert_eq!(pcm[0], 0.75);
+        assert_eq!(&pcm[1..], vec![0.25; 480]);
+    }
+
+    #[test]
+    fn device_errors_propagate_instead_of_masquerading_as_idle_or_success() {
+        for failure in ["pending", "wait", "read", "second read"] {
+            let mut d = FaultyDevice {
+                inner: Device::new(),
+                failure,
+                reads: 0,
+            };
+            if failure != "wait" {
+                d.inner.push(240, 0.25, false, false);
+                d.inner.push(240, -0.25, false, false);
+            }
+            let mut pcm = vec![0.75];
+            assert!(read_available(&mut d, &mut pcm, 50).is_err(), "{failure}");
+            assert_eq!(pcm[0], 0.75);
+            // A mid-batch error may leave partial samples in the caller's scratch. It still must
+            // return Err so the engine discards that read rather than rendering it as a full batch.
+            assert_eq!(pcm.len(), if failure == "second read" { 481 } else { 1 });
+        }
+    }
+
 }
