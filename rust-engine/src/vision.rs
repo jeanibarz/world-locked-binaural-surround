@@ -101,11 +101,23 @@ impl PoseState {
         self.flip_v.load(Ordering::Relaxed)
     }
     /// Set the camera flips live (BUG #191). The camera thread reads each flag fresh at the next
-    /// frame, so a cockpit toggle takes effect without a restart; no lock is needed because each
-    /// flag is an independent atomic bool and a one-frame stale read is harmless.
+    /// frame, so a cockpit toggle takes effect without a restart.
+    ///
+    /// When the orientation actually changes, the captured neutral is reset: a horizontal flip
+    /// negates the solver's raw yaw, so the neutral captured in the old orientation would make the
+    /// heading read wrong (non-zero at the real neutral) until the operator hit Recenter — which is
+    /// exactly when they'd be testing the flip on the host. Clearing `yaw0` re-captures neutral from
+    /// the next pose, zeroing the heading at the moment of the toggle. `yaw0` is held across the swap
+    /// (same lock order as `update_raw`/`recenter`/`set_inverted`) so a concurrent pose can't capture
+    /// a neutral in the orientation we're leaving.
     pub fn set_flips(&self, flip_h: bool, flip_v: bool) {
-        self.flip_h.store(flip_h, Ordering::Relaxed);
-        self.flip_v.store(flip_v, Ordering::Relaxed);
+        let mut y0 = self.yaw0.lock().unwrap();
+        let was_h = self.flip_h.swap(flip_h, Ordering::Relaxed);
+        let was_v = self.flip_v.swap(flip_v, Ordering::Relaxed);
+        if was_h != flip_h || was_v != flip_v {
+            *y0 = None; // next pose defines the new neutral in the new orientation
+            *self.yaw.lock().unwrap() = 0.0;
+        }
     }
 
     fn update_raw(&self, raw_yaw: f64) {
