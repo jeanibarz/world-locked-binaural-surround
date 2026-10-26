@@ -44,7 +44,7 @@ mod engine {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
-    use audio_io::wasapi_backend::{init_com, set_pro_audio, WasapiLoopback, WasapiRender};
+    use audio_io::wasapi_backend::{init_com, set_high_priority, set_pro_audio, WasapiLoopback, WasapiRender};
     use audio_io::{cushion_blocks, AudioOutput, AudioSource, CushionFifo, DriftController, Pull};
     use rubato::{FastFixedIn, PolynomialDegree, Resampler};
     use binaural_conv::BusConvolverCore;
@@ -255,6 +255,13 @@ mod engine {
     pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         use crate::{assets, packs};
         let a: Vec<String> = std::env::args().collect();
+
+        // Raise the whole process to HIGH priority before spawning any thread, so normal-priority
+        // background load (a compiler, an indexer, a Windows-update task) can't preempt the DSP into
+        // dropouts. MMCSS boosts only the render/output threads; the threads they depend on run at
+        // the process base class, so without this a CPU hog starves them and audio drops out despite
+        // MMCSS (journal 82). Best-effort, Windows-only, reverts on exit.
+        println!("PROCESS_PRIORITY {}", if set_high_priority() { "HIGH" } else { "normal" });
 
         // Pack management sub-commands (install-relative + %APPDATA%\WLBS\packs), then exit.
         if flag(&a, "--list-packs") {
