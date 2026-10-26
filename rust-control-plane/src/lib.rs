@@ -14,13 +14,15 @@
 //! through [`Cockpit`] ([`Cockpit::push_state`] / [`Cockpit::set_frame`] / [`Cockpit::set_config`]);
 //! control events land in [`Cockpit::take_dispatched`].
 
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::body::Body;
-use axum::extract::{Path, State};
-use axum::http::{header, StatusCode};
+use axum::extract::{DefaultBodyLimit, Path, Request, State};
+use axum::http::{header, Method, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::Response;
 use axum::routing::{get, post};
 use axum::Router;
@@ -30,6 +32,10 @@ use tokio::sync::{broadcast, watch};
 pub mod settings;
 
 const NO_STORE: &str = "no-store";
+/// Max queued, undrained control events; the oldest is dropped past this.
+const MAX_DISPATCHED: usize = 1024;
+/// Max `/api` request body. The cockpit sends tiny JSON arg lists.
+const MAX_API_BODY: usize = 64 * 1024;
 
 /// Content-Type for a cockpit asset by extension — matches the Python server's `_CTYPE` table.
 fn content_type(path: &str) -> &'static str {
@@ -53,7 +59,7 @@ pub struct Cockpit {
     // Keep one receiver alive so `watch::send` retains the latest frame even when no `/camera`
     // client is connected (a watch send is dropped if there are zero receivers).
     _frame_keep: watch::Receiver<Option<Arc<Vec<u8>>>>,
-    dispatched: Mutex<Vec<(String, serde_json::Value)>>,
+    dispatched: Mutex<VecDeque<(String, serde_json::Value)>>,
 }
 
 impl Cockpit {
@@ -68,7 +74,7 @@ impl Cockpit {
             state_tx,
             frame_tx,
             _frame_keep: frame_keep,
-            dispatched: Mutex::new(Vec::new()),
+            dispatched: Mutex::new(VecDeque::new()),
         })
     }
 
@@ -86,7 +92,22 @@ impl Cockpit {
     }
     /// Drain the control events received since the last call (for tests / the engine).
     pub fn take_dispatched(&self) -> Vec<(String, serde_json::Value)> {
-        std::mem::take(&mut *self.dispatched.lock().unwrap())
+        std::mem::take(&mut *self.dispatched.lock().unwrap()).into()
+    }
+
+    /// Queue a control event, bounded: a consecutive repeat of an idempotent setter (`set_*` /
+    /// `window_size`) replaces the previous one (only the latest value matters), and past
+    /// `MAX_DISPATCHED` entries the oldest is dropped, so an undrained queue can't grow forever.
+    fn enqueue(&self, name: String, args: serde_json::Value) {
+        let mut q = self.dispatched.lock().unwrap();
+        let coalescable = name.starts_with("set_") || name == "window_size";
+        if coalescable && q.back().map_or(false, |(n, _)| *n == name) {
+            q.pop_back();
+        }
+        if q.len() >= MAX_DISPATCHED {
+            q.pop_front();
+        }
+        q.push_back((name, args));
     }
 }
 
@@ -107,9 +128,46 @@ pub fn router(cockpit: Arc<Cockpit>) -> Router {
         .route("/events", get(sse))
         .route("/camera", get(mjpeg))
         .route("/api/get_config", get(get_config))
-        .route("/api/*name", post(api_post))
+        .route("/api/*name", post(api_post).layer(DefaultBodyLimit::max(MAX_API_BODY)))
         .fallback(get(static_file))
+        .layer(middleware::from_fn(guard))
         .with_state(cockpit)
+}
+
+/// Host name part of a `Host` header value (strips the port; handles `[::1]:port`).
+fn host_name(host: &str) -> &str {
+    if let Some(rest) = host.strip_prefix('[') {
+        return rest.split(']').next().unwrap_or("");
+    }
+    host.rsplit_once(':').map_or(host, |(h, _)| h)
+}
+
+/// Loopback-only guard for every route. Rejects a `Host` that isn't `127.0.0.1`/`localhost`/`[::1]`
+/// (DNS rebinding: a hostile page rebinding its own name to 127.0.0.1 still sends its own `Host`),
+/// and a `POST /api/*` whose `Content-Type` isn't `application/json` (a cross-site `text/plain` or
+/// form POST is a CORS "simple request" with no preflight; the cockpit always sends JSON, which
+/// forces a preflight that we never approve). The port isn't checked: the router doesn't know it
+/// and a rebinding page keeps the server's port anyway — the hostname is what matters.
+async fn guard(req: Request, next: Next) -> Response {
+    let host_ok = req
+        .headers()
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .map_or(false, |h| matches!(host_name(h), "127.0.0.1" | "localhost" | "::1"));
+    if !host_ok {
+        return sent(StatusCode::FORBIDDEN, "text/plain", b"forbidden host".to_vec());
+    }
+    if req.method() == Method::POST && req.uri().path().starts_with("/api/") {
+        let json = req
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map_or(false, |v| v.split(';').next().unwrap_or("").trim().eq_ignore_ascii_case("application/json"));
+        if !json {
+            return sent(StatusCode::UNSUPPORTED_MEDIA_TYPE, "text/plain", b"content-type must be application/json".to_vec());
+        }
+    }
+    next.run(req).await
 }
 
 /// `_send` equivalent: a body with Content-Type, Content-Length (axum adds it) and `Cache-Control:
@@ -140,7 +198,7 @@ async fn api_post(State(c): State<Arc<Cockpit>>, Path(name): Path<String>, body:
             Err(_) => serde_json::Value::Array(vec![]),
         }
     };
-    c.dispatched.lock().unwrap().push((name, args));
+    c.enqueue(name, args);
     sent(StatusCode::OK, "application/json", b"{}".to_vec())
 }
 
@@ -220,4 +278,73 @@ async fn mjpeg(State(c): State<Arc<Cockpit>>) -> Response {
         .header(header::CACHE_CONTROL, NO_STORE)
         .body(Body::from_stream(stream))
         .unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+
+    fn spawn(cockpit: Arc<Cockpit>) -> u16 {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.set_nonblocking(true).unwrap();
+        let port = l.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+            rt.block_on(async move {
+                let l = tokio::net::TcpListener::from_std(l).unwrap();
+                axum::serve(l, router(cockpit)).await.unwrap();
+            });
+        });
+        port
+    }
+
+    /// Send a raw HTTP/1.1 request and return the status code.
+    fn status(port: u16, method: &str, path: &str, host: &str, ctype: Option<&str>, body: &str) -> u16 {
+        let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let ct = ctype.map(|c| format!("Content-Type: {c}\r\n")).unwrap_or_default();
+        let req = format!(
+            "{method} {path} HTTP/1.1\r\nHost: {host}\r\n{ct}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        s.write_all(req.as_bytes()).unwrap();
+        let mut out = String::new();
+        s.read_to_string(&mut out).unwrap();
+        out.split_whitespace().nth(1).unwrap().parse().unwrap()
+    }
+
+    #[test]
+    fn rejects_foreign_host_and_non_json_post() {
+        let c = Cockpit::new(std::env::temp_dir(), serde_json::json!({}));
+        let port = spawn(Arc::clone(&c));
+        let own = format!("127.0.0.1:{port}");
+        let json = Some("application/json");
+        assert_eq!(status(port, "GET", "/api/get_config", &own, None, ""), 200);
+        assert_eq!(status(port, "GET", "/api/get_config", &format!("localhost:{port}"), None, ""), 200);
+        assert_eq!(status(port, "GET", "/api/get_config", &format!("evil.example:{port}"), None, ""), 403);
+        assert_eq!(status(port, "POST", "/api/set_block", "evil.example", json, "[1]"), 403);
+        assert_eq!(status(port, "POST", "/api/set_block", &own, Some("text/plain"), "[1]"), 415);
+        assert_eq!(status(port, "POST", "/api/set_block", &own, None, "[1]"), 415);
+        assert!(c.take_dispatched().is_empty());
+        assert_eq!(status(port, "POST", "/api/set_block", &own, Some("application/json; charset=utf-8"), "[256]"), 200);
+        assert_eq!(c.take_dispatched(), vec![("set_block".to_string(), serde_json::json!([256]))]);
+        let big = format!("[\"{}\"]", "a".repeat(MAX_API_BODY + 1));
+        assert_eq!(status(port, "POST", "/api/set_block", &own, json, &big), 413);
+    }
+
+    #[test]
+    fn dispatch_queue_is_bounded_and_coalesces() {
+        let c = Cockpit::new(std::env::temp_dir(), serde_json::json!({}));
+        for i in 0..5 {
+            c.enqueue("set_block".into(), serde_json::json!([i]));
+        }
+        assert_eq!(c.take_dispatched(), vec![("set_block".to_string(), serde_json::json!([4]))]);
+        // non-setters aren't coalesced, and the queue drops the oldest past the cap
+        for i in 0..(MAX_DISPATCHED + 10) {
+            c.enqueue("settings_commit".into(), serde_json::json!([i]));
+        }
+        let q = c.take_dispatched();
+        assert_eq!(q.len(), MAX_DISPATCHED);
+        assert_eq!(q[0].1, serde_json::json!([10]));
+    }
 }
