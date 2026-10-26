@@ -18,6 +18,8 @@ use control_plane::Cockpit;
 use vision_client::image_util::RgbImage;
 use vision_client::pipeline::{decode_image, Pipeline};
 
+use crate::geometry::{pack_landmarks, LandmarkFrame};
+
 fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
@@ -53,6 +55,11 @@ pub struct PoseState {
     /// A camera/pipeline open failure, so the cockpit can say "camera unavailable" instead of
     /// showing a permanently-searching tracker (BUG-10).
     cam_error: Mutex<Option<String>>,
+    /// The latest FaceMesh overlay for the cockpit preview (#185), or `None` when the last pipeline
+    /// run found no face. Written by the camera thread, read at the telemetry cadence. The overlay
+    /// is purely cosmetic — it never feeds the world-lock — so a missed update just leaves the last
+    /// frame until the next telemetry tick re-reads it.
+    landmarks: Mutex<Option<LandmarkFrame>>,
 }
 
 impl PoseState {
@@ -66,7 +73,20 @@ impl PoseState {
             last_update: AtomicU64::new(0),
             cam_res: Mutex::new(None),
             cam_error: Mutex::new(None),
+            landmarks: Mutex::new(None),
         })
+    }
+
+    /// Store the latest FaceMesh overlay (`Some` = a face was found this frame, `None` = a miss).
+    /// Called on the camera thread (#185).
+    pub fn set_landmarks(&self, lm: Option<LandmarkFrame>) {
+        *self.landmarks.lock().unwrap() = lm;
+    }
+
+    /// The latest overlay, cloned for the telemetry frame (#185). `None` when there's no current
+    /// face. The per-mille packing keeps the clone small (≈2 KB for the 478-point mesh).
+    pub fn landmarks(&self) -> Option<LandmarkFrame> {
+        self.landmarks.lock().unwrap().clone()
     }
 
     /// Current tracking-direction state (`true` = inverted). Mirrored into cockpit telemetry so the
@@ -344,8 +364,16 @@ pub fn spawn_camera_pose(
                     Ok(Some(est)) => {
                         ok += 1;
                         pose.update_raw(est.pose.0);
+                        // Capture the FaceMesh overlay for the cockpit preview (#185). The landmarks
+                        // are already in the un-mirrored frame's normalized space (same frame as the
+                        // `/camera` JPEG above), so the overlay aligns with the preview. Purely
+                        // cosmetic; it never touches the audio render thread.
+                        pose.set_landmarks(pack_landmarks(&est.landmarks));
                     }
-                    _ => miss += 1,
+                    _ => {
+                        miss += 1;
+                        pose.set_landmarks(None); // no face this frame → clear the overlay
+                    }
                 }
                 if (ok + miss).is_multiple_of(30) {
                     eprintln!("VISION ok={ok} miss={miss} decode_fail={decode_fail} yaw={:.1}", *pose.yaw.lock().unwrap());

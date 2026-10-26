@@ -83,6 +83,7 @@
     $("set-fps").addEventListener("click", () => openMenu($("set-fps"), FPS, (v) => { fieldText($("set-fps"), v); call("set_cam_format", ...parseFmt(curRes(), v)); }));
     wireToggle("fliph-toggle", "set_flip_h");  // camera un-mirror (#191)
     wireToggle("flipv-toggle", "set_flip_v");
+    wireToggle("landmarks-toggle", "set_show_landmarks");  // FaceMesh overlay (#185)
 
     // --- engine ---
     wireDropdown("set-method", () => cfg.methods || ["nearest", "timealign", "minphase", "notchwarp"], "set_method");
@@ -134,6 +135,7 @@
     if (cfg.hp_eq != null) setToggle("hpeq-toggle", cfg.hp_eq);
     if (cfg.flip_h != null) setToggle("fliph-toggle", cfg.flip_h);
     if (cfg.flip_v != null) setToggle("flipv-toggle", cfg.flip_v);
+    if (cfg.show_landmarks != null) setToggle("landmarks-toggle", cfg.show_landmarks);
 
     // --- edit session --- changes apply live but are saved only on Confirm; Cancel / ✕ / closing
     // the window restores the engine to how it was when the dialog opened (the snapshot + revert

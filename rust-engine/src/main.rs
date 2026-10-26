@@ -121,6 +121,10 @@ mod engine {
         flip_h: bool,
         /// Un-mirror the camera vertically (upside-down mount). Off by default.
         flip_v: bool,
+        /// Draw the FaceMesh landmark overlay on the cockpit camera preview (#185). On by default —
+        /// it just controls whether the engine ships the landmark arrays in the telemetry frame; the
+        /// world-lock is unaffected either way.
+        show_landmarks: bool,
         /// Selected camera id (decimal index or opaque string, per nokhwa `CameraIndex`).
         camera: Option<String>,
         cam_w: u32,
@@ -180,6 +184,9 @@ mod engine {
             if let Some(b) = o.get("invert_tracking").and_then(|x| x.as_bool()) { self.invert_tracking = b; }
             if let Some(b) = o.get("flip_h").and_then(|x| x.as_bool()) { self.flip_h = b; }
             if let Some(b) = o.get("flip_v").and_then(|x| x.as_bool()) { self.flip_v = b; }
+            // New in #185; absent in older files → keeps the default-on. A plain additive field, so
+            // no schema migration is needed (unlike `method`/`hp_eq`, whose old values changed meaning).
+            if let Some(b) = o.get("show_landmarks").and_then(|x| x.as_bool()) { self.show_landmarks = b; }
             // New string `camera` id; fall back to the legacy numeric `camera_idx` for old settings.
             if let Some(s) = o.get("camera").and_then(|x| x.as_str()) {
                 self.camera = Some(s.into());
@@ -202,7 +209,8 @@ mod engine {
                 "comp": self.comp, "block": self.block, "cushion_ms": self.cushion_ms,
                 "exclusive": self.exclusive, "hp_eq": self.hp_eq, "hp_model": self.hp_model,
                 "predict": self.predict, "invert_tracking": self.invert_tracking,
-                "flip_h": self.flip_h, "flip_v": self.flip_v, "camera": self.camera,
+                "flip_h": self.flip_h, "flip_v": self.flip_v,
+                "show_landmarks": self.show_landmarks, "camera": self.camera,
                 "cam_w": self.cam_w, "cam_h": self.cam_h, "cam_fps": self.cam_fps,
                 "drawer_tab": self.drawer_tab, "win_w": self.win_w, "win_h": self.win_h,
             })
@@ -228,7 +236,7 @@ mod engine {
             "block": s.block, "cushion_ms": s.cushion_ms, "exclusive": s.exclusive,
             "hp_eq": s.hp_eq, "hp_models": s.hp_model.clone().map(|m| vec![m]),
             "predict": s.predict, "invert_tracking": s.invert_tracking,
-            "flip_h": s.flip_h, "flip_v": s.flip_v,
+            "flip_h": s.flip_h, "flip_v": s.flip_v, "show_landmarks": s.show_landmarks,
             "win_w": s.win_w, "win_h": s.win_h,
         })
     }
@@ -376,6 +384,7 @@ mod engine {
             invert_tracking: false,
             flip_h: true, // mirrored webcam is the common case (BUG #191); operator confirms on host
             flip_v: false,
+            show_landmarks: true, // show the tracking by default (#185)
             camera: camera_id.clone(),
             cam_w: 0,
             cam_h: 0,
@@ -595,6 +604,9 @@ mod engine {
                     // below, so the flip is live and survives settings-dialog cancel/reset. Persisted.
                     "set_flip_h" => { if let Some(b) = a0.and_then(|v| v.as_bool()) { settings.flip_h = b; dirty = true; } }
                     "set_flip_v" => { if let Some(b) = a0.and_then(|v| v.as_bool()) { settings.flip_v = b; dirty = true; } }
+                    // FaceMesh overlay on/off (#185): display-only — it gates whether the landmark
+                    // arrays are shipped in telemetry. No pose/graph reconcile; persisted like the flips.
+                    "set_show_landmarks" => { if let Some(b) = a0.and_then(|v| v.as_bool()) { settings.show_landmarks = b; dirty = true; } }
                     "recenter" => pose.recenter(),
                     "set_drawer_tab" => { if let Some(s) = a0.and_then(|v| v.as_str()) { settings.drawer_tab = s.into(); dirty = true; } }
                     "window_size" => {
@@ -783,6 +795,14 @@ mod engine {
                 let os = out_status.lock().unwrap().clone();
                 let cam_error = pose.cam_error();
                 let pose_stale = pose.millis_since_update().map_or(false, |m| m >= 1500);
+                // FaceMesh overlay (#185): only ship it when the operator wants it AND there is a
+                // live, fresh face — otherwise the cockpit clears the overlay. Held in a local so the
+                // borrowed slices outlive the `build_state` call.
+                let lm_frame = if settings.show_landmarks && pose.is_tracking() && !pose_stale {
+                    pose.landmarks()
+                } else {
+                    None
+                };
                 let state = telemetry::build_state(&TeleInput {
                     title: "WLBS Engine",
                     yaw_deg: cur_yaw,
@@ -816,6 +836,9 @@ mod engine {
                     cam_res: pose.cam_res(),
                     cam_error: cam_error.as_deref(),
                     mmcss,
+                    show_landmarks: settings.show_landmarks,
+                    landmarks: lm_frame.as_ref().map(|f| f.pts.as_slice()),
+                    face_box: lm_frame.as_ref().map(|f| f.box_xywh),
                     lat: &lat,
                 });
                 cockpit.push_state(telemetry::wrap_state(state));

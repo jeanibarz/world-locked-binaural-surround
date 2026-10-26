@@ -38,6 +38,11 @@
         <button type="button" role="switch" aria-checked="false" class="switch-lg" id="flipv-toggle" aria-label="Flip camera vertically"><span class="switch-knob"></span></button>
       </div>
       <div class="note">Most webcams send a mirrored (selfie) image, which reverses head tracking — keep horizontal flip on so the preview and tracking match reality; turn it off if your camera is already un-mirrored. Flip vertically only for an upside-down mount.</div>
+      <div class="row-between">
+        <span class="field-label">Show face landmarks</span>
+        <button type="button" role="switch" aria-checked="true" class="switch-lg" id="landmarks-toggle" aria-label="Show face landmarks on the camera preview"><span class="switch-knob"></span></button>
+      </div>
+      <div class="note">Draws the tracked FaceMesh points and face box on the camera preview, so you can see the head tracking working. Display only — it does not change the audio.</div>
     </div>
 
     <!-- Engine -->

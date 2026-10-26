@@ -81,6 +81,60 @@
     bins: [0, 1, 1, 2, 4, 9, 18, 34, 56, 70, 48, 24, 10, 4, 2, 1, 0, 0, 0, 0],
   };
 
+  // ---- FaceMesh overlay (#185) ----------------------------------------------
+  // Draw the landmark cloud + face box over the camera preview so the operator can SEE the tracking.
+  // The preview <img> uses object-fit:cover, so we replicate that crop here (from the img's natural
+  // frame size) to keep the dots glued to the face. Coordinates arrive per-mille (0..1000) of the
+  // (un-mirrored) frame; the engine omits them when there's no face or the toggle is off, and we
+  // then clear. lastOverlay lets a resize redraw between engine ticks.
+  let lastOverlay = null;
+  function drawOverlay(s) {
+    const cv = $("cam-overlay"), img = $("cam-img");
+    if (!cv || !img) return;
+    if (s) lastOverlay = { show: s.show_landmarks !== false, pts: s.landmarks, box: s.face_box, yaw: s.pose && s.pose.yaw_deg };
+    const o = lastOverlay || {};
+
+    const ctx = cv.getContext("2d");
+    const bw = cv.clientWidth, bh = cv.clientHeight;
+    const dpr = window.devicePixelRatio || 1;
+    const W = Math.round(bw * dpr), H = Math.round(bh * dpr);
+    if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, bw, bh);
+
+    const pts = o.pts;
+    if (!o.show || !Array.isArray(pts) || pts.length < 2) return;
+    const fw = img.naturalWidth, fh = img.naturalHeight;
+    if (!fw || !fh || img.style.display === "none") return;  // no live frame yet to crop against
+
+    // object-fit:cover: scale to fill the box, center-crop the overflow.
+    const scale = Math.max(bw / fw, bh / fh);
+    const dw = fw * scale, dh = fh * scale, ox = (bw - dw) / 2, oy = (bh - dh) / 2;
+    const X = (p) => ox + (p / 1000) * dw;
+    const Y = (p) => oy + (p / 1000) * dh;
+
+    const box = o.box;
+    if (Array.isArray(box) && box.length === 4) {
+      const bx = X(box[0]), by = Y(box[1]), bbw = (box[2] / 1000) * dw, bbh = (box[3] / 1000) * dh;
+      ctx.strokeStyle = "rgba(53,208,208,.9)"; ctx.lineWidth = 1.5;
+      if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(bx, by, bbw, bbh, 6); ctx.stroke(); }
+      else ctx.strokeRect(bx, by, bbw, bbh);
+      // coarse yaw needle from the box top-center — just a turn cue; the ring radar is the precise
+      // readout. Leans toward the turn side (yaw+ = turned left), clamped to ±45°.
+      if (typeof o.yaw === "number") {
+        const cx = bx + bbw / 2, a = Math.max(-45, Math.min(45, o.yaw)) * Math.PI / 180, len = 16;
+        ctx.strokeStyle = "rgba(76,217,138,.95)"; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(cx, by); ctx.lineTo(cx - Math.sin(a) * len, by - Math.cos(a) * len); ctx.stroke();
+      }
+    }
+
+    // landmark cloud — tiny squares (cheaper than arcs at ~478 points × 20 Hz), size scaled to the
+    // preview width.
+    ctx.fillStyle = "rgba(53,208,208,.72)";
+    const r = Math.max(0.6, 1.1 * (bw / 352));
+    for (let i = 0; i + 1 < pts.length; i += 2) ctx.fillRect(X(pts[i]) - r, Y(pts[i + 1]) - r, r * 2, r * 2);
+  }
+
   // ---- live state -> DOM -----------------------------------------------------
   function setText(id, v) { const e = $(id); if (e != null && v != null) e.textContent = v; }
 
@@ -94,6 +148,7 @@
       const b = $("cam-badge"); if (b) b.classList.toggle("searching", !s.face_locked);
       setText("cam-badge-txt", s.face_badge);
     }
+    drawOverlay(s);  // FaceMesh landmark overlay (#185)
 
     // system health rows
     if (Array.isArray(s.health)) {
@@ -199,6 +254,8 @@
       document.querySelectorAll(".tab").forEach((x) => x.classList.remove("tab-active"));
       t.classList.add("tab-active"); call("set_drawer_tab", t.dataset.tab);
     }));
+    // Keep the FaceMesh overlay aligned when the preview resizes (the box is % of the window).
+    window.addEventListener("resize", () => drawOverlay(null));
     const abA = $("ab-a"), abB = $("ab-b");
     if (abA && abB) {
       abA.addEventListener("click", () => { abA.classList.add("ab-active"); abB.classList.remove("ab-active"); call("blind_play", "A"); });
