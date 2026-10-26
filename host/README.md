@@ -37,3 +37,35 @@ edit the `set` lines at the top of the copied `run.cmd` — the rest is mode dis
 Flags after the mode are forwarded, e.g. `run.cmd listen --method nearest --block 1024`,
 `run.cmd listen --ui console`. `listen`/`test` relaunch automatically on the in-app Reload
 (Enter → exit 97). See `AGENTS.md` → "Running the host GUI apps" for the host-interop gotchas.
+
+## Native window (the standalone shell) — nominal UI
+
+The nominal way to run the app is a **native OS window** (the Tauri shell in `src-tauri/`), not a
+browser. Chrome is only for **inspection/debugging**. The shell starts the engine itself (hidden, on a
+fixed port, `--no-browser`) and shows one window pointing at the local cockpit; closing the window
+stops the engine. The cockpit HTTP server stays reachable, so you can still open the same URL in Chrome
+to inspect.
+
+**Cross-platform.** The window runs on Windows (WebView2), macOS (WKWebView) and Linux (WebKitGTK) from
+the same source. Build it:
+
+```
+host/build-tauri.sh windows    # the Windows .exe, built from WSL (syncs to a Windows FS)
+host/build-tauri.sh            # a native build for this host (Linux / macOS)
+```
+
+Linux needs the WebKitGTK dev packages (see the header of `build-tauri.sh`); macOS needs the Xcode
+command-line tools.
+
+**How the shell finds the engine** (no hardcoded path — resolved from the environment, so one binary
+works on any host):
+
+| var | platform | meaning |
+| --- | --- | --- |
+| `WLBS_ENGINE_CMD` | all | full command line for the engine, run via the platform shell. Must serve the cockpit on `$WLBS_PORT` (exported) and not open a browser. Wins when set. |
+| `WLBS_RUN_CMD` | Windows | path to this `run.cmd`. Default: the owner's install location (so the existing Windows setup is unchanged). |
+| `WLBS_LAUNCH` | Unix | launcher prefix. Default: `python3 apps/launch.py`. |
+| `WLBS_HOME` | Unix | working directory the launcher resolves against (e.g. the repo root). |
+
+**Inspection in Chrome:** the cockpit stays on `http://127.0.0.1:8731/index.html` while the shell runs —
+open it in any browser. Or launch `run.cmd` directly, which opens the cockpit in Chrome `--app`.

@@ -450,6 +450,13 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
 
 - [ ] **B9.1** HRIR selection/fine-tuning toward morphology + headphone EQ.
 - [ ] **B9.2** Packaging, installer, user docs, donationware release.
+  - [x] **B9.2a** Native shell made **cross-platform** (Windows/macOS/Linux): `src-tauri/` Windows-only
+    couplings (`windows_subsystem`, `CommandExt`/`CREATE_NO_WINDOW`, hardcoded `run.cmd`) gated behind
+    `cfg(windows)` and the engine launch resolved per-OS from the env (`WLBS_ENGINE_CMD`/`WLBS_RUN_CMD`/
+    `WLBS_LAUNCH`/`WLBS_HOME`); `build-tauri.sh` gained a native build mode. Unix path compile-verified;
+    full per-OS Tauri build is a host step. See journal 82. _(operator: "cross-platform shell first")_
+  - [ ] **B9.2b** Wire the native window as the **default** launcher; demote Chrome to explicit
+    inspection (next slice, per the operator's ordering).
 
 ---
 
