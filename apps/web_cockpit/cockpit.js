@@ -131,6 +131,26 @@
   // ---- live state -> DOM -----------------------------------------------------
   function setText(id, v) { const e = $(id); if (e != null && v != null) e.textContent = v; }
 
+  // Legend built from the same segments as the bar, so colors/labels always match. Only rebuilt
+  // when the (label, color) signature changes, not on every ~20 Hz tick.
+  let legendSig = null;
+  function renderLatencyLegend(segments) {
+    const host = $("lat-legend");
+    if (!host || !Array.isArray(segments)) return;
+    const sig = segments.map((g) => (g.label || "") + "|" + (g.capture ? "capture" : g.bg || "")).join(";");
+    if (sig === legendSig) return;
+    legendSig = sig;
+    host.textContent = "";
+    segments.forEach((g) => {
+      const leg = document.createElement("div"); leg.className = "leg";
+      const sw = document.createElement("span"); sw.className = "leg-sw" + (g.capture ? " sw-capture" : "");
+      if (!g.capture && g.bg) sw.style.background = g.bg;
+      leg.appendChild(sw);
+      leg.appendChild(document.createTextNode(g.label || ""));
+      host.appendChild(leg);
+    });
+  }
+
   function applyState(s) {
     if (!s) return;
     if (s.title) setText("tb-title", s.title);
@@ -201,6 +221,7 @@
             d.textContent = seg.label; bar.appendChild(d);
           });
         }
+        renderLatencyLegend(s.latency.segments);
       }
       if (Array.isArray(s.latency.bins)) buildHistogram(s.latency.bins, s.latency.p50_pct);
       if (s.latency.p50_pct != null) {
@@ -264,9 +285,10 @@
     // engine was killed (e.g. single-instance replace), so this stale UI should not linger. A
     // transient drop reconnects within the grace and is ignored. Chrome may block window.close()
     // for some windows, so fall back to a clean "engine stopped" message.
-    let gone = null;
+    let gone = null, dropped = false;
     const alive = () => { if (gone) { clearTimeout(gone); gone = null; } };
     const lost = () => {
+      dropped = true;
       lastOverlay = null; drawOverlay();  // clear stale landmark dots if the feed drops (#185)
       if (gone) return;
       // grace long enough that a reset-to-defaults relaunch (exit 97 -> re-open on the same port,
@@ -283,7 +305,10 @@
     };
     try {
       const es = new EventSource("/events");
-      es.onopen = alive;
+      es.onopen = () => {
+        alive();
+        if (dropped) { dropped = false; armCamera(); }  // engine came back: restart the preview stream
+      };
       es.onmessage = (e) => {
         alive();
         let m; try { m = JSON.parse(e.data); } catch (_) { return; }
@@ -294,11 +319,26 @@
       es.onerror = lost;   // dropped; close if it doesn't recover within the grace
     } catch (_) { /* no live feed */ }
   }
+  // (Re)point the preview at the MJPEG stream. A cache-busting query forces a fresh connection.
+  let camRetry = null;
+  function armCamera() {
+    const img = $("cam-img");
+    if (!img) return;
+    if (camRetry) { clearTimeout(camRetry); camRetry = null; }
+    img.src = "/camera?" + Date.now();
+  }
   function startCamera() {
     const img = $("cam-img"), ph = $("cam-placeholder");
     if (!img) return;
-    img.onload = () => { img.style.display = "block"; if (ph) ph.style.display = "none"; };
-    img.onerror = () => { img.style.display = "none"; if (ph) ph.style.display = "block"; };
+    img.onload = () => {
+      img.style.display = "block"; if (ph) ph.style.display = "none";
+      drawOverlay(null);  // the overlay early-returns while the img is hidden; redraw now it's live
+    };
+    img.onerror = () => {
+      img.style.display = "none"; if (ph) ph.style.display = "block";
+      drawOverlay(null);  // clear stale dots while there is no frame
+      if (!camRetry) camRetry = setTimeout(armCamera, 1000);  // stream died: retry until it is back
+    };
     img.src = "/camera";
   }
 
