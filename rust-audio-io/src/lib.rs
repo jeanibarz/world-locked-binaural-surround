@@ -10,9 +10,11 @@
 //! The FIFO and traits are pure/cross-platform (unit-tested on WSL/CI); the WASAPI backend and the
 //! `audio_probe` measurement binary are Windows-only (`cfg(windows)`), cross-compiled for the host.
 
+pub mod drift;
 pub mod fifo;
 pub mod traits;
 
+pub use drift::{DriftController, MAX_RESAMPLE_RATIO_RELATIVE};
 pub use fifo::{CushionFifo, FifoStats, Pull};
 pub use traits::{AudioOutput, AudioSource, CaptureFlags, StreamFormat};
 

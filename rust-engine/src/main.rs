@@ -40,7 +40,8 @@ mod engine {
     use std::time::{Duration, Instant};
 
     use audio_io::wasapi_backend::{init_com, set_pro_audio, WasapiLoopback, WasapiRender};
-    use audio_io::{cushion_blocks, AudioOutput, AudioSource, CushionFifo};
+    use audio_io::{cushion_blocks, AudioOutput, AudioSource, CushionFifo, DriftController, Pull};
+    use rubato::{FastFixedIn, PolynomialDegree, Resampler};
     use binaural_conv::BusConvolverCore;
     use control_plane::settings::SettingsStore;
     use control_plane::Cockpit;
@@ -70,6 +71,20 @@ mod engine {
     }
 
     type StereoBlock = Vec<f32>; // interleaved L,R, length block*2
+
+    /// How many blocks the cushion FIFO rebuilds after an underrun before resuming the drain (#192).
+    /// One block = the shortest possible silent hole: safe now that the output resampler's PI loop
+    /// holds the fill at the cushion, so an underrun is a rare transient (a render stall), not the
+    /// periodic drift sawtooth that the old full-cushion re-prime was guarding against.
+    const REPRIME_TARGET_BLOCKS: usize = 1;
+
+    /// Build a cushion FIFO with the engine's softened re-prime depth applied (#192). Used both at
+    /// start-up and on a live block/cushion RECONFIG so the two agree.
+    fn new_fifo(cushion: usize, block: usize) -> CushionFifo<StereoBlock> {
+        let mut f = CushionFifo::new(cushion, cushion * 2, vec![0.0f32; block * 2]);
+        f.set_reprime_target(REPRIME_TARGET_BLOCKS);
+        f
+    }
 
     /// The live, user-adjustable engine settings — the backing state for every cockpit control and
     /// the `/api/get_config` round-trip. Persisted atomically via [`SettingsStore`] so a choice
@@ -385,7 +400,7 @@ mod engine {
         pose.set_flips(settings.flip_h, settings.flip_v); // apply the persisted camera un-mirror (#191)
         let fifo: Arc<Mutex<CushionFifo<StereoBlock>>> = {
             let cushion = cushion_blocks(settings.cushion_ms, pack.samplerate, block);
-            Arc::new(Mutex::new(CushionFifo::new(cushion, cushion * 2, vec![0.0f32; block * 2])))
+            Arc::new(Mutex::new(new_fifo(cushion, block)))
         };
         let running = Arc::new(AtomicBool::new(true));
         let out_status: Arc<Mutex<OutputStatus>> = Arc::new(Mutex::new(OutputStatus::default()));
@@ -483,12 +498,14 @@ mod engine {
         let n_in = sfmt.channels as usize;
 
         // Sample-rate reconciliation (BUG-03): the IRs are baked at the pack rate, so convolving a
-        // source at a different rate warps ITD/pitch and miscomputes the cushion/fade. No resampler
-        // yet → hard-error with a clear message rather than silently spatialising at the wrong rate.
+        // source at a different rate warps ITD/pitch and miscomputes the cushion/fade. The #192 drift
+        // resampler sits on the OUTPUT path (pack→endpoint); it does not help here, because an input
+        // resampler would have to run *before* the convolution. So the source must still match the
+        // pack rate — hard-error rather than silently spatialising at the wrong rate.
         if sfmt.sample_rate != pack.samplerate {
             running.store(false, Ordering::Relaxed);
             return Err(format!(
-                "source is {} Hz but the BRIR pack is {} Hz — use a matching-rate pack (no resampler yet)",
+                "source is {} Hz but the BRIR pack is {} Hz — use a matching-rate pack (the drift resampler is output-side only)",
                 sfmt.sample_rate, pack.samplerate
             )
             .into());
@@ -616,8 +633,7 @@ mod engine {
                     };
                     if render_ok {
                         block = settings.block; // only advance the live block once render matches it
-                        *lock_fifo(&fifo) =
-                            CushionFifo::new(cushion, cushion * 2, vec![0.0f32; block * 2]);
+                        *lock_fifo(&fifo) = new_fifo(cushion, block);
                         in_acc.clear();
                         println!("RECONFIG block={block} cushion={cushion} method={}", settings.method);
                     }
@@ -711,6 +727,7 @@ mod engine {
                     cushion_blocks: cushion_now,
                     fifo_fill: fill_now,
                     fifo_capacity: cushion_now * 2,
+                    resample_ppm: os.resample_ppm,
                     underruns: st.underruns,
                     overflow_drops: st.overflow_drops,
                     discontinuities,
@@ -759,6 +776,8 @@ mod engine {
         #[allow(dead_code)]
         ch: u16,
         err: Option<String>,
+        /// Live output-resampler drift correction (ppm) published to the cockpit buffer meter (#192).
+        resample_ppm: f64,
     }
 
     /// Build the world-lock renderer from the pack, adapting to the source channel count (8 = full
@@ -812,11 +831,28 @@ mod engine {
         fifo.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Pull stereo blocks from the FIFO and write them to the output device each event. `expected_sr`
-    /// is the source/pack sample rate: the output endpoint must run at the same rate, or the FIFO
-    /// would drift continuously (no resampler) — a hard error rather than a silent stream of dropouts
-    /// (BUG-03). Output endpoints with more than two channels are handled by placing the binaural L/R
-    /// in the first two channels and zeroing the rest (BUG-19).
+    /// Build the output drift resampler for a `pack_rate → endpoint_rate` nominal ratio and a given
+    /// FIFO block size (#192). `FastFixedIn` consumes a fixed chunk (one FIFO block) and emits a
+    /// variable count, so the PI loop can continuously nudge the ratio via `set_resample_ratio_relative`.
+    fn build_out_resampler(nominal_ratio: f64, block: usize) -> Result<FastFixedIn<f32>, String> {
+        FastFixedIn::<f32>::new(
+            nominal_ratio,
+            audio_io::MAX_RESAMPLE_RATIO_RELATIVE,
+            PolynomialDegree::Cubic,
+            block.max(1),
+            2, // stereo
+        )
+        .map_err(|e| format!("output resampler init ({nominal_ratio:.6}×, block {block}): {e}"))
+    }
+
+    /// Drain the FIFO to the output device through a variable-ratio resampler (#192). The source
+    /// (virtual device) and the output (hardware) run on independent clocks, so a static-cushion FIFO
+    /// between them drifts to an underrun (the sawtooth). A slow PI loop ([`DriftController`]) reads
+    /// the FIFO fill and nudges the resampler's ratio so the consumer draws slightly fewer/more
+    /// source frames per output frame, holding the fill at the cushion. The same resampler also
+    /// converts a nominally mismatched endpoint rate (pack `expected_sr` → endpoint rate), so the
+    /// endpoint no longer has to match the pack rate (the old BUG-03 hard error, now removed). Output
+    /// endpoints with more than two channels place the binaural L/R first and zero the rest (BUG-19).
     fn output_loop(
         output_name: &str,
         fifo: Arc<Mutex<CushionFifo<StereoBlock>>>,
@@ -830,32 +866,139 @@ mod engine {
         let mut out = WasapiRender::open(output_name)?;
         let ofmt = out.format();
         println!("OUTPUT {:?} sr={} ch={}", output_name, ofmt.sample_rate, ofmt.channels);
+        let out_ch = ofmt.channels as usize;
+        if out_ch < 2 {
+            return Err(format!("output endpoint is {out_ch}ch; need at least a stereo endpoint"));
+        }
+        // The resampler converts pack-rate render blocks to the endpoint rate; the PI loop rides on
+        // top of this nominal ratio. No rate-equality hard error any more (#192).
+        let nominal_ratio = ofmt.sample_rate as f64 / expected_sr.max(1) as f64;
         {
             let mut s = status.lock().unwrap();
             s.sr = ofmt.sample_rate;
             s.ch = ofmt.channels;
         }
-        let out_ch = ofmt.channels as usize;
-        if out_ch < 2 {
-            return Err(format!("output endpoint is {out_ch}ch; need at least a stereo endpoint"));
-        }
-        if ofmt.sample_rate != expected_sr {
-            return Err(format!(
-                "output endpoint is {} Hz but the source/pack is {expected_sr} Hz — match the endpoints (no resampler yet)",
-                ofmt.sample_rate
-            ));
-        }
-        let mut pending: Vec<f32> = Vec::with_capacity(block * 4);
+        println!(
+            "OUTPUT_RESAMPLE nominal={nominal_ratio:.6} (pack {expected_sr} Hz -> endpoint {} Hz)",
+            ofmt.sample_rate
+        );
+
+        // Resampler + controller are (re)built lazily on the first block and whenever the live block
+        // size changes (a RECONFIG rebuilds the FIFO with a new silence template, so a pulled block's
+        // frame count is the authoritative current block size).
+        let mut cur_block = 0usize;
+        let mut cur_cushion = 0usize;
+        let mut resampler: Option<FastFixedIn<f32>> = None;
+        let mut ctrl = DriftController::new((block.max(1) * 2) as f64); // provisional; rebuilt below
+        let (mut in_l, mut in_r): (Vec<f32>, Vec<f32>) = (Vec::new(), Vec::new());
+        let (mut out_l, mut out_r): (Vec<f32>, Vec<f32>) = (Vec::new(), Vec::new());
+
+        let mut pending: Vec<f32> = Vec::with_capacity(block * 4); // OUTPUT-rate interleaved L,R
         let mut frame_buf: Vec<f32> = Vec::with_capacity(block * out_ch);
+
+        // Short edge-fade state to hide the click at a silence↔signal boundary. A residual underrun
+        // is now a single block (#192), so we ramp the step into silence down from the last real
+        // sample and ramp the first samples back up on resume, keeping even the rare glitch soft.
+        let mut last_silent = false;
+        let (mut last_l, mut last_r) = (0.0f32, 0.0f32);
+        let mut last_rel = 1.0f64; // held ratio, reused while the controller is frozen (see below)
+        let mut ppm_tick = 0u32;
+
         while running.load(Ordering::Relaxed) {
             if !out.wait(1000)? {
                 continue;
             }
             let need = out.frames_needed()?;
             while pending.len() / 2 < need {
-                let (_p, blk) = lock_fifo(&fifo).pull();
-                pending.extend_from_slice(&blk.unwrap_or_else(|| vec![0.0f32; block * 2]));
+                // Pull one input block + the pre-pull fill snapshot under a single lock.
+                let (pull, mut blk, fill_blocks, cushion_now) = {
+                    let mut f = lock_fifo(&fifo);
+                    let fill_before = f.len();
+                    let cush = f.cushion();
+                    let (p, b) = f.pull();
+                    (p, b.unwrap_or_else(|| vec![0.0f32; cur_block.max(block) * 2]), fill_before, cush)
+                };
+                let frames = blk.len() / 2;
+
+                // (Re)build the resampler + controller on first use or a block-size change.
+                if resampler.is_none() || frames != cur_block {
+                    cur_block = frames.max(1);
+                    let r = build_out_resampler(nominal_ratio, cur_block)?;
+                    let omax = r.output_frames_max();
+                    resampler = Some(r);
+                    in_l.resize(cur_block, 0.0);
+                    in_r.resize(cur_block, 0.0);
+                    out_l.resize(omax, 0.0);
+                    out_r.resize(omax, 0.0);
+                    cur_cushion = 0; // force the controller rebuild below with the right setpoint
+                }
+                if cushion_now != cur_cushion {
+                    cur_cushion = cushion_now;
+                    ctrl = DriftController::new((cur_cushion.max(1) * cur_block) as f64);
+                }
+                let resampler = resampler.as_mut().unwrap();
+
+                // Edge fade across the silence boundary (on the interleaved block, pre-resample).
+                let is_silent = pull != Pull::Block;
+                let fade = 64.min(frames);
+                if is_silent && !last_silent {
+                    for i in 0..fade {
+                        let g = 1.0 - (i as f32 / fade as f32);
+                        blk[i * 2] = last_l * g;
+                        blk[i * 2 + 1] = last_r * g;
+                    }
+                } else if !is_silent && last_silent {
+                    for i in 0..fade {
+                        let g = i as f32 / fade as f32;
+                        blk[i * 2] *= g;
+                        blk[i * 2 + 1] *= g;
+                    }
+                }
+                if !is_silent && frames > 0 {
+                    last_l = blk[(frames - 1) * 2];
+                    last_r = blk[(frames - 1) * 2 + 1];
+                }
+                last_silent = is_silent;
+
+                // Drive the drift ratio from the pre-pull fill, then resample this block. Freeze the
+                // controller while the FIFO has no real data to give (underrun / repriming): the fill
+                // is 0 there because the source has stalled, not because of clock drift, so
+                // integrating it would wind the integral to its clamp and leave the ratio saturated
+                // for seconds after the source resumes (a latency swell). Hold the last ratio instead.
+                let rel = if pull == Pull::Block {
+                    ctrl.update((fill_blocks * cur_block) as f64)
+                } else {
+                    last_rel
+                };
+                last_rel = rel;
+                resampler
+                    .set_resample_ratio_relative(rel, true)
+                    .map_err(|e| format!("set resample ratio {rel:.6}: {e}"))?;
+                for i in 0..cur_block {
+                    in_l[i] = blk[i * 2];
+                    in_r[i] = blk[i * 2 + 1];
+                }
+                let wave_in: [&[f32]; 2] = [&in_l[..cur_block], &in_r[..cur_block]];
+                let written = {
+                    let mut wave_out: [&mut [f32]; 2] = [&mut out_l[..], &mut out_r[..]];
+                    resampler
+                        .process_into_buffer(&wave_in, &mut wave_out, None)
+                        .map_err(|e| format!("resample: {e}"))?
+                        .1
+                };
+                pending.reserve(written * 2);
+                for i in 0..written {
+                    pending.push(out_l[i]);
+                    pending.push(out_r[i]);
+                }
+
+                // Publish the live drift correction a few times a second (not every block).
+                ppm_tick = ppm_tick.wrapping_add(1);
+                if ppm_tick % 16 == 0 {
+                    status.lock().unwrap().resample_ppm = ctrl.correction_ppm();
+                }
             }
+
             if out_ch == 2 {
                 let take = need * 2;
                 out.write(&pending[..take])?;
