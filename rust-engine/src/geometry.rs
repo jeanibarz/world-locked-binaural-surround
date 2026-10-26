@@ -65,13 +65,16 @@ pub fn head_relative_azimuths_5p1(yaw_deg: f64, yaw_sign: f64) -> [f64; 6] {
 /// the radar both expect) from the pose solver's raw yaw, the captured neutral (in the solver's raw
 /// convention), and the tracking direction.
 ///
-/// `invert = false` is the corrected default (BUG #189): the ONNX solver reports yaw with the
-/// opposite handedness, so turning the head made the world anti-track; negating the raw offset
-/// restores correct world-lock. `invert = true` keeps the solver's own handedness, for a
-/// camera/mount that is mirrored. The sign is applied once, here, so the radar (which rotates by
-/// `-yaw`) and the audio (`speaker_az - yaw`) can never disagree in direction.
+/// `invert = false` is the default: the published yaw is just the raw offset from neutral, with the
+/// solver's own handedness. The head-tracking direction is corrected upstream by un-mirroring the
+/// camera frame (BUG #191: the operator's webcam delivers a horizontally-flipped image, which was
+/// what reversed the yaw); correcting it there keeps the pose, the landmarks and the ear handedness
+/// all consistent. `invert = true` is an advanced override that negates the offset, for a mount
+/// whose handedness still runs the other way after the camera flip. The sign is applied once, here,
+/// so the radar (which rotates by `-yaw`) and the audio (`speaker_az - yaw`) can never disagree in
+/// direction.
 pub fn published_yaw(raw_yaw: f64, neutral_raw: f64, invert: bool) -> f64 {
-    let sign = if invert { 1.0 } else { -1.0 };
+    let sign = if invert { -1.0 } else { 1.0 };
     sign * (raw_yaw - neutral_raw)
 }
 
@@ -79,7 +82,7 @@ pub fn published_yaw(raw_yaw: f64, neutral_raw: f64, invert: bool) -> f64 {
 /// Inverse of [`published_yaw`] in the neutral: from `yaw = sign * (raw_cur - neutral)` we get
 /// `raw_cur = neutral + yaw / sign`, and for `sign ∈ {±1}`, `1/sign == sign`.
 pub fn recenter_neutral(neutral_raw: f64, cur_yaw: f64, invert: bool) -> f64 {
-    let sign = if invert { 1.0 } else { -1.0 };
+    let sign = if invert { -1.0 } else { 1.0 };
     neutral_raw + cur_yaw * sign
 }
 
@@ -121,23 +124,23 @@ mod tests {
         assert!(!r.contains(&LFE_INDEX));
     }
 
-    // --- #189: head-tracking direction at the pose source ---
+    // --- #191: tracking direction corrected at the camera; sign here is a pass-through default ---
 
-    // The corrected default negates the solver's raw yaw. The ONNX solver reports a head-turn-left
-    // as a NEGATIVE raw yaw (opposite handedness); negating yields the +left convention the rest of
-    // the engine expects, so the world no longer anti-tracks.
+    // The default publishes the raw offset from neutral unchanged (the camera un-mirror upstream is
+    // what makes the solver's raw yaw match the +left convention — BUG #191). With an un-mirrored
+    // feed, a head-turn-left arrives as a larger raw yaw and publishes as a positive (left) yaw.
     #[test]
-    fn default_direction_negates_solver_raw() {
-        // neutral captured at raw 100; a head-turn-left reported by the solver as raw 90 (-10 raw).
-        assert_eq!(published_yaw(90.0, 100.0, false), 10.0); // published +10 = head left
-        // and a head-turn-right (raw +10) publishes as -10.
-        assert_eq!(published_yaw(110.0, 100.0, false), -10.0);
+    fn default_direction_passes_through_solver_raw() {
+        // neutral captured at raw 100; +10 raw past neutral publishes as +10, -10 as -10.
+        assert_eq!(published_yaw(110.0, 100.0, false), 10.0);
+        assert_eq!(published_yaw(90.0, 100.0, false), -10.0);
     }
 
+    // The advanced invert override negates the offset, for a mount still reversed after the flip.
     #[test]
-    fn invert_keeps_solver_handedness() {
-        assert_eq!(published_yaw(90.0, 100.0, true), -10.0);
-        assert_eq!(published_yaw(110.0, 100.0, true), 10.0);
+    fn invert_negates_the_offset() {
+        assert_eq!(published_yaw(110.0, 100.0, true), -10.0);
+        assert_eq!(published_yaw(90.0, 100.0, true), 10.0);
     }
 
     // Flipping the direction mirrors the published yaw around neutral — identical to recomputing
@@ -163,7 +166,7 @@ mod tests {
             assert_eq!(published_yaw(raw_at_recenter, neutral1, invert), 0.0);
             // +10 raw past the new neutral
             let moved = published_yaw(raw_at_recenter + 10.0, neutral1, invert);
-            assert_eq!(moved, if invert { 10.0 } else { -10.0 });
+            assert_eq!(moved, if invert { -10.0 } else { 10.0 });
         }
     }
 
@@ -173,7 +176,7 @@ mod tests {
     // the head's right (negative azimuth) and the radar cone rotates by -Y to match.
     #[test]
     fn radar_and_audio_agree_in_direction() {
-        let yaw = published_yaw(90.0, 100.0, false); // head left -> +10
+        let yaw = published_yaw(110.0, 100.0, false); // head left (un-mirrored feed) -> +10
         assert_eq!(yaw, 10.0);
         let radar_rotation = -yaw; // SVG transform on the cone
         let front_center = head_relative_azimuths(yaw, 1.0)[2]; // "C"
