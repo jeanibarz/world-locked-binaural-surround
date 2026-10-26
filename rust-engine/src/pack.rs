@@ -29,14 +29,21 @@ fn read_ir(path: &Path) -> Result<(u32, Vec<f64>), String> {
     let mut r = hound::WavReader::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let spec = r.spec();
     let ch = spec.channels.max(1) as usize;
+    let bad = |e: hound::Error| format!("{}: {e}", path.display());
     let take0 = |it: Vec<f64>| it.into_iter().step_by(ch).collect::<Vec<f64>>();
+    // A truncated/corrupt data chunk is a hard error, not a silently zero-filled or short IR.
     let samples: Vec<f64> = match spec.sample_format {
-        hound::SampleFormat::Float => {
-            take0(r.samples::<f32>().map(|s| s.unwrap_or(0.0) as f64).collect())
-        }
+        hound::SampleFormat::Float => take0(
+            r.samples::<f32>().map(|s| s.map(f64::from)).collect::<Result<Vec<_>, _>>().map_err(bad)?,
+        ),
         hound::SampleFormat::Int => {
             let max = (1i64 << (spec.bits_per_sample - 1)) as f64;
-            take0(r.samples::<i32>().map(|s| s.unwrap_or(0) as f64 / max).collect())
+            take0(
+                r.samples::<i32>()
+                    .map(|s| s.map(|v| v as f64 / max))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(bad)?,
+            )
         }
     };
     // Reject a non-finite tap (NaN/Inf) at load: once a NaN enters the partitioned convolver's

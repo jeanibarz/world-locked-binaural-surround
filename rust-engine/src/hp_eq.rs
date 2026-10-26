@@ -197,7 +197,20 @@ fn alpha(w0: f64, spec: &BiquadSpec, a_amp: f64) -> f64 {
 
 /// Design one biquad as `[b0, b1, b2, a1, a2]`, normalised so `a0 = 1` — RBJ Audio EQ Cookbook as
 /// EqualizerAPO implements it, identical to the oracle's `eq.design`.
-pub fn design(spec: &BiquadSpec, fs: f64) -> [f64; 5] {
+///
+/// Returns `None` (the filter is skipped) for out-of-range parameters (`fc` not in `0 < fc < fs/2`,
+/// non-positive `Q`/`BW`) or coefficients that are non-finite or unstable: the cascade keeps its
+/// state across blocks, so a single NaN/inf sample would poison every later output block forever.
+pub fn design(spec: &BiquadSpec, fs: f64) -> Option<[f64; 5]> {
+    let params_ok = spec.fc.is_finite()
+        && spec.fc > 0.0
+        && spec.fc < fs / 2.0
+        && spec.gain_db.is_finite()
+        && spec.q.map_or(true, |q| q.is_finite() && q > 0.0)
+        && spec.bw_oct.map_or(true, |b| b.is_finite() && b > 0.0);
+    if !params_ok {
+        return None;
+    }
     let w0 = 2.0 * std::f64::consts::PI * spec.fc / fs;
     let cos_w0 = w0.cos();
     let a_amp = 10f64.powf(spec.gain_db / 40.0);
@@ -250,7 +263,10 @@ pub fn design(spec: &BiquadSpec, fs: f64) -> [f64; 5] {
             (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
         }
     };
-    [b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0]
+    let c = [b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0];
+    // Finite + strictly inside the stability triangle (|a2| < 1, |a1| < 1 + a2).
+    let stable = c.iter().all(|v| v.is_finite()) && c[4].abs() < 1.0 && c[3].abs() < 1.0 + c[4];
+    stable.then_some(c)
 }
 
 /// A stateful streaming biquad cascade over one signal. Feeding it block by block yields exactly the
@@ -273,7 +289,7 @@ impl BiquadCascade {
     }
 
     pub fn from_specs(specs: &[BiquadSpec], fs: f64) -> Self {
-        Self::new(specs.iter().map(|s| design(s, fs)).collect())
+        Self::new(specs.iter().filter_map(|s| design(s, fs)).collect())
     }
 
     pub fn n_sections(&self) -> usize {
@@ -488,7 +504,9 @@ enum Op {
 fn extract_ear_chains(cmds: &[Cmd], samplerate: u32) -> Result<(EarChain, EarChain), String> {
     let mut ops_l: Vec<Op> = Vec::new();
     let mut ops_r: Vec<Op> = Vec::new();
-    let mut selected: Vec<String> = Vec::new();
+    // EqualizerAPO's default selection is all channels (as if `Channel: all`), so commands before
+    // the first `Channel:` line still apply.
+    let mut selected: Vec<String> = OUTPUT_BUSES.iter().map(|s| s.to_string()).collect();
 
     for cmd in cmds {
         match cmd {
@@ -570,13 +588,26 @@ fn load_ir(path: &Path, samplerate: u32) -> Result<Vec<f64>, String> {
     let mut r = hound::WavReader::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let spec = r.spec();
     let ch = spec.channels.max(1) as usize;
+    // A truncated/corrupt data chunk is a hard error, not a silently zero-filled or short IR.
+    let bad = |e: hound::Error| format!("{}: {e}", path.display());
     let samples: Vec<f64> = match spec.sample_format {
-        hound::SampleFormat::Float => {
-            r.samples::<f32>().step_by(ch).map(|s| s.unwrap_or(0.0) as f64).collect()
-        }
+        hound::SampleFormat::Float => r
+            .samples::<f32>()
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(bad)?
+            .into_iter()
+            .step_by(ch)
+            .map(|s| s as f64)
+            .collect(),
         hound::SampleFormat::Int => {
             let max = (1i64 << (spec.bits_per_sample - 1)) as f64;
-            r.samples::<i32>().step_by(ch).map(|s| s.unwrap_or(0) as f64 / max).collect()
+            r.samples::<i32>()
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(bad)?
+                .into_iter()
+                .step_by(ch)
+                .map(|s| s as f64 / max)
+                .collect()
         }
     };
     if let Some(i) = samples.iter().position(|v| !v.is_finite()) {
@@ -672,7 +703,7 @@ mod tests {
         // A PK biquad: |H| at its centre frequency ≈ its gain; at DC ≈ 0 dB.
         let spec = BiquadSpec { ftype: "PK".into(), fc: 1000.0, gain_db: 6.0, q: Some(1.0), bw_oct: None, slope_db: None };
         let fs = 48000.0;
-        let c = design(&spec, fs);
+        let c = design(&spec, fs).unwrap();
         let mag_db = |f: f64| {
             let w = 2.0 * std::f64::consts::PI * f / fs;
             let (b0, b1, b2, a1, a2) = (c[0], c[1], c[2], c[3], c[4]);
@@ -695,7 +726,7 @@ mod tests {
     #[test]
     fn cascade_matches_manual_single_biquad() {
         // One-section cascade equals the hand-run transposed-DF2 recurrence.
-        let c = design(&BiquadSpec { ftype: "PK".into(), fc: 1000.0, gain_db: 3.0, q: Some(0.7), bw_oct: None, slope_db: None }, 48000.0);
+        let c = design(&BiquadSpec { ftype: "PK".into(), fc: 1000.0, gain_db: 3.0, q: Some(0.7), bw_oct: None, slope_db: None }, 48000.0).unwrap();
         let mut casc = BiquadCascade::new(vec![c]);
         let x: Vec<f64> = (0..64).map(|n| (n as f64 * 0.3).sin()).collect();
         let mut buf = x.clone();
@@ -733,6 +764,32 @@ mod tests {
         let (l2, _) = extract_ear_chains(&kept, 48000).unwrap();
         assert_eq!(l2.specs.len(), 1);
         assert!((l2.gain - 10f64.powf(6.0 / 20.0) * 10f64.powf(-3.0 / 20.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn commands_before_first_channel_line_apply_to_all_buses() {
+        let cmds = vec![Cmd::Preamp(-6.0)];
+        let (l, r) = extract_ear_chains(&cmds, 48000).unwrap();
+        let g = 10f64.powf(-6.0 / 20.0);
+        assert!((l.gain - g).abs() < 1e-12 && (r.gain - g).abs() < 1e-12);
+    }
+
+    #[test]
+    fn design_rejects_out_of_range_or_unstable_filters() {
+        let mk = |fc: f64, q: Option<f64>, bw: Option<f64>| BiquadSpec {
+            ftype: "PK".into(), fc, gain_db: 3.0, q, bw_oct: bw, slope_db: None,
+        };
+        assert!(design(&mk(1000.0, Some(1.0), None), 48000.0).is_some());
+        assert!(design(&mk(24000.0, Some(1.0), None), 48000.0).is_none(), "fc at Nyquist");
+        assert!(design(&mk(30000.0, Some(1.0), None), 48000.0).is_none(), "fc above Nyquist");
+        assert!(design(&mk(0.0, Some(1.0), None), 48000.0).is_none(), "fc 0");
+        assert!(design(&mk(1000.0, Some(0.0), None), 48000.0).is_none(), "Q 0");
+        assert!(design(&mk(1000.0, None, Some(0.0)), 48000.0).is_none(), "BW 0");
+        // A skipped filter leaves the cascade finite on arbitrary input.
+        let mut casc = BiquadCascade::from_specs(&[mk(24000.0, Some(1.0), None)], 48000.0);
+        let mut x = vec![1.0; 16];
+        casc.process_in_place(&mut x);
+        assert!(x.iter().all(|v| v.is_finite()));
     }
 
     #[test]
