@@ -44,6 +44,10 @@ def _free_port() -> int:
 
 def _get(url: str, method: str = "GET", data: bytes | None = None):
     req = urllib.request.Request(url, method=method, data=data)
+    # The Rust control-plane now requires a JSON content-type on POST /api/* (CSRF guard: a
+    # cross-site text/plain "simple request" is rejected). Send it so both servers accept the body.
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
     try:
         r = urllib.request.urlopen(req, timeout=5)
         return r.status, r.headers, r.read()  # headers: case-insensitive email.message.Message
