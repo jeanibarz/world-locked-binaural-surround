@@ -90,3 +90,8 @@ for tests. No driver, device defaults, or VoiceMeeter routing changed.
 - Stage the Windows engine using the existing `.new.exe` update mechanism,
   and confirm the owner's next run picks up that artifact. Listening remains the check for
   audible quality beyond the measured starvation defect. Delivery PR recorded below.
+
+Delivery: [PR #216](https://github.com/jeanibarz/world-locked-binaural-surround/pull/216).
+The verified Windows release executable is staged as `wlbs_engine.new.exe` in the owner's
+install directory; the existing launcher applies it on the next launch. The currently
+running process was not replaced. Issue #215 remains open for listening validation.

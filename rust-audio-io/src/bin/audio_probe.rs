@@ -10,8 +10,9 @@
 //!     clock), and it reports underruns / re-primes / overflow-drops / mean fill — showing the
 //!     journal-81 cushion rides the drift without an audio device attached.
 //!
-//! Usage: `audio_probe [secs] [device-name-substr] [block-frames] [latency-ms]`
-//!   e.g. `audio_probe 30 FiiO 256 20`
+//! Usage: `audio_probe [secs] [device-name-substr] [block-frames] [latency-ms] [stall-ms]`
+//!   e.g. `audio_probe 12 "VoiceMeeter Input" 512 40 300`
+//! `stall-ms` pauses capture once after three seconds to test backlog recovery (default: 0).
 
 #[cfg(not(windows))]
 fn main() {

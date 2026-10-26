@@ -412,15 +412,21 @@ mod tests {
     fn idle_and_reprime_do_not_wind_the_drift_controller() {
         let mut stream = OutputResampler::new(1.0);
         let mut pending = Vec::new();
-        stream
-            .process_into(Pull::Block, &mut vec![0.0; 1024], 4, 4, false, &mut pending)
-            .unwrap();
+        // Start with a real nonzero correction so a masked update cannot pass by returning zero.
+        for _ in 0..32 {
+            pending.clear();
+            stream.process_into(Pull::Block, &mut vec![0.0; 1024], 2, 4, false, &mut pending).unwrap();
+        }
         let before = stream.correction_ppm();
-        for pull in [Pull::Underrun, Pull::Repriming, Pull::Block] {
+        assert!(before.abs() > 0.0);
+        for (pull, idle) in [
+            (Pull::Underrun, false), (Pull::Repriming, false),
+            (Pull::Underrun, true), (Pull::Repriming, true), (Pull::Block, true),
+        ] {
             for _ in 0..100 {
                 pending.clear();
                 stream
-                    .process_into(pull, &mut vec![0.0; 1024], 0, 4, true, &mut pending)
+                    .process_into(pull, &mut vec![0.0; 1024], 0, 4, idle, &mut pending)
                     .unwrap();
                 assert_eq!(stream.correction_ppm(), before);
             }

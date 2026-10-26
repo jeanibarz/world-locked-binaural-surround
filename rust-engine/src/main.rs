@@ -22,9 +22,9 @@ mod camera_fmt;
 mod geometry;
 mod hp_eq;
 mod interp;
+mod output_stream;
 mod pack;
 mod packs;
-mod output_stream;
 mod telemetry;
 mod vision;
 
