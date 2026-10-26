@@ -48,10 +48,11 @@ pub struct CushionFifo<T: Clone> {
     cushion: usize,
     max_backlog: usize,
     /// How deep to rebuild the queue after an underrun before resuming the drain. Defaults to the
-    /// full `cushion` (the journal-81 policy: restore the whole margin). The engine lowers it to a
-    /// block or two (#192) so a *rare residual* underrun — drift is now corrected upstream by the
-    /// output resampler, so underruns are no longer the periodic sawtooth — resumes almost at once
-    /// instead of dumping a full cushion of silence (the audible "crack"). Clamped to `[1, cushion]`.
+    /// full `cushion` (the journal-81 policy: restore the whole margin in one bounded silent fill).
+    /// A caller MAY lower it via [`set_reprime_target`](Self::set_reprime_target) to resume sooner,
+    /// but the engine uses the full-cushion default: a shallow re-prime leaves the FIFO near-empty,
+    /// and the output resampler's PI loop is far too slow to refill it before the next jitter spike
+    /// underruns again (a sustained dropout storm — reverting #192). Clamped to `[1, cushion]`.
     reprime_target: usize,
     silence: T,
     q: VecDeque<T>,
@@ -73,7 +74,7 @@ impl<T: Clone> CushionFifo<T> {
         Self {
             cushion,
             max_backlog,
-            reprime_target: cushion, // journal-81 default: rebuild the whole cushion (engine lowers it)
+            reprime_target: cushion, // journal-81 default: rebuild the whole cushion
             silence,
             q,
             repriming: false,
@@ -81,10 +82,11 @@ impl<T: Clone> CushionFifo<T> {
         }
     }
 
-    /// Set how deep the queue is rebuilt after an underrun before the drain resumes (#192). `1`
-    /// resumes as soon as a single block is available — the shortest possible silent hole — which is
-    /// safe once the output resampler holds the fill at the cushion, so underruns are rare and
-    /// transient rather than the periodic drift sawtooth. Clamped to `[1, cushion]`.
+    /// Set how deep the queue is rebuilt after an underrun before the drain resumes. `1` resumes as
+    /// soon as a single block is available — the shortest possible silent hole — but leaves the FIFO
+    /// near-empty afterwards; only choose it if something refills the cushion quickly (the engine's
+    /// output resampler PI loop does NOT — it is slow by design, so the engine keeps the full-cushion
+    /// default; see rust-engine `new_fifo`). Clamped to `[1, cushion]`.
     pub fn set_reprime_target(&mut self, blocks: usize) {
         self.reprime_target = blocks.clamp(1, self.cushion);
     }
@@ -235,6 +237,38 @@ mod tests {
         assert!(!f.is_repriming());
         // Only the underrun pull itself was silent — no full-cushion rebuild hole.
         assert_eq!(f.stats().reprime_silent_blocks, 1);
+    }
+
+    #[test]
+    fn full_cushion_reprime_restores_the_margin_a_one_block_reprime_leaves_missing() {
+        // Why the engine re-primes to the full cushion, not one block: after an underrun, a
+        // one-block re-prime resumes with the FIFO near-empty, so the very next pull that races
+        // ahead of the worker underruns AGAIN — the clustered-dropout storm the user hit. The
+        // full-cushion re-prime resumes only once the whole margin is back, so the same jitter is
+        // absorbed. (The engine relies on this because the drift PI loop refills far too slowly to
+        // climb out of a shallow re-prime in time — see rust-engine `new_fifo`.)
+        let jitter = |target: usize| -> u64 {
+            let mut f = CushionFifo::new(4, 8, 0u32);
+            f.set_reprime_target(target);
+            for _ in 0..4 {
+                f.pull(); // drain the prefill
+            }
+            f.pull(); // underrun -> reprime begins
+                      // The worker rebuilds exactly `target` blocks, then the drain resumes.
+            for i in 0..target {
+                f.push(i as u32);
+                f.pull();
+            }
+            // Now one pull races ahead of the worker (a single jitter spike, no push this tick).
+            let p = f.pull().0;
+            if p == Pull::Underrun {
+                1
+            } else {
+                0
+            }
+        };
+        assert_eq!(jitter(1), 1, "one-block re-prime underruns again on the first jitter spike");
+        assert_eq!(jitter(4), 0, "full-cushion re-prime absorbs the same jitter spike");
     }
 
     #[test]
