@@ -15,6 +15,10 @@
 #![cfg_attr(not(windows), allow(dead_code))]
 
 mod assets;
+// Pure capture-mode selection used by the Windows-only `vision` module. Compiled under `test` too
+// so its unit tests run on Linux/CI, where the `vision` module itself is `cfg`-ed out.
+#[cfg(any(windows, test))]
+mod camera_fmt;
 mod geometry;
 mod hp_eq;
 mod interp;

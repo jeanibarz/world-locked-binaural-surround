@@ -385,15 +385,43 @@ pub fn spawn_camera_pose(
 }
 
 /// Open a camera at a requested resolution/fps (0 ⇒ a controlled 640×480@30 default, not nokhwa's
-/// `AbsoluteHighestFrameRate` which can pick a tiny or 1080p mode — BUG-28).
+/// `AbsoluteHighestFrameRate` which can pick a tiny or 1080p mode — BUG-28). The mode is chosen by
+/// [`crate::camera_fmt::pick_camera_mode`] from the device's own capability list, so it opens on
+/// cameras that offer no MJPEG (issue #171), not just those that happen to match a fixed request.
 fn open_camera(id: &str, w: u32, h: u32, fps: u32) -> Result<nokhwa::Camera, String> {
     use nokhwa::pixel_format::RgbFormat;
-    use nokhwa::utils::{CameraFormat, FrameFormat, RequestedFormat, RequestedFormatType, Resolution};
+    use nokhwa::utils::{FrameFormat, RequestedFormat, RequestedFormatType};
     let (rw, rh) = if w > 0 && h > 0 { (w, h) } else { (640, 480) };
     let rfps = if fps > 0 { fps } else { 30 };
-    let want = CameraFormat::new(Resolution::new(rw, rh), FrameFormat::MJPEG, rfps);
-    let fmt = RequestedFormat::new::<RgbFormat>(RequestedFormatType::Closest(want));
-    let mut cam = nokhwa::Camera::new(camera_index_from_id(id), fmt).map_err(|e| e.to_string())?;
+
+    // Open permissively first. `None` fulfils with the first decodable mode, which succeeds
+    // whenever the device exposes *any* color format. We deliberately do NOT ask nokhwa for a
+    // `Closest(MJPEG …)` mode: its matcher only considers modes whose `FrameFormat` equals the one
+    // requested (and its fps step demands an exact resolution), so a hard-coded MJPEG request fails
+    // with "Could not initialize MediaFoundation: Failed to fulfill requested format" on the many
+    // Windows cameras that expose only YUYV/NV12 (issue #171 regression).
+    let probe = RequestedFormat::new::<RgbFormat>(RequestedFormatType::None);
+    let mut cam = nokhwa::Camera::new(camera_index_from_id(id), probe).map_err(|e| e.to_string())?;
+
+    // Then pick the mode closest to the requested resolution/fps from what the device *actually*
+    // supports, and apply it before streaming — a controlled resolution (BUG-28 / issue #171), but
+    // chosen robustly across whatever pixel formats the camera offers. If the device can't be
+    // queried or nothing is returned, the probe mode stays selected and is what `open_stream` runs.
+    let formats = cam.compatible_camera_formats().unwrap_or_default();
+    let modes: Vec<(u32, u32, u32, bool)> = formats
+        .iter()
+        .map(|f| {
+            let r = f.resolution();
+            (r.x(), r.y(), f.frame_rate(), f.format() == FrameFormat::MJPEG)
+        })
+        .collect();
+    if let Some(i) = crate::camera_fmt::pick_camera_mode(&modes, rw, rh, rfps) {
+        // Best-effort: the probe mode is already selected, so a backend that refuses the switch
+        // must not sink the whole open. `Exact(formats[i])` is guaranteed to fulfil (the mode came
+        // straight from the device's own list), sidestepping nokhwa's brittle `Closest`.
+        let want = RequestedFormat::new::<RgbFormat>(RequestedFormatType::Exact(formats[i]));
+        let _ = cam.set_camera_requset(want);
+    }
     cam.open_stream().map_err(|e| e.to_string())?;
     Ok(cam)
 }
