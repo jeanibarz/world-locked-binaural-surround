@@ -8,6 +8,12 @@ sitting and leave the remainder unchecked.
 
 Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done.
 
+## Active native-engine reliability follow-ups
+
+- [x] **Capture recovery after live block switches (#215):** reproduce persistent starvation with
+  a real Windows capture stall, drain queued packets per service, and add packet / production
+  pipeline recovery tests plus an automated host gate. See journal 82.
+
 ## M0 — Foundations
 
 - [x] Repo, README, requirements, AGENTS contract, journal skeleton, backlog

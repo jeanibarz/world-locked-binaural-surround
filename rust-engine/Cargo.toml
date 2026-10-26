@@ -21,15 +21,12 @@ hound = "3.5"
 realfft = "3.5"
 rustfft = "6"
 
-# WASAPI audio I/O is Windows-only; on other targets the engine builds (for the pack/geometry unit
-# tests) but main() prints a notice.
-[target.'cfg(windows)'.dependencies]
+# The FIFO and production output resampler are portable so recovery tests use the same
+# buffering, drift correction, and interpolation as the Windows audio thread.
 audio_io = { path = "../rust-audio-io" }
-# Variable-ratio async resampler on the output path (#192): corrects the source↔output clock drift
-# that drains the cushion FIFO (the sawtooth underruns), and converts a mismatched output-endpoint
-# rate. Polynomial (FastFixedIn) is ample for tens-of-ppm nudges and a 48k↔44.1k nominal — no sinc
-# cost. rubato 0.15 depends on realfft ^3.2, unifying with the engine's realfft 3.5 (no new tree).
 rubato = "0.15.0"
+
+[target.'cfg(windows)'.dependencies]
 # The Rust-native head-pose pipeline (ONNX via ort) — the zero-Python tracker.
 vision_client = { path = "../rust-vision-client", features = ["inference"] }
 # Minimal blocking HTTP (no TLS) to pull the camera MJPEG frames that feed the pose pipeline.

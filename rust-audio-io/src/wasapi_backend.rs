@@ -179,22 +179,23 @@ impl WasapiLoopback {
     }
 }
 
-impl AudioSource for WasapiLoopback {
-    fn format(&self) -> StreamFormat {
-        self.format
+impl crate::capture::PacketSource for WasapiLoopback {
+    fn pending_frames(&self) -> Result<usize, String> {
+        self.capture.get_next_packet_size().map_err(|e| e.to_string())?
+            .map(|n| n as usize).ok_or_else(|| "loopback capture must be shared-mode".into())
     }
 
-    fn read(&mut self, out: &mut Vec<f32>, timeout_ms: u32) -> Result<Option<CaptureFlags>, String> {
-        if self.event.wait_for_event(timeout_ms).is_err() {
-            return Ok(None); // timed out
-        }
+    fn wait(&mut self, timeout_ms: u32) -> Result<bool, String> {
+        Ok(self.event.wait_for_event(timeout_ms).is_ok())
+    }
+
+    fn read_packet(&mut self, out: &mut Vec<f32>) -> Result<CaptureFlags, String> {
         let info = self.capture.read_from_device_to_deque(&mut self.scratch).map_err(|e| e.to_string())?;
         // Drain whole samples from the byte deque → f32. When the device flags the packet SILENT its
         // buffer contents are undefined and must be treated as silence, so emit zeros (still draining
         // the bytes so the sample count, frames * channels, is preserved).
         let bps = self.bytes_per_sample;
         let silent = info.flags.silent;
-        let start_len = out.len();
         let mut buf = [0u8; 4];
         while self.scratch.len() >= bps {
             for b in buf.iter_mut().take(bps) {
@@ -202,12 +203,17 @@ impl AudioSource for WasapiLoopback {
             }
             out.push(if silent { 0.0 } else { bytes_to_f32(&buf[..bps], self.sample_type, self.bits) });
         }
-        if out.len() == start_len {
-            // Empty packet (a spurious wake yields AUDCLNT_S_BUFFER_EMPTY / 0 frames): not a real
-            // capture, so let the caller's timeout/heartbeat path handle it.
-            return Ok(None);
-        }
-        Ok(Some(CaptureFlags { discontinuity: info.flags.data_discontinuity, silent }))
+        Ok(CaptureFlags { discontinuity: info.flags.data_discontinuity, silent })
+    }
+}
+
+impl AudioSource for WasapiLoopback {
+    fn format(&self) -> StreamFormat {
+        self.format
+    }
+
+    fn read(&mut self, out: &mut Vec<f32>, timeout_ms: u32) -> Result<Option<CaptureFlags>, String> {
+        crate::capture::read_available(self, out, timeout_ms)
     }
 
     fn stop(&mut self) -> Result<(), String> {

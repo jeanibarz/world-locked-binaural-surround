@@ -677,3 +677,9 @@ full story.
     Process lesson: driver-store install scripts that parse `pnputil` English labels silently no-op on
     a French host (journal 54 redux) -> bind an old package; enumerate with `/format:xml` instead.
     (-> [73](73-device-level-pull-fix.md))
+
+89. **Capture notifications are not packet counts.** After a stall, drain queued WASAPI packets
+    before waiting again. Reading one packet per event can sustain a ~35 kHz deficit on a 48 kHz
+    stream until a source gap, despite adequate DSP throughput. Test finite packet queues and
+    combined notifications, and verify recovery rate after the forced loss interval rather than
+    averaging the whole run. (→ [82](82-wasapi-coalesced-event-recovery.md))
