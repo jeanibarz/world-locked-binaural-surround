@@ -78,11 +78,15 @@ mod engine {
 
     type StereoBlock = Vec<f32>; // interleaved L,R, length block*2
 
-    /// How many blocks the cushion FIFO rebuilds after an underrun before resuming the drain (#192).
-    /// One block = the shortest possible silent hole: safe now that the output resampler's PI loop
-    /// holds the fill at the cushion, so an underrun is a rare transient (a render stall), not the
-    /// periodic drift sawtooth that the old full-cushion re-prime was guarding against.
-    const REPRIME_TARGET_BLOCKS: usize = 1;
+    // NOTE (#192 reverted): the engine used to lower the FIFO re-prime to a single block, trusting
+    // the output resampler's PI loop to refill the cushion afterwards. But that loop is deliberately
+    // SLOW (see `drift.rs` — it settles over minutes), so a 1-block re-prime leaves the FIFO
+    // near-empty for ~a minute after any underrun; during that window every render-jitter spike
+    // underruns again. When underruns cluster (e.g. right after a block-size change), the result is
+    // a sustained dropout storm that long outlives the trigger. So we now re-prime to the FIFO's
+    // journal-81 default — the FULL cushion — restoring the whole safety margin in one bounded
+    // (~cushion-ms) silent fill. A rare isolated underrun costs that one short fill instead of a
+    // minute of cracks; the PI loop then only has to hold the fill, never climb back to it.
 
     /// The global headroom pre-attenuation applied to the stereo output before the headphone-EQ
     /// chain (#193). The owner's EqualizerAPO root `config.txt` ran `Preamp: -20 dB` ahead of the
@@ -91,11 +95,13 @@ mod engine {
     /// the owner listened at; the BUG-21 output clamp is the final clip safety behind it.
     const GLOBAL_OUTPUT_PREAMP_DB: f64 = -20.0;
 
-    /// Build a cushion FIFO with the engine's softened re-prime depth applied (#192). Used both at
-    /// start-up and on a live block/cushion RECONFIG so the two agree.
+    /// Build a cushion FIFO that re-primes to the full cushion after an underrun (see the note on
+    /// the re-prime depth above). Used both at start-up and on a live block/cushion RECONFIG so the
+    /// two agree. `CushionFifo::new` already defaults the re-prime target to the full cushion, but we
+    /// set it explicitly so the depth is stated at the call site and survives a default change.
     fn new_fifo(cushion: usize, block: usize) -> CushionFifo<StereoBlock> {
         let mut f = CushionFifo::new(cushion, cushion * 2, vec![0.0f32; block * 2]);
-        f.set_reprime_target(REPRIME_TARGET_BLOCKS);
+        f.set_reprime_target(cushion);
         f
     }
 
