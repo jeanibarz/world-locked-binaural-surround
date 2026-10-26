@@ -1,0 +1,24 @@
+[package]
+name = "vision_client"
+version = "0.1.0"
+edition = "2021"
+description = "Versioned wire protocol + the Rust-native head-pose body (ONNX BlazeFace + FaceMesh -> Kabsch solve) for the engine <-> head-pose helper boundary (R-engine vision-client). The ownable, zero-Python replacement for the MediaPipe sidecar."
+publish = false
+
+[features]
+# The wire protocol + the pure Kabsch solve build with no heavy deps (CI-light).
+default = []
+# The real vision body: ONNX inference (ort), image decode/warp. Pulls onnxruntime.
+inference = ["dep:ort", "dep:image"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+nalgebra = "0.33"
+ort = { version = "=2.0.0-rc.10", features = ["ndarray"], optional = true }
+image = { version = "0.25.5", default-features = false, features = ["jpeg", "png"], optional = true }
+
+[[bin]]
+name = "pose_dump"
+path = "src/bin/pose_dump.rs"
+required-features = ["inference"]

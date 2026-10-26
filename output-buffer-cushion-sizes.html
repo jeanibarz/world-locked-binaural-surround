@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Output buffer — across cushion sizes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0d1117; --panel:#151c28; --inset:#0d1117;
+  --border:#243044; --border2:#2a3547; --hair:#1f2a3b;
+  --text:#e6edf6; --text2:#d6deea; --muted:#b3bfd2; --muted2:#5b6678;
+  --cyan:#35d0d0; --amber:#ffb340; --green:#4cd98a; --red:#ff6b6b;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,sans-serif}
+.mono{font-family:'JetBrains Mono',monospace}
+.wrap{max-width:900px;margin:0 auto;padding:28px 16px 64px}
+h1{font-size:20px;font-weight:600;margin:0 0 4px}
+.sub{color:var(--muted);font-size:13px;margin:0 0 6px;line-height:1.5}
+.rule{color:var(--text2);font-size:12.5px;margin:0 0 4px;line-height:1.6;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:10px 12px}
+.legend{color:var(--muted2);font-size:12px;margin:14px 0 22px}
+.legend b{color:var(--text2);font-weight:500}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px 18px 18px;margin-bottom:16px}
+.card h2{font-size:14px;font-weight:600;margin:0 0 2px}
+.card .cap{font:500 11px 'JetBrains Mono',monospace;color:var(--muted2);margin:0 0 6px}
+.meter{display:flex;align-items:center;gap:14px;margin-top:12px}
+.state-cap{width:120px;font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted2);flex:none}
+/* the bar sits in a realistic ~300px column, like the cockpit's System panel */
+.barbox{width:300px;flex:none}
+.cells-wrap{position:relative;padding-top:9px}
+.cells{display:flex;gap:2px;height:14px}
+.cell{flex:1;border-radius:2px;background:var(--inset);border:1px solid var(--border2)}
+.cell.gMargin{background:var(--green);border-color:transparent}
+.cell.alarm{background:rgba(255,107,107,.18);border-color:var(--red)}
+.cell.hCyan{background:rgba(53,208,208,.5);border-color:transparent}
+.cell.hAmber{background:var(--amber);border-color:transparent}
+.cell.divide{margin-left:8px}
+.tgt-tick{position:absolute;top:0;width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;border-top:5px solid var(--cyan);transform:translateX(-50%)}
+.val{font:500 12px 'JetBrains Mono',monospace;color:var(--text);width:120px;flex:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Output buffer — block cells across cushion sizes</h1>
+  <p class="sub">The chosen D+B combo (flavor 3), rendered at cushion 2 / 4 / 8 / 16 blocks to check it holds
+  at every size. Capacity is always 2&times;cushion. The bar is shown at a realistic ~300&nbsp;px width.</p>
+  <p class="rule"><b>Colour rule:</b> margin cells (1…cushion) are <span style="color:var(--green)">green</span>
+  when full, <span style="color:var(--red)">red</span> when empty (underfill alarm). Headroom cells
+  (cushion+1…2&times;cushion) are <span style="color:var(--cyan)">cyan</span> spare, except the top
+  <b>25% of capacity</b> (min 1 cell) nearest the overflow edge, which are
+  <span style="color:var(--amber)">amber</span>. A cyan tick marks the target (= cushion).</p>
+  <p class="legend">So at <b>cushion 2</b> (capacity 4): target = cell 2; cell 3 = cyan spare; cell 4 = amber. Exactly the question you asked. Each card shows Starved / On-target / Overfull.</p>
+  <div id="cards"></div>
+</div>
+<script>
+const CUSHIONS = [2, 4, 8, 16];
+const mk = (n, fn) => Array.from({length:n}, (_, i) => fn(i)).join("");
+
+function bar(cush, fill) {
+  const cap = 2 * cush;
+  const amberFrom = cap - Math.max(1, Math.round(cap * 0.25)); // top 25% of capacity -> amber
+  const tickPct = (cush - 0.5) / cap * 100;
+  const cells = mk(cap, i => {
+    const on = i < fill, margin = i < cush;
+    let c = "cell";
+    if (margin) c += on ? " gMargin" : " alarm";
+    else if (on) c += (i >= amberFrom) ? " hAmber" : " hCyan";
+    if (i === cush) c += " divide";
+    return `<div class="${c}"></div>`;
+  });
+  return `<div class="cells-wrap"><div class="tgt-tick" style="left:${tickPct}%"></div>` +
+         `<div class="cells">${cells}</div></div>`;
+}
+
+function states(cush) {
+  const cap = 2 * cush;
+  return [
+    {cap:"Starved",   fill: Math.max(1, Math.round(cush * 0.3))},
+    {cap:"On target", fill: cush},
+    {cap:"Overfull",  fill: Math.min(cap, cush + Math.max(1, Math.round(cush * 0.75)))},
+  ];
+}
+
+document.getElementById("cards").innerHTML = CUSHIONS.map(cush => `
+  <div class="card">
+    <h2>Cushion ${cush} blocks</h2>
+    <div class="cap">capacity ${2*cush} cells · amber = top ${Math.max(1, Math.round(2*cush*0.25))} cell(s)</div>
+    ${states(cush).map(s => `
+      <div class="meter">
+        <span class="state-cap">${s.cap}</span>
+        <span class="barbox">${bar(cush, s.fill)}</span>
+        <span class="val">${s.fill} / ${cush} blk</span>
+      </div>`).join("")}
+  </div>`).join("");
+</script>
+</body>
+</html>

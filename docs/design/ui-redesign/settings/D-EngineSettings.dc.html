@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Settings</title>
+<script src="./vendor/react.js"></script>
+<script src="./vendor/react-dom.js"></script>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div style="width:560px;height:1000px;box-sizing:border-box;display:flex;flex-direction:column;background:#0d1117;font-family:Inter,system-ui,sans-serif;color:#e6edf6;overflow:hidden">
+
+  <!-- Dialog title bar -->
+  <div style="height:36px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 12px 0 14px;background:#f1f3f6;color:#1d2530;font-size:13px">
+    <span>Settings</span>
+    <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" style="color:#5b6678"><path d="M1 1l10 10M11 1L1 11" stroke="currentColor" stroke-width="1.2" fill="none"></path></svg>
+  </div>
+
+  <div style="flex:1;min-height:0;box-sizing:border-box;padding:20px 24px 18px;display:flex;flex-direction:column;gap:18px">
+
+    <!-- Camera -->
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div style="font-size:12px;letter-spacing:.08em;color:#b3bfd2;font-weight:600">CAMERA</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;height:38px;box-sizing:border-box;padding:0 12px;background:#151c28;border:1px solid #2a3547;border-radius:8px;font-size:14px">webcam 0 <span style="color:#b3bfd2">▾</span></div>
+      <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px">
+        <div style="display:flex;align-items:center;justify-content:space-between;height:38px;box-sizing:border-box;padding:0 12px;background:#151c28;border:1px solid #2a3547;border-radius:8px;font-size:14px"><span style="color:#b3bfd2">Resolution</span><span style="display:flex;gap:10px;align-items:center">640×480 <span style="color:#b3bfd2">▾</span></span></div>
+        <div style="display:flex;align-items:center;justify-content:space-between;height:38px;box-sizing:border-box;padding:0 12px;background:#151c28;border:1px solid #2a3547;border-radius:8px;font-size:14px"><span style="color:#b3bfd2">Frame rate</span><span style="display:flex;gap:10px;align-items:center">30 fps <span style="color:#b3bfd2">▾</span></span></div>
+      </div>
+      <div style="font-size:12px;line-height:1.45;color:#b3bfd2">A higher frame rate lowers capture and stale latency, but the tracker has to keep up (currently 21 Hz).</div>
+    </div>
+
+    <!-- Engine -->
+    <div style="display:flex;flex-direction:column;gap:10px;border-top:1px solid #243044;padding-top:18px">
+      <div style="font-size:12px;letter-spacing:.08em;color:#b3bfd2;font-weight:600">ENGINE</div>
+      <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px">
+        <div style="display:flex;align-items:center;justify-content:space-between;height:38px;box-sizing:border-box;padding:0 12px;background:#151c28;border:1px solid #2a3547;border-radius:8px;font-size:14px">timealign <span style="color:#b3bfd2">▾</span></div>
+        <div style="display:flex;background:#151c28;border:1px solid #2a3547;border-radius:8px;padding:2px;gap:2px"><button type="button" style="flex:1;border:0;background:transparent;color:#d6deea;font:500 14px Inter,sans-serif;height:32px;border-radius:6px">cpu</button><button type="button" style="flex:1;border:0;background:#35d0d0;color:#06222a;font:700 14px Inter,sans-serif;height:32px;border-radius:6px">rust</button><button type="button" style="flex:1;border:0;background:transparent;color:#d6deea;font:500 14px Inter,sans-serif;height:32px;border-radius:6px">gpu</button></div>
+      </div>
+    </div>
+
+    <!-- Output -->
+    <div style="display:flex;flex-direction:column;gap:14px;border-top:1px solid #243044;padding-top:18px">
+      <div style="font-size:12px;letter-spacing:.08em;color:#b3bfd2;font-weight:600">AUDIO OUTPUT</div>
+
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <span style="font-size:14px">Block size</span>
+          <div style="display:flex;align-items:center;gap:12px"><span style="font:400 12px 'JetBrains Mono',monospace;color:#b3bfd2">21.3 ms per block</span><div style="display:inline-flex;align-items:center;background:#151c28;border:1px solid #2a3547;border-radius:8px;height:36px"><button type="button" aria-label="Decrease block size" style="width:36px;height:36px;border:0;background:transparent;color:#e6edf6;font:500 18px Inter,sans-serif">−</button><span style="width:62px;text-align:center;font:500 14px 'JetBrains Mono',monospace">1024</span><button type="button" aria-label="Increase block size" style="width:36px;height:36px;border:0;background:transparent;color:#e6edf6;font:500 18px Inter,sans-serif">+</button></div></div>
+        </div>
+        <div style="font-size:12px;line-height:1.45;color:#b3bfd2">Smaller blocks lower latency but raise render load (currently 40%).</div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <span style="font-size:14px">Cushion</span>
+          <div style="display:inline-flex;align-items:center;background:#151c28;border:1px solid #2a3547;border-radius:8px;height:36px"><button type="button" aria-label="Decrease cushion" style="width:36px;height:36px;border:0;background:transparent;color:#e6edf6;font:500 18px Inter,sans-serif">−</button><span style="width:76px;text-align:center;font:500 14px 'JetBrains Mono',monospace">40 ms</span><button type="button" aria-label="Increase cushion" style="width:36px;height:36px;border:0;background:transparent;color:#e6edf6;font:500 18px Inter,sans-serif">+</button></div>
+        </div>
+        <div style="font-size:12px;line-height:1.45;color:#b3bfd2">Extra output buffer that protects against dropouts. It adds to latency.</div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <span style="font-size:14px">Exclusive device</span>
+          <button type="button" role="switch" aria-checked="false" aria-label="Exclusive device" style="width:42px;height:24px;border-radius:999px;border:1px solid #3a475c;background:#151c28;padding:0;position:relative"><span style="position:absolute;left:3px;top:4px;width:16px;height:16px;border-radius:50%;background:#b3bfd2"></span></button>
+        </div>
+        <div style="font-size:12px;line-height:1.45;color:#b3bfd2">Takes exclusive control of the output device. Other apps lose audio while on.</div>
+      </div>
+    </div>
+
+    <!-- Spatial filter -->
+    <div style="display:flex;flex-direction:column;gap:12px;border-top:1px solid #243044;padding-top:18px">
+      <div style="font-size:12px;letter-spacing:.08em;color:#b3bfd2;font-weight:600">SPATIAL FILTER (HRIR)</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:16px">
+        <span style="font-size:14px">Filter</span>
+        <div style="width:280px;display:flex;align-items:center;justify-content:space-between;height:38px;box-sizing:border-box;padding:0 12px;background:#151c28;border:1px solid #2a3547;border-radius:8px;font-size:14px">mine <span style="color:#b3bfd2">▾</span></div>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:16px">
+        <span style="font-size:14px">Compensation</span>
+        <div style="width:280px;display:flex;background:#151c28;border:1px solid #2a3547;border-radius:8px;padding:2px;gap:2px"><button type="button" style="flex:1;border:0;background:transparent;color:#d6deea;font:500 14px Inter,sans-serif;height:32px;border-radius:6px">none</button><button type="button" style="flex:1;border:0;background:transparent;color:#d6deea;font:500 14px Inter,sans-serif;height:32px;border-radius:6px">CTF</button><button type="button" style="flex:1;border:0;background:#35d0d0;color:#06222a;font:700 14px Inter,sans-serif;height:32px;border-radius:6px">DTF</button></div>
+      </div>
+      <div style="font-size:12px;line-height:1.45;color:#b3bfd2">Compensation is applied on top of the selected filter.</div>
+    </div>
+
+    <!-- Headphone compensation -->
+    <div style="display:flex;flex-direction:column;gap:12px;border-top:1px solid #243044;padding-top:18px">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div style="font-size:12px;letter-spacing:.08em;color:#b3bfd2;font-weight:600">HEADPHONE COMPENSATION</div>
+        <button type="button" role="switch" aria-checked="true" aria-label="Headphone compensation" style="width:42px;height:24px;border-radius:999px;border:1px solid #35d0d0;background:#35d0d0;padding:0;position:relative"><span style="position:absolute;right:3px;top:3px;width:16px;height:16px;border-radius:50%;background:#06222a"></span></button>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;height:38px;box-sizing:border-box;padding:0 12px;background:#151c28;border:1px solid #2a3547;border-radius:8px;font-size:14px">Sennheiser HD 600 <span style="color:#b3bfd2">▾</span></div>
+      <div style="font-size:12px;line-height:1.45;color:#b3bfd2">Corrects the headphone's own frequency response. Pick your model, or switch off if your headphones are already equalized.</div>
+    </div>
+
+    <div style="margin-top:auto;display:flex;align-items:center;gap:10px">
+      <button type="button" style="height:38px;padding:0 14px;border-radius:8px;border:0;background:transparent;color:#b3bfd2;font:500 13px Inter,sans-serif">Reset to defaults</button>
+      <span style="flex:1"></span>
+      <button type="button" style="height:38px;padding:0 18px;border-radius:8px;border:1px solid #2a3547;background:transparent;color:#e6edf6;font:600 13px Inter,sans-serif">Cancel</button>
+      <button type="button" style="height:38px;padding:0 20px;border-radius:8px;border:0;background:#35d0d0;color:#06222a;font:700 13px Inter,sans-serif">Apply</button>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":560,"height":1000}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

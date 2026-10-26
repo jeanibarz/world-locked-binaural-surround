@@ -38,6 +38,9 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import json
+import os
+import subprocess
 import threading
 import time
 from collections import deque
@@ -122,6 +125,65 @@ EXPERIMENT_METHODS = ("nearest", "timealign", "minphase", "notchwarp")
 RESTART_EXIT_CODE = 97
 
 
+def _pid_is_live_python(pid: int) -> bool:
+    """Best-effort check that ``pid`` is a live Python process (guards single-instance against a
+    recycled PID before we terminate it)."""
+    if pid <= 0 or pid == os.getpid():
+        return False
+    try:
+        if os.name == "nt":
+            out = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
+                capture_output=True, text=True, timeout=5)
+            return "python" in out.stdout.lower()
+        os.kill(pid, 0)  # POSIX liveness probe
+        return True
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+
+
+def _terminate_pid(pid: int) -> None:
+    """Forcibly stop ``pid`` (and its children) so it releases the audio device, camera and port."""
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(pid), "/F", "/T"],
+                           capture_output=True, timeout=10)
+        else:
+            os.kill(pid, 15)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def ensure_single_instance(lock_path: Path) -> None:
+    """Guarantee one live engine: if a previous instance is recorded in ``lock_path`` and still
+    running, terminate it (so it frees the camera / FiiO / web port) before we claim the resources,
+    then record our own PID and arrange to clear it on exit. Replace-the-previous, by design."""
+    try:
+        prev_pid = int(json.loads(lock_path.read_text(encoding="utf-8")).get("pid", 0))
+    except (OSError, ValueError, TypeError, AttributeError):
+        prev_pid = 0
+    if _pid_is_live_python(prev_pid):
+        print(f"single-instance: replacing the previous cockpit (pid {prev_pid})")
+        _terminate_pid(prev_pid)
+        for _ in range(50):  # wait up to ~5 s for it to exit and release the devices
+            if not _pid_is_live_python(prev_pid):
+                break
+            time.sleep(0.1)
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path.write_text(json.dumps({"pid": os.getpid()}), encoding="utf-8")
+    except OSError:
+        return
+
+    def _release() -> None:
+        try:  # only clear the lock if it is still ours (not a replacement's)
+            if int(json.loads(lock_path.read_text(encoding="utf-8")).get("pid", 0)) == os.getpid():
+                lock_path.unlink(missing_ok=True)
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
+    atexit.register(_release)
+
+
 def _load_mono_loop(path: Path, target_sr: int) -> np.ndarray:
     """Read a WAV as mono float64 in [-1, 1], resampled to ``target_sr``."""
     import warnings
@@ -201,7 +263,12 @@ def main(argv=None) -> int:
                         "a head turn is heard ~this late, since the cushion of already-rendered "
                         "audio drains first. Lower = snappier; raise if you get dropouts. Note the "
                         "cushion floors at 2 render blocks, so below ~2x the --block duration this "
-                        "has no effect — lower --block to actually shrink the floor (journal 76).")
+                        "has no effect — lower --block to actually shrink the floor (journal 76). "
+                        "The cushion is whole render blocks (round(ms·sr/block)), so it grows in "
+                        "~--block-duration steps: at block 2048 the jump from 2→3 blocks needs "
+                        "~107 ms, 3→4 ~150 ms — a smaller bump reads back as the same depth. The "
+                        "cushion is held as a setpoint, not just a prefill: after an underrun "
+                        "the output re-primes to full depth so the margin persists (journal 81).")
     p.add_argument("--min-cutoff", type=float, default=1.0)
     p.add_argument("--beta", type=float, default=0.3)
     p.add_argument("--yaw-sign", type=float, default=1.0)
@@ -245,16 +312,38 @@ def main(argv=None) -> int:
                         "concurrent voices so a moving source on a fine grid stays real-time")
     p.add_argument("--rotate-speed", type=float, default=45.0,
                    help="auto-rotation speed of the test source in deg/s (toggle with R)")
-    p.add_argument("--ui", choices=("console", "cockpit"), default="console",
-                   help="front-end: 'console' = the OpenCV window (default); 'cockpit' = the "
-                        "native Dear PyGui cockpit (B6.12) — same engine, resizable, with live "
-                        "method/backend/predict/test controls. Needs the 'gui' extra (dearpygui).")
+    p.add_argument("--ui", choices=("web",), default="web",
+                   help="front-end: the web cockpit (HTTP server + browser/native window). The "
+                        "only UI; kept as a flag for forward compatibility.")
+    p.add_argument("--port", type=int, default=0,
+                   help="fixed HTTP port for the cockpit (0 = pick a free one). A native shell "
+                        "(Tauri) uses a fixed port so it knows the window URL without parsing stdout.")
+    p.add_argument("--no-browser", action="store_true",
+                   help="serve only; do not auto-open a browser. Use when a native shell provides "
+                        "the window, or to open the URL in Chrome yourself for inspection.")
     p.add_argument("--log-fifo-fill", type=Path, default=None,
                    help="A0 diagnostic (RFC Track A): log output-FIFO fill vs time to this CSV, "
                         "then run `python -m binaural_headtracker.fifo_drift <csv>` to classify "
                         "the queue term as clock skew (A1 resampler) vs jitter/burst (Track B). "
                         "Off by default; measure at a fixed --block/--latency-ms.")
     args = p.parse_args(argv)
+
+    # --- crash-safe settings (RFC rfc-crash-safe-settings v2): overlay persisted user-knobs onto the
+    # launch flags (settings win; host identity is untouched), with a one-step DEFAULTS backstop. ---
+    import settings_binding as _SB
+    from pathlib import Path as _CfgPath
+    from binaural_headtracker.config_store import ConfigStore as _ConfigStore
+    # resolve to absolute so the config dir never depends on the launch cwd
+    _cfg_dir = (_CfgPath(args.model).resolve().parent if args.model else _CfgPath.home()) / "cockpit_config"
+    ensure_single_instance(_cfg_dir / ".instance.lock")  # replace any previous live engine first
+    settings_store = _ConfigStore(_cfg_dir)
+    saved_cfg, _dropped_keys, _settings_backstop = _SB.load_effective(settings_store, args)
+    settings_store.mark_starting()  # cleared once audio is up (if the start never completes -> defaults)
+    if _dropped_keys:
+        print(f"settings: dropped invalid keys {_dropped_keys} (using defaults for them)")
+    if _settings_backstop:
+        print("settings: previous start did not complete — started with DEFAULTS; "
+              f"your settings were moved to {settings_store.bad_path}")
     pull_mode = args.pull_sysvad  # Approach A: drive our SYSVAD device from the output clock
     # Note: the pull path needed a 200 ms cushion in journal 75, but journal 76 found that was the
     # cockpit starving the render worker on the GIL, not an intrinsic cost — fixed by the tighter
@@ -364,6 +453,8 @@ def main(argv=None) -> int:
     hrir_sets = discover_sets(args.hrir_sets_dir)
     sets_by_name = {s.name: s for s in hrir_sets}
     cur_set = {"name": hrir_sets[0].name}
+    if saved_cfg.get("hrir") in {s.name for s in hrir_sets}:  # apply a persisted HRIR set if it exists
+        cur_set["name"] = saved_cfg["hrir"]
     if len(hrir_sets) > 1:
         print(f"HRIR sets ({len(hrir_sets)}): " + ", ".join(s.name for s in hrir_sets)
               + " — switch live in the cockpit")
@@ -657,6 +748,18 @@ def main(argv=None) -> int:
                 cb_error.append(exc)
 
     out_carry = {"buf": np.zeros((0, 2))}  # leftover rendered samples < one output request
+    # Re-prime the cushion after a starvation (journal 81). The cushion is a one-shot *prefill*:
+    # in the single-master-clock pull path the worker is rate-locked to the output (one
+    # KookrPullTick per callback → one capture period in), so it produces exactly one block per
+    # block it consumes and can NEVER get ahead to rebuild margin a transient has eaten. Left to
+    # itself the FIFO therefore rides the 0–1-block floor after the first hiccup — the configured
+    # cushion stops being margin and the next jitter underruns (the rare crack the owner hears).
+    # On underrun we instead hold the output silent — the clock keeps ticking (kset above), so the
+    # worker keeps filling — until the FIFO is back to the full ``cushion`` depth, then resume with
+    # the whole cushion restored. Bounded: the rebuild silence lasts at most the cushion's own
+    # latency, which the owner already accepts as head-move-to-ear delay. Flag is touched only by
+    # this callback thread; the ``out_fifo`` read stays under ``fifo_lock``.
+    reprime = {"active": False}
 
     def out_cb(outdata, frames, _t, status):  # noqa: ANN001  (FIFO → headphones)
         try:
@@ -668,6 +771,15 @@ def main(argv=None) -> int:
             with fifo_lock:
                 if fifo_log is not None:  # A0: standing FIFO depth (frames) at this callback
                     fifo_log["rows"].append((now - fifo_log["t0"], len(out_fifo) * fifo_log["n"]))
+                if reprime["active"]:
+                    # Rebuilding after a starvation: stay silent until the cushion is whole again,
+                    # so we resume with real margin instead of limping along at the empty floor.
+                    if len(out_fifo) >= cushion:
+                        reprime["active"] = False
+                    else:
+                        outdata.fill(0)
+                        out_carry["buf"] = np.zeros((0, 2))
+                        return
                 while buf.shape[0] < frames and out_fifo:
                     block, pose_t, render_t = out_fifo.popleft()
                     # Measure pose-age-at-ear at the moment the block is handed to the device:
@@ -682,6 +794,8 @@ def main(argv=None) -> int:
             if n < frames:
                 outdata[n:] = 0  # underrun → silence
                 meter["under_ts"].append(time.monotonic())  # record the dropout (cheap)
+                reprime["active"] = True   # rebuild the cushion to full depth before draining again
+                buf = buf[:n]              # drop the sub-block remainder; re-prime restarts clean
             out_carry["buf"] = buf[n:]
         except BaseException as exc:  # noqa: BLE001
             cb_error.append(exc)
@@ -694,42 +808,9 @@ def main(argv=None) -> int:
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # freshest frame, don't trail buffered ones
     cam_w, cam_h, cam_fps = C.apply_camera_settings(
         cap, width=args.cam_width, height=args.cam_height, fps=args.cam_fps)
-    detect_ms = 0.0
     recent: deque[HeadPose] = deque(maxlen=20)
     pose_filter = PoseFilter(args.min_cutoff, args.beta)
-    predictor = PosePredictor() if args.predict else None
-    pred_hud = {"ms": 0.0}  # the horizon currently used, for the readout chip
     flip_az = args.flip_az
-    miss = 0  # consecutive failed camera reads (graceful degradation, B4.2)
-    times: deque[float] = deque(maxlen=60)  # frame timestamps → tracker rate
-    show_stats = False
-    phase = 0.0
-    win = "Binaural head-tracker — world-lock passthrough"
-    if args.ui == "console":
-        cv2.namedWindow(win)
-    drag = {"on": False}
-
-    def on_mouse(event, mx, my, flags, _param):  # noqa: ANN001  — click/drag the radar to move test
-        # Press starts a drag (and turns the test source on, stopping any auto-rotation);
-        # moving with the button held sweeps the source live; release ends the drag.
-        if event == cv2.EVENT_LBUTTONDOWN:
-            az = C.radar_az_at(mx, my)
-            if az is not None:
-                with lock:
-                    test["world_az"] = float(az)
-                    test["on"] = True
-                    test["rotate"] = False
-                drag["on"] = True
-        elif event == cv2.EVENT_MOUSEMOVE and drag["on"] and (flags & cv2.EVENT_FLAG_LBUTTON):
-            az = C.radar_az_at(mx, my, allow_outside=True)
-            if az is not None:
-                with lock:
-                    test["world_az"] = float(az)
-        elif event == cv2.EVENT_LBUTTONUP:
-            drag["on"] = False
-
-    if args.ui == "console":
-        cv2.setMouseCallback(win, on_mouse)
 
     # Capture = PyAudio WASAPI loopback (raw 7.1); output = sounddevice to the headphones
     # (blocksize=0 lets it pick the host-native buffer; the callbacks handle any frame count).
@@ -784,6 +865,8 @@ def main(argv=None) -> int:
         print(f"WASAPI exclusive unavailable ({exc!r}); using shared mode.")
         out_ctx = _open_output(False)
         print(f"output: WASAPI shared ({out_ctx.latency * 1000:.0f} ms device buffer)")
+    settings_store.mark_started()  # audio opened -> the risky start completed; clear the backstop
+    _reset_req = {"v": False}  # set by the cockpit's reset hook; consumed after the loop exits
     def _run_cockpit() -> bool:
         """Drive the live engine through the Dear PyGui cockpit (B6.12 slice 2).
 
@@ -792,14 +875,37 @@ def main(argv=None) -> int:
         view-model, and the cockpit's control hooks mutate the live engine state (method, backend,
         predict, the test source placed/dragged on the radar, recenter). Returns True to reload."""
         nonlocal cap
-        import cockpit_view as CK
-
         from binaural_headtracker import cockpit as CM
 
-        win_ck = CK.CockpitWindow(title=f"world-lock passthrough — webcam {cam_index}")
+        import cockpit_web as CW
+        # reopen at the last window size the owner left (persisted on resize); fall back to the
+        # design default on first run / a bad file.
+        _win_path = _cfg_dir / "window.json"
+        _w0, _h0 = 1320, 864
+        try:
+            _wj = json.loads(_win_path.read_text(encoding="utf-8"))
+            if 600 <= int(_wj["w"]) <= 10000 and 400 <= int(_wj["h"]) <= 10000:
+                _w0, _h0 = int(_wj["w"]), int(_wj["h"])
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        win_ck = CW.WebCockpit(
+            title=f"World-Locked Binaural Surround — webcam {cam_index}", width=_w0, height=_h0,
+            port=args.port, open_browser=not args.no_browser)
+
+        def _save_window_size(w, h) -> None:  # noqa: ANN001
+            try:
+                if 600 <= int(w) <= 10000 and 400 <= int(h) <= 10000:
+                    _win_path.parent.mkdir(parents=True, exist_ok=True)
+                    tmp = _win_path.with_suffix(".json.tmp")
+                    tmp.write_text(json.dumps({"w": int(w), "h": int(h)}), encoding="utf-8")
+                    os.replace(tmp, _win_path)
+            except (OSError, ValueError):
+                pass
+        win_ck.on_window_size = _save_window_size
         q = {"stop": False, "restart": False}
         cur = {"backend": ("rust" if args.rust else "gpu" if args.gpu else "cpu"),
-               "predict": args.predict, "comp": "ctf"}
+               "predict": args.predict,
+               "comp": (saved_cfg.get("comp") if saved_cfg.get("comp") in ("ctf", "df") else "ctf")}
         predictor_ck = PosePredictor()
 
         def _recenter() -> None:
@@ -820,6 +926,7 @@ def main(argv=None) -> int:
             with lock:
                 main_rend["r"], main_rend["label"] = nm, render_label(nm, m)
                 test["renderer"], test["method"] = test_renderers[m], m
+            win_ck.set_method_display(m)  # keep the settings dialog's method seed in sync
             # The method's engine may differ from the selected backend (a requested accelerator can
             # be unavailable and fall back); keep the segment and toast honest about what's actually
             # running.
@@ -860,6 +967,9 @@ def main(argv=None) -> int:
                 # lowering just lets the worker trim to the smaller max_backlog next cycle.
                 while len(out_fifo) < cushion:
                     out_fifo.appendleft((np.zeros((blk["n"], 2)), None, None))
+            # keep the settings dialog's seed in sync: it re-reads this on open, so a stale value
+            # would make a changed cushion appear to "snap back" when the dialog is reopened.
+            win_ck.set_cushion_display(nc * blk["n"] / brir.samplerate * 1000.0)
 
         def _set_block(n) -> None:  # noqa: ANN001  — render block size (frames), live
             """Swap the render block size without a restart. Rebuilds every renderer + the output EQ
@@ -888,6 +998,8 @@ def main(argv=None) -> int:
                     while len(out_fifo) < cushion:              # block shrank → top up to target
                         out_fifo.appendleft((np.zeros((n, 2)), None, None))
             win_ck.set_block_display(n)
+            # block size changes the cushion's ms-per-block, so refresh its displayed value too
+            win_ck.set_cushion_display(cushion * n / brir.samplerate * 1000.0)
 
         def _build_for_set(hs):
             """``(main_renderer, test_renderer, reason)`` for an HRIR set, at the current block
@@ -1079,12 +1191,106 @@ def main(argv=None) -> int:
             except Exception as exc:  # noqa: BLE001
                 win_ck.toast(f"A/B save failed: {exc}", "error")
 
+        def _reset_defaults() -> None:
+            """Reset-to-defaults (settings dialog). Flag it, stop the loop, and relaunch; the actual
+            store.reset() runs after the loop exits (race-free: no auto-save can overwrite it) so the
+            relaunch loads the built-in defaults. Does NOT touch head-tracking calibration."""
+            win_ck.toast("Settings reset to defaults — reloading…", "info", seconds=4)
+            _reset_req["v"] = True
+            q["restart"] = True
+            q["stop"] = True
+
+        # Starvation watch (advisory): block/cushion apply live; if the setting then keeps starving
+        # the output we TOAST a warning — we do NOT force-revert. The user can hear it, change it
+        # back, or hit Cancel (which already restores the pre-dialog snapshot); block/cushion only
+        # cause dropouts, never an unreachable UI, so a forced revert just fought the user on
+        # genuinely-marginal-but-usable depths. The watch IGNORES the first _STARVE_SETTLE_S: a
+        # block-size change rebuilds every renderer under the lock and a cushion change re-tops the
+        # FIFO, both a one-time swap burst that must NOT read as "the new setting is bad".
+        _STARVE_SETTLE_S = 1.2    # swallow the swap/top-up transient
+        _STARVE_WINDOW_S = 4.0    # stop watching after this if it settled
+        _STARVE_UNDERRUNS = 8     # underruns AFTER settle that mean the depth genuinely can't hold
+        _watch: dict = {"t0": 0.0, "knob": ""}
+
+        # settings edit session (web dialog): changes apply live but are NOT persisted until the
+        # user Confirms; Cancel restores the snapshot from when the dialog opened. ``snap`` non-None
+        # means a session is open, which suspends the loop's auto-save. The DPG cockpit never opens
+        # a session (no dialog), so there it stays None and auto-save behaves as before.
+        _edit: dict = {"snap": None}
+
+        def _knobs_now() -> dict:
+            return _SB.current_knobs(
+                method=test["method"], backend=cur["backend"], block=blk["n"],
+                cushion_blocks=cushion, exclusive=bool(args.exclusive),
+                hrir=cur_set["name"], comp=cur["comp"], predict=cur["predict"],
+                camera=cam_index, cam_w=cam_w, cam_h=cam_h, cam_fps=cam_fps,
+                hp_eq=(args.output_eq is not None))
+
+        def _apply_snapshot(s: dict) -> None:
+            """Restore the live engine to a snapshot (dialog Cancel). exclusive/hp_eq don't apply
+            live (they need a restart), so for those only the displayed value is put back."""
+            if int(s["block"]) != blk["n"]:
+                _set_block(int(s["block"]))
+            if s["method"] != test["method"]:
+                _set_method(s["method"])
+            if s["backend"] != cur["backend"]:
+                _set_backend(s["backend"])
+            if s["comp"] != cur["comp"]:
+                _set_comp(s["comp"])
+            if s["hrir"] != cur_set["name"]:
+                _set_hrir(s["hrir"])
+            _set_cushion(int(s["cushion_blocks"]) * blk["n"] / brir.samplerate * 1000.0)
+            cur["predict"] = bool(s["predict"])
+            win_ck.set_exclusive_display(bool(s["exclusive"]))
+            win_ck.set_hpeq_display(bool(s["hp_eq"]))
+
+        def _settings_begin() -> None:
+            _edit["snap"] = _knobs_now()  # restore point; suspends auto-save until commit/cancel
+
+        def _settings_commit() -> None:
+            nonlocal _last_knobs
+            if _edit["snap"] is None:
+                return
+            kn = _knobs_now()
+            try:
+                settings_store.save(kn)  # persist the previewed state (atomic + durable)
+            except Exception:  # noqa: BLE001 — persistence must never crash the engine
+                pass
+            _last_knobs = kn
+            _edit["snap"] = None
+
+        def _settings_cancel() -> None:
+            nonlocal _last_knobs
+            snap = _edit["snap"]
+            if snap is None:
+                return
+            _apply_snapshot(snap)        # revert live engine while the session still blocks saving
+            _last_knobs = snap           # saved file already = last-confirmed, so persist nothing
+            _edit["snap"] = None
+
+        def _arm_watch(knob: str) -> None:
+            _watch["knob"], _watch["t0"] = knob, time.monotonic()
+
+        def _cushion_user(ms) -> None:  # noqa: ANN001 — settings-dialog cushion change (watched)
+            _set_cushion(ms)
+            _arm_watch("Cushion")
+
+        def _block_user(n) -> None:  # noqa: ANN001 — settings-dialog block change (watched)
+            old_n = blk["n"]
+            _set_block(n)
+            if blk["n"] != old_n:  # _set_block no-ops on unchanged/invalid sizes -> don't arm
+                _arm_watch("Block size")
+
         win_ck.on_quit = lambda: q.__setitem__("stop", True)
+        win_ck.on_reset_defaults = _reset_defaults
+        win_ck.on_settings_begin = _settings_begin
+        win_ck.on_settings_commit = _settings_commit
+        win_ck.on_settings_cancel = _settings_cancel
         win_ck.on_recenter = _recenter
         win_ck.on_method = _set_method
         win_ck.on_backend = _set_backend
-        win_ck.on_cushion = _set_cushion
-        win_ck.on_block = _set_block
+        win_ck.on_cushion = _cushion_user
+        win_ck.on_block = _block_user
         win_ck.on_test = _tog("on")
         win_ck.on_solo = _tog("solo")
         win_ck.on_rotate = _tog("rotate")
@@ -1103,6 +1309,9 @@ def main(argv=None) -> int:
         win_ck.set_block_display(blk["n"])           # stepper → the real launch block size
         win_ck.set_hrir_display(cur_set["name"])     # pills → the set actually loaded at launch
         win_ck.set_comp_display(cur["comp"])         # comp segment → the launch compensation
+        win_ck.set_method_display(test["method"])    # method dropdown → the launch method
+        win_ck.set_exclusive_display(bool(args.exclusive))  # exclusive toggle → launch value
+        win_ck.set_hpeq_display(args.output_eq is not None)  # HP-EQ toggle → launch value
         cur["backend"] = _backend_of(main_rend["r"])  # the engine that actually built at launch
         win_ck.set_backend_display(cur["backend"])    # radio → real launch backend (not 'rust'),
         if args.gpu and cur["backend"] != "gpu":      # and warn if --gpu silently fell back
@@ -1112,6 +1321,7 @@ def main(argv=None) -> int:
         times_ck: deque[float] = deque(maxlen=60)
         miss = 0
         predict_ms_used = 0.0  # persist across frames so a no-face frame doesn't blink it to 0
+        _last_knobs = dict(saved_cfg)  # auto-save: persist only when a knob actually changes
         try:
             while win_ck.running() and not q["stop"]:
                 if cb_error:
@@ -1175,6 +1385,17 @@ def main(argv=None) -> int:
                     fifo_fill = len(out_fifo)
                 recent_under = sum(1 for t in tuple(meter["under_ts"]) if now - t < 2.0)
                 recent_over = sum(1 for t in tuple(meter["over_ts"]) if now - t < 2.0)
+                if _watch["knob"]:  # a block/cushion change is being watched for starvation
+                    settle_t = _watch["t0"] + _STARVE_SETTLE_S
+                    if now >= settle_t:  # past the swap transient -> judge sustained starvation
+                        since = sum(1 for t in tuple(meter["under_ts"]) if t > settle_t)
+                        if since >= _STARVE_UNDERRUNS:    # still starving -> warn (no revert)
+                            kn = _watch["knob"]
+                            _watch["knob"] = ""
+                            win_ck.toast(f"{kn} is starving the output — raise it or lower the "
+                                         f"block size", "error", seconds=6)
+                        elif now - _watch["t0"] >= _STARVE_WINDOW_S:  # settled -> stop watching
+                            _watch["knob"] = ""
                 out_lat_ms = float(getattr(out_ctx, "latency", 0.0) or 0.0) * 1000.0
                 out_lat["ms"] = out_lat_ms
                 rlabel = main_rend["label"] + ("  · test ON" if t_on else "")
@@ -1230,9 +1451,25 @@ def main(argv=None) -> int:
                     dropout_over_ts=tuple(meter["over_ts"]),
                     dropout_under_ts=tuple(meter["under_ts"]), now=now)
                 win_ck.set_test_state(t_on, t_world_az)  # reflect engine state on the radar
+                # Auto-save direct changes (e.g. main-page Predict, DPG cockpit) — but NOT while a
+                # settings-dialog edit session is open: those changes are live-previewed and only
+                # persisted on Confirm (or discarded on Cancel). See _settings_begin/commit/cancel.
+                _cur_knobs = _knobs_now()
+                if (_cur_knobs != _last_knobs and not q["stop"]
+                        and _edit["snap"] is None):  # persist a change (atomic + durable)
+                    _last_knobs = _cur_knobs
+                    try:
+                        settings_store.save(_cur_knobs)
+                    except Exception:  # noqa: BLE001 — persistence must never crash the engine
+                        pass
                 win_ck.update(view, camera_rgb=disp, landmarks=landmarks, pose=pose,
                               world_az=world_az, channels=brir.channels,
-                              facing_i=nearest_i, head_deg=head_deg)
+                              facing_i=nearest_i, head_deg=head_deg,
+                              diag=diag, rate_hz=rate,
+                              cushion_ms=cushion * blk["n"] / brir.samplerate * 1000.0,
+                              predict=cur["predict"], exclusive=bool(args.exclusive),
+                              cam_fps=cam_fps, cam_w=cam_w, cam_h=cam_h,
+                              hrir_name=cur_set["name"], comp=cur["comp"], cal=cal)
                 win_ck.render_frame()
         finally:
             win_ck.teardown()
@@ -1245,183 +1482,10 @@ def main(argv=None) -> int:
 
     restart = False  # Reload key (Enter): tear down cleanly, then the launcher relaunches us
     try:
-        if args.ui == "cockpit":
-            restart = _run_cockpit()
-        while args.ui == "console":
-            if cb_error:
-                print(f"audio callback error: {cb_error[0]!r}")
-                break
-            ok, frame = cap.read()
-            if not ok:
-                # Camera lost: hold the last pose (audio keeps world-locking), keep the
-                # window + keys alive, and try to reopen periodically — don't spin blind.
-                miss += 1
-                if miss % 90 == 0:
-                    cap.release()
-                    cap = cv2.VideoCapture(cam_index)
-                lost = np.full((240, 520, 3), (28, 20, 16), np.uint8)
-                cv2.putText(lost, "camera lost - holding last pose (audio live)", (14, 110),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, MUTED, 1, cv2.LINE_AA)
-                cv2.putText(lost, "[Q] quit", (14, 150),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, FG, 1, cv2.LINE_AA)
-                cv2.imshow(win, lost)
-                if (cv2.waitKey(30) & 0xFF) in (ord("q"), 27):
-                    break
-                continue
-            miss = 0
-            now = time.monotonic()
-            times.append(now)
-            phase = (phase + 0.03) % 1.0
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)  # un-mirrored → real yaw sign
-            td = time.perf_counter()
-            result = detector.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
-            dms = (time.perf_counter() - td) * 1000.0
-            detect_ms = 0.9 * detect_ms + 0.1 * dms if detect_ms else dms
-            frame = cv2.flip(frame, 1)  # mirror for display only
-            pose = None
-            landmarks = result.face_landmarks[0] if result.face_landmarks else None
-            with lock:
-                cal = state["cal"]
-            if result.facial_transformation_matrixes:
-                yaw, pitch, roll = head_pose_from_matrix(
-                    np.asarray(result.facial_transformation_matrixes[0]))
-                pose = pose_filter.update(HeadPose(yaw, pitch, roll, now))
-                recent.append(pose)
-                # Orientation prediction (B8.6): extrapolate the pose forward by the measured
-                # pose-age-at-ear so the render matches the head when the sound is *heard*, not when
-                # the camera saw it — cancels the ~40 ms camera staleness. The audio steers on the
-                # predicted pose; the HUD still shows the real one.
-                pose_for_az = pose
-                if predictor is not None:
-                    predictor.update(pose)
-                    es = ear_probe.stats()
-                    predict_ms = (args.predict_ms if args.predict_ms > 0
-                                  else (es.p50 if es.n > 30 else 60.0))
-                    pred_hud["ms"] = predict_ms
-                    pose_for_az = predictor.predict(pose, predict_ms)
-                dirs = directions_for_pose(cal, pose_for_az, layout)
-            else:
-                dirs = layout.head_relative_directions()
-            if flip_az:
-                dirs = dirs.copy()
-                dirs[:, 0] = -dirs[:, 0]
-            if pose is not None:
-                with lock:
-                    state["az"] = dirs[:, 0].copy()
-                    state["pose_t"] = pose.t  # carry the capture time for the pose-age probe
-            nearest_i = nearest_front_channel(dirs)
-            head_deg = -float(dirs[c_idx][0])  # where the head faces in the world
-            # Experiment test source: advance any auto-rotation and update its head-relative az
-            # (a world-fixed source at world_az is heard at world_az + the head's own offset).
-            dt = (times[-1] - times[-2]) if len(times) >= 2 else 0.0
-            with lock:
-                if test["rotate"]:
-                    test["world_az"] = (test["world_az"] + args.rotate_speed * dt + 180.0) \
-                        % 360.0 - 180.0
-                test["az"] = float(test["world_az"]) + float(dirs[c_idx][0])
-
-            span = times[-1] - times[0]
-            rate = (len(times) - 1) / span if len(times) > 1 and span > 0 else 0.0
-            with fifo_lock:
-                fifo_fill = len(out_fifo)
-            # snapshot: out_cb may append concurrently (avoid "deque mutated during iteration")
-            recent_under = sum(1 for t in tuple(meter["under_ts"]) if now - t < 2.0)
-            recent_over = sum(1 for t in tuple(meter["over_ts"]) if now - t < 2.0)
-            out_lat_ms = float(getattr(out_ctx, "latency", 0.0) or 0.0) * 1000.0
-            out_lat["ms"] = out_lat_ms  # feed the worker's pose-age probe (it can't read out_ctx)
-            rlabel = main_rend["label"] + ("  · test ON" if test["on"] else "")
-            ear = ear_probe.stats()  # measured pose-age-at-ear distribution (B8.5)
-            diag = classify(
-                block_size=blk["n"], samplerate=brir.samplerate,
-                render_ms=meter["ms"], render_ms_peak=meter["peak"],
-                render_ms_test=(meter["test_ms"] if test["on"] else 0.0),
-                render_label=rlabel,
-                fifo_fill_blocks=fifo_fill, cushion_blocks=cushion,
-                output_latency_ms=out_lat_ms,
-                input_latency_ms=1000.0 * blk["n"] / brir.samplerate,
-                pose_rate_hz=rate, recent_underruns=recent_under,
-                recent_overflows=recent_over,
-                measured_pose_age_ms=(ear.p50 if ear.n else None),
-                measured_pose_age_p95_ms=ear.p95, measured_pose_age_p99_ms=ear.p99,
-                measured_pose_age_n=ear.n,
-                measured_stale_ms=stale_probe.stats().p50,
-                measured_queue_ms=queue_probe.stats().p50,
-                measured_device_ms=out_lat_ms,
-                detect_ms=detect_ms, camera_fps=cam_fps, cam_w=cam_w, cam_h=cam_h)
-
-            live = "TRACKING" if pose is not None else "NO FACE"
-            live_col = C.GOOD if pose is not None else C.MUTED
-            readout = [
-                ("rate", f"{rate:3.0f}Hz", C.GOOD if rate >= 20 else C.ACTIVE),
-                ("lat", f"~{diag.end_to_end_ms:.0f}ms", C.health_color(diag.health)),
-                ("facing", brir.channels[nearest_i] + ("  [flip]" if flip_az else ""), C.ACTIVE),
-            ]
-            if predictor is not None:
-                readout.append(("predict", f"{pred_hud['ms']:.0f}ms", C.GOOD))
-            if test["on"]:
-                # method now lives in the title-bar chip (shared by 7.1 + test), so the
-                # test readout only carries the source's position/mode
-                readout.append(("test", f"{test['world_az']:+.0f}\xb0"
-                                + ("  SOLO" if test["solo"] else "")
-                                + ("  rot" if test["rotate"] else ""), C.GOOD))
-            buttons = [("Test", "T", test["on"]), ("Method", "M", False),
-                       ("Stats", "S", False), ("Reload", "⏎", False), ("Quit", "Q", False)]
-            canvas = C.compose(
-                frame, title=f"world-lock passthrough — webcam {cam_index}", live=live,
-                live_color=live_col, pose=pose, landmarks=landmarks, lock=None,
-                world_az=world_az, channels=brir.channels, facing_i=nearest_i, head_deg=head_deg,
-                source_az=(test["world_az"] if test["on"] else None),
-                readout=readout, buttons=buttons, diagnosis=diag, method=test["method"],
-                show_stats=show_stats, audio_stats=True, rate_hz=rate, phase=phase)
-            cv2.imshow(win, canvas)
-            key = cv2.waitKey(1) & 0xFF
-            if key in (ord("q"), 27):
-                break
-            if key in (13, 10):  # Enter: reload — relaunch to pick up latest code (clean restart)
-                cv2.putText(canvas, "restarting...", (C.CAM_W + 20, 70),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, ACCENT, 1, cv2.LINE_AA)
-                cv2.imshow(win, canvas)
-                cv2.waitKey(1)
-                restart = True
-                break
-            if key == ord("s"):
-                show_stats = not show_stats
-            if key == ord("f"):
-                flip_az = not flip_az
-            if key == ord("t"):  # experiment layer: toggle the movable test source
-                with lock:
-                    test["on"] = not test["on"]
-            if key == ord("o"):  # solo: hear only the test source (mute the 7.1)
-                with lock:
-                    test["solo"] = not test["solo"]
-            if key == ord("r"):  # auto-rotate the test source around you
-                with lock:
-                    test["rotate"] = not test["rotate"]
-            if key in (ord("["), ord("]")):  # test level down / up
-                with lock:
-                    f = 0.8 if key == ord("[") else 1.25
-                    test["gain"] = float(np.clip(test["gain"] * f, 0.02, 4.0))
-            if key == ord("m"):  # cycle the SHARED method — rebuilds the 7.1 AND the test source
-                nxt = EXPERIMENT_METHODS[(EXPERIMENT_METHODS.index(test["method"]) + 1)
-                                         % len(EXPERIMENT_METHODS)]
-                cv2.putText(canvas, f"switching to {nxt} (building)...", (C.CAM_W + 20, 70),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, ACCENT, 1, cv2.LINE_AA)
-                cv2.imshow(win, canvas)
-                cv2.waitKey(1)
-                if nxt not in test_renderers:
-                    test_renderers[nxt] = build_test_renderer(nxt)
-                new_main, _ = build_main_renderer(nxt)  # dense-grid 7.1 for a synthesis method
-                new_label = render_label(new_main, nxt)
-                with lock:
-                    main_rend["r"] = new_main
-                    main_rend["label"] = new_label
-                    test["renderer"] = test_renderers[nxt]
-                    test["method"] = nxt
-            if key == ord("c") and recent:
-                new_cal = calibrate_neutral(list(recent), yaw_sign=args.yaw_sign,
-                                            pitch_sign=args.pitch_sign, roll_sign=args.roll_sign)
-                with lock:
-                    state["cal"] = new_cal
+        restart = _run_cockpit()
+        if _reset_req["v"]:  # loop exited -> no auto-save can race the reset write
+            settings_store.reset()
+            print("settings: reset to defaults (reloading)")
     finally:
         stop_worker.set()
         worker.join(timeout=1.0)

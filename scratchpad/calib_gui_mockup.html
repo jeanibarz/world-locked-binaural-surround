@@ -1,0 +1,224 @@
+<title>Tracker Calibration</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  /* Layout concept: a VR-style recenter console — live camera panel + top-down
+     azimuth radar of the world-locked 7.1 ring; three window arrangements as tabs. */
+  :root{
+    --bg:#0d1017; --panel:#151a24; --panel-2:#1b2230; --line:#2a3344;
+    --fg:#e8edf5; --muted:#8b97ab; --faint:#64708a;
+    --accent:#38d6d6;        /* tracking cyan */
+    --active:#f6b24b;        /* active speaker / recenter amber */
+    --good:#54d98c;
+    --display:'Rajdhani',system-ui,sans-serif;
+    --body:'IBM Plex Sans',system-ui,sans-serif;
+    --mono:'IBM Plex Mono',ui-monospace,monospace;
+    color-scheme:dark;
+  }
+  :root[data-theme="light"]{
+    --bg:#eef1f6; --panel:#ffffff; --panel-2:#f3f6fb; --line:#d4dbe6;
+    --fg:#172031; --muted:#5a6579; --faint:#8793a6;
+    --accent:#0e9d9d; --active:#c6791a; --good:#1f9e5a; color-scheme:light;
+  }
+  @media (prefers-color-scheme:light){ :root:not([data-theme="dark"]){
+    --bg:#eef1f6; --panel:#ffffff; --panel-2:#f3f6fb; --line:#d4dbe6;
+    --fg:#172031; --muted:#5a6579; --faint:#8793a6;
+    --accent:#0e9d9d; --active:#c6791a; --good:#1f9e5a; color-scheme:light;
+  }}
+  *{box-sizing:border-box}
+  body{background:var(--bg);color:var(--fg);font-family:var(--body);line-height:1.5}
+  .wrap{padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:28px;max-width:1040px;margin:0 auto}
+  header h1{font-family:var(--display);font-weight:700;letter-spacing:.02em;font-size:clamp(1.6rem,4vw,2.2rem);margin:0;text-wrap:balance}
+  header p{color:var(--muted);margin:.35rem 0 0;max-width:62ch}
+  .eyebrow{font-family:var(--display);font-weight:600;letter-spacing:.22em;text-transform:uppercase;font-size:.72rem;color:var(--accent)}
+  /* tab bar */
+  .tabs{display:flex;flex-wrap:wrap;gap:.4rem;margin:1.4rem 0 1rem;border-bottom:1px solid var(--line)}
+  .tab{font-family:var(--display);font-weight:600;letter-spacing:.03em;font-size:.95rem;color:var(--muted);background:none;border:0;border-bottom:2px solid transparent;padding:.55rem .7rem;cursor:pointer;margin-bottom:-1px}
+  .tab[aria-selected="true"]{color:var(--fg);border-bottom-color:var(--accent)}
+  .tab:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+  .caption{color:var(--muted);font-size:.9rem;margin:.1rem 0 1.1rem}
+  .caption b{color:var(--fg);font-weight:600}
+  /* the mock window */
+  .win{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;box-shadow:0 18px 50px -24px #000a}
+  .titlebar{display:flex;align-items:center;gap:.55rem;padding:.5rem .8rem;background:var(--panel-2);border-bottom:1px solid var(--line);font-family:var(--mono);font-size:.78rem;color:var(--muted)}
+  .dot3{width:11px;height:11px;border-radius:50%;background:var(--line)}
+  .titlebar .name{margin-left:.3rem;color:var(--fg)}
+  .titlebar .live{margin-left:auto;display:flex;align-items:center;gap:.4rem;color:var(--good)}
+  .pulse{width:8px;height:8px;border-radius:50%;background:var(--good);box-shadow:0 0 0 0 var(--good);animation:pulse 2s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--good) 55%,transparent)}70%{box-shadow:0 0 0 7px transparent}100%{box-shadow:0 0 0 0 transparent}}
+  @media (prefers-reduced-motion:reduce){.pulse{animation:none}}
+  /* camera + radar panels */
+  .cam{position:relative;background:radial-gradient(120% 90% at 50% 20%,#1c2636,#0b0f17);min-height:260px;overflow:hidden}
+  .cam .scan{position:absolute;inset:0;background:repeating-linear-gradient(0deg,transparent 0 3px,#ffffff06 3px 4px);pointer-events:none}
+  .facebox{position:absolute;border:1.5px solid color-mix(in srgb,var(--accent) 80%,transparent);border-radius:6px}
+  .facetag{position:absolute;font-family:var(--mono);font-size:.64rem;color:var(--accent);background:#0009;padding:.05rem .3rem;border-radius:3px;transform:translateY(-100%)}
+  .hud{position:absolute;left:.7rem;bottom:.7rem;display:flex;flex-direction:column;gap:.3rem;font-family:var(--mono);font-size:.74rem}
+  .hud .row{display:flex;align-items:center;gap:.5rem;color:var(--fg)}
+  .hud .row span.k{color:var(--muted);width:3.2em}
+  .hud .bar{position:relative;width:96px;height:5px;border-radius:3px;background:#ffffff1a;overflow:hidden}
+  .hud .bar i{position:absolute;top:0;bottom:0;left:50%;width:2px;background:var(--active)}
+  .hud .bar i.mid{background:#ffffff55;width:1px}
+  .hud .val{color:var(--accent);width:4.2em;text-align:right}
+  .radar{background:var(--panel);display:flex;align-items:center;justify-content:center;padding:14px}
+  .radar svg{width:100%;height:auto;max-width:360px}
+  .legend{font-family:var(--mono);font-size:.68rem;color:var(--muted);display:flex;gap:1rem;flex-wrap:wrap;padding:.1rem .2rem .2rem}
+  .legend b{color:var(--active);font-weight:600}
+  .legend em{color:var(--accent);font-style:normal}
+  /* controls bar */
+  .controls{display:flex;align-items:center;gap:.7rem;flex-wrap:wrap;padding:.7rem .8rem;background:var(--panel-2);border-top:1px solid var(--line)}
+  .readout{font-family:var(--mono);font-size:.78rem;color:var(--muted);display:flex;gap:1.1rem;flex-wrap:wrap}
+  .readout b{color:var(--fg);font-weight:600}
+  .spacer{flex:1 1 auto;min-width:8px}
+  .btn{font-family:var(--display);font-weight:600;letter-spacing:.03em;border:1px solid var(--line);background:var(--panel);color:var(--fg);padding:.5rem .9rem;border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;gap:.45rem;font-size:.92rem}
+  .btn kbd{font-family:var(--mono);font-size:.72rem;background:#ffffff14;border:1px solid var(--line);border-radius:4px;padding:0 .3rem;color:var(--muted)}
+  .btn.recenter{border-color:color-mix(in srgb,var(--active) 60%,var(--line));color:var(--active);background:color-mix(in srgb,var(--active) 12%,var(--panel))}
+  .btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  /* layout A side-by-side */
+  .A .body{display:grid;grid-template-columns:1.25fr 1fr}
+  .A .radarwrap{border-left:1px solid var(--line);display:flex;flex-direction:column}
+  /* layout C stacked */
+  .C .radar{border-top:1px solid var(--line)}
+  /* layout B camera dominant, radar inset */
+  .B .cam{min-height:330px}
+  .B .inset{position:absolute;right:.7rem;top:.7rem;width:200px;background:#0b0f17d9;border:1px solid var(--line);border-radius:10px;padding:6px;backdrop-filter:blur(3px)}
+  .B .inset .radar{background:transparent;padding:4px}
+  .B .inset .radar svg{max-width:184px}
+  .B .inset .ilabel{font-family:var(--display);font-weight:600;letter-spacing:.14em;text-transform:uppercase;font-size:.6rem;color:var(--accent);padding:0 .2rem .25rem}
+  @media (max-width:620px){ .A .body{grid-template-columns:1fr} .A .radarwrap{border-left:0;border-top:1px solid var(--line)} .B .inset{position:static;width:auto;margin:.7rem;}
+    .B .inset .radar svg{max-width:260px}}
+  .note{margin-top:1.4rem;color:var(--muted);font-size:.9rem;border-top:1px solid var(--line);padding-top:1rem}
+  .note b{color:var(--fg)}
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Binaural head-tracker · B6 GUI</div>
+    <h1>Tracker Calibration Console</h1>
+    <p>Live camera + head-pose estimate with a top-down azimuth radar of the world-locked 7.1 ring. Press <b style="color:var(--active)">C</b> to recenter (set the current pose as "looking at screen centre"), like a VR headset. Three window layouts — pick one.</p>
+  </header>
+
+  <div class="tabs" role="tablist" aria-label="Layout variants">
+    <button class="tab" role="tab" id="t-a" aria-selected="true" aria-controls="p-a">A · Side-by-side</button>
+    <button class="tab" role="tab" id="t-b" aria-selected="false" aria-controls="p-b">B · Camera + radar inset</button>
+    <button class="tab" role="tab" id="t-c" aria-selected="false" aria-controls="p-c">C · Stacked</button>
+  </div>
+
+  <div id="p-a" role="tabpanel" aria-labelledby="t-a">
+    <p class="caption"><b>Side-by-side.</b> Camera and radar equally prominent — easiest to watch the ring swing while you calibrate.</p>
+    <div class="win A">
+      <div class="titlebar"><span class="dot3"></span><span class="dot3"></span><span class="dot3"></span><span class="name">calibration — webcam 0</span><span class="live"><span class="pulse"></span>TRACKING</span></div>
+      <div class="body">
+        <div class="camslot"></div>
+        <div class="radarwrap"><div class="radarslot"></div><div class="legend"><span><b>■</b> active (nearest) speaker</span><span><em>▲</em> you (facing up)</span></div></div>
+      </div>
+      <div class="ctrlslot"></div>
+    </div>
+  </div>
+
+  <div id="p-b" role="tabpanel" aria-labelledby="t-b" hidden>
+    <p class="caption"><b>Camera-dominant + radar inset.</b> Most immersive / VR-like; the radar is a picture-in-picture overlay.</p>
+    <div class="win B">
+      <div class="titlebar"><span class="dot3"></span><span class="dot3"></span><span class="dot3"></span><span class="name">calibration — webcam 0</span><span class="live"><span class="pulse"></span>TRACKING</span></div>
+      <div class="body">
+        <div class="camslot" data-inset="1"></div>
+      </div>
+      <div class="ctrlslot"></div>
+    </div>
+  </div>
+
+  <div id="p-c" role="tabpanel" aria-labelledby="t-c" hidden>
+    <p class="caption"><b>Stacked.</b> Biggest radar, under the camera — best if the azimuthal plane is what you mainly watch.</p>
+    <div class="win C">
+      <div class="titlebar"><span class="dot3"></span><span class="dot3"></span><span class="dot3"></span><span class="name">calibration — webcam 0</span><span class="live"><span class="pulse"></span>TRACKING</span></div>
+      <div class="body">
+        <div class="camslot"></div>
+        <div class="radarslot"></div>
+      </div>
+      <div class="ctrlslot"></div>
+    </div>
+  </div>
+
+  <p class="note"><b>Shown state (example):</b> head yawed +25° left, pitch −5°, roll +2°; the world-locked ring has rotated −25°, so front-left speaker <b>FL</b> sits nearest your gaze and is highlighted as the active/nearest BRIR. Tell me which layout (A/B/C) you want and I'll build it as the host OpenCV app.</p>
+</div>
+
+<script>
+  // ----- shared scene (a representative live frame) -----
+  const SCENE = { yaw:25, pitch:-5, roll:2, rateHz:58, latMs:13 };
+  const SPK = [['FL',30],['FR',-30],['C',0],['SL',90],['SR',-90],['RL',135],['RR',-135]];
+  // world-locked head-relative azimuth = nominal − yaw ; active = nearest to front (|az| min)
+  const rel = SPK.map(([n,a])=>[n, a - SCENE.yaw]);
+  let activeIdx = 0, best = 1e9;
+  rel.forEach(([,a],i)=>{ const d=Math.abs(((a+180)%360)-180); if(d<best){best=d;activeIdx=i;} });
+
+  function pt(azDeg, R, cx, cy){ const r=azDeg*Math.PI/180; return [cx - R*Math.sin(r), cy - R*Math.cos(r)]; }
+
+  function radarSVG(size){
+    const cx=size/2, cy=size/2, Rout=size/2-20;
+    let s=`<svg viewBox="0 0 ${size} ${size}" role="img" aria-label="azimuth radar">`;
+    // rings
+    for(const f of [1,.66,.33]) s+=`<circle cx="${cx}" cy="${cy}" r="${Rout*f}" fill="none" stroke="var(--line)" stroke-width="1"/>`;
+    // cardinal ticks + labels
+    const card=[['FRONT',0],['LEFT',90],['BACK',180],['RIGHT',-90]];
+    for(const [lab,az] of card){ const [x,y]=pt(az,Rout+12,cx,cy);
+      s+=`<text x="${x}" y="${y}" fill="var(--muted)" font-family="var(--display)" font-size="10" font-weight="600" letter-spacing="1.5" text-anchor="middle" dominant-baseline="middle">${lab}</text>`; }
+    // forward FOV cone
+    const [lx,ly]=pt(28,Rout,cx,cy),[rx,ry]=pt(-28,Rout,cx,cy);
+    s+=`<path d="M${cx} ${cy} L${lx} ${ly} A${Rout} ${Rout} 0 0 1 ${rx} ${ry} Z" fill="color-mix(in srgb,var(--accent) 10%,transparent)"/>`;
+    // line to active speaker
+    const [ax,ay]=pt(rel[activeIdx][1],Rout,cx,cy);
+    s+=`<line x1="${cx}" y1="${cy}" x2="${ax}" y2="${ay}" stroke="var(--active)" stroke-width="1.5" stroke-dasharray="3 3" opacity=".8"/>`;
+    // speakers
+    rel.forEach(([n,a],i)=>{ const [x,y]=pt(a,Rout,cx,cy); const on=i===activeIdx;
+      s+=`<circle cx="${x}" cy="${y}" r="${on?8:5.5}" fill="${on?'var(--active)':'var(--accent)'}" stroke="var(--panel)" stroke-width="1.5"/>`;
+      if(on) s+=`<circle cx="${x}" cy="${y}" r="13" fill="none" stroke="var(--active)" stroke-width="1" opacity=".55"/>`;
+      const [tx,ty]=pt(a,Rout-18,cx,cy);
+      s+=`<text x="${tx}" y="${ty}" fill="${on?'var(--active)':'var(--muted)'}" font-family="var(--mono)" font-size="9.5" text-anchor="middle" dominant-baseline="middle">${n}</text>`;});
+    // head arrow (listener), pointing up = front
+    s+=`<g transform="translate(${cx} ${cy})"><path d="M0 -13 L8 8 L0 3 L-8 8 Z" fill="var(--fg)"/><circle r="3" fill="var(--fg)"/></g>`;
+    return s+`</svg>`;
+  }
+
+  function camPanel(withInset){
+    const b = SCENE; // mini face box geometry is illustrative
+    return `<div class="cam">
+      <div class="scan"></div>
+      <svg viewBox="0 0 320 240" preserveAspectRatio="xMidYMid slice" style="position:absolute;inset:0;width:100%;height:100%" aria-hidden="true">
+        <g transform="translate(160 118) rotate(${-b.roll})" stroke="var(--accent)" stroke-width="1" fill="none" opacity=".85">
+          <ellipse cx="0" cy="0" rx="52" ry="66"/>
+          <path d="M-52 -6 Q0 24 52 -6" opacity=".4"/>
+          <circle cx="-20" cy="-14" r="7"/><circle cx="20" cy="-14" r="7"/>
+          <circle cx="-20" cy="-14" r="1.6" fill="var(--accent)"/><circle cx="20" cy="-14" r="1.6" fill="var(--accent)"/>
+          <path d="M0 -8 L-4 14 L5 14"/><path d="M-16 34 Q0 44 16 34"/>
+          <g fill="var(--accent)">${Array.from({length:22},()=>`<circle cx="${(Math.random()*104-52).toFixed(0)}" cy="${(Math.random()*120-60).toFixed(0)}" r="0.9"/>`).join('')}</g>
+        </g>
+      </svg>
+      <div class="facebox" style="left:30%;top:16%;width:40%;height:62%"></div>
+      <div class="facetag" style="left:30%;top:16%">face · lock 0.98</div>
+      <div class="hud">
+        <div class="row"><span class="k">yaw</span><span class="bar"><i class="mid"></i><i style="left:${50+b.yaw*0.9}%"></i></span><span class="val">${b.yaw>0?'+':''}${b.yaw}°</span></div>
+        <div class="row"><span class="k">pitch</span><span class="bar"><i class="mid"></i><i style="left:${50+b.pitch*0.9}%"></i></span><span class="val">${b.pitch>0?'+':''}${b.pitch}°</span></div>
+        <div class="row"><span class="k">roll</span><span class="bar"><i class="mid"></i><i style="left:${50+b.roll*0.9}%"></i></span><span class="val">${b.roll>0?'+':''}${b.roll}°</span></div>
+      </div>
+      ${withInset?`<div class="inset"><div class="ilabel">azimuth · world-locked</div><div class="radar">${radarSVG(184)}</div></div>`:''}
+    </div>`;
+  }
+
+  function controls(){
+    return `<div class="controls">
+      <div class="readout"><span>rate <b>${SCENE.rateHz} Hz</b></span><span>latency <b>${SCENE.latMs} ms</b></span><span>neutral <b style="color:var(--good)">set</b></span><span>active <b style="color:var(--active)">${rel[activeIdx][0]}</b></span></div>
+      <span class="spacer"></span>
+      <button class="btn recenter">Recenter <kbd>C</kbd></button>
+      <button class="btn">Quit <kbd>Q</kbd></button>
+    </div>`;
+  }
+
+  document.querySelectorAll('.camslot').forEach(el=>el.outerHTML=camPanel(el.dataset.inset==='1'));
+  document.querySelectorAll('.radarslot').forEach(el=>el.outerHTML=`<div class="radar">${radarSVG(320)}</div>`);
+  document.querySelectorAll('.ctrlslot').forEach(el=>el.outerHTML=controls());
+
+  // tabs
+  const tabs=[...document.querySelectorAll('.tab')];
+  tabs.forEach(t=>t.addEventListener('click',()=>{
+    tabs.forEach(x=>{const p=document.getElementById(x.getAttribute('aria-controls'));x.setAttribute('aria-selected',x===t);p.hidden=x!==t;});
+  }));
+</script>

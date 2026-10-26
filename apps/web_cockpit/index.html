@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>World-Locked Binaural Surround</title>
+<link rel="icon" type="image/svg+xml" href="./icon.svg">
+<link rel="icon" type="image/png" sizes="192x192" href="./icon-192.png">
+<link rel="icon" type="image/png" sizes="32x32" href="./icon-32.png">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<!-- Main cockpit window (1280x820). Faithful reproduction of docs/design/ui-redesign/main/Main.dc.html.
+     Dynamic values carry ids/data-hooks that cockpit.js updates from the live engine state; the markup
+     ships with the mockup's sample values so the page renders identically when opened standalone. -->
+<div class="app">
+  <!-- No in-page title bar: the Chrome --app window frame is the only window chrome. -->
+  <div class="content">
+
+    <!-- Row 1: camera + system | ring stage | latency -->
+    <div class="row1">
+
+      <!-- Left column -->
+      <div class="col-left">
+        <div class="camera">
+          <img id="cam-img" alt="" style="display:none">
+          <canvas id="cam-overlay" class="cam-overlay" aria-hidden="true"></canvas>
+          <svg id="cam-placeholder" class="cam-ph" viewBox="0 0 352 204" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Camera preview placeholder with face landmarks">
+            <rect width="352" height="204" fill="#10151d"></rect>
+            <path d="M0 0h352v48L0 26z" fill="#171d28"></path>
+            <ellipse cx="176" cy="106" rx="50" ry="66" fill="none" stroke="#35d0d0" stroke-width="1.5" stroke-dasharray="3 6" opacity=".7"></ellipse>
+            <g fill="#35d0d0" opacity=".75"><circle cx="157" cy="88" r="2"></circle><circle cx="195" cy="88" r="2"></circle><circle cx="176" cy="108" r="2"></circle><circle cx="165" cy="134" r="2"></circle><circle cx="176" cy="138" r="2"></circle><circle cx="187" cy="134" r="2"></circle></g>
+          </svg>
+          <div id="cam-badge" class="cam-badge"><span class="cam-badge-dot"></span><span id="cam-badge-txt">Face locked</span></div>
+          <div id="cam-res" class="cam-res">640×480 @ 30</div>
+        </div>
+        <div class="panel system">
+          <div class="panel-head">SYSTEM</div>
+          <div id="health-list" class="health-list">
+            <div class="health-row"><div class="health-l"><span class="dot" style="background:#ffb340"></span><span class="health-label">Tracker rate</span></div><div class="health-val">21 Hz (cam 30)</div></div>
+            <div class="health-row"><div class="health-l"><span class="dot" style="background:#4cd98a"></span><span class="health-label">Detect time</span></div><div class="health-val">13 ms</div></div>
+            <div class="health-row"><div class="health-l"><span class="dot" style="background:#4cd98a"></span><span class="health-label">Backend</span></div><div class="health-val">rust</div></div>
+            <div class="health-row"><div class="health-l"><span class="dot" style="background:#4cd98a"></span><span class="health-label">Rendering</span></div><div class="health-val">timealign 10°</div></div>
+            <div class="health-row"><div class="health-l"><span class="dot" style="background:#5b6678"></span><span class="health-label">Cushion</span></div><div class="health-val">40 ms · shared</div></div>
+            <div class="health-row"><div class="health-l"><span class="dot" style="background:#5b6678"></span><span class="health-label">HRIR</span></div><div class="health-val">mine · DTF · HP EQ</div></div>
+          </div>
+          <div class="meters">
+            <div class="meter">
+              <div class="meter-top"><span class="meter-label">Render load</span><span id="render-load-txt" class="mono meter-val">40% (peak 46%) · 21.3 ms/blk</span></div>
+              <div class="bar"><div id="render-load-fill" class="bar-fill good" style="width:40%"></div><div id="render-load-peak" class="bar-peak" style="left:46%"></div></div>
+            </div>
+            <div class="meter">
+              <div class="meter-top"><span class="meter-label">Output buffer</span><span id="buffer-txt" class="mono meter-val">7 / 6 blk · steady</span></div>
+              <div id="buffer-cells" class="buf-cells-wrap"></div>
+            </div>
+            <div class="meter">
+              <div class="meter-top"><span class="meter-label">Dropouts, last 60 s</span><span id="dropouts-txt" class="mono meter-val" style="color:#4cd98a">0 over · 0 under</span></div>
+              <div class="bar"><div id="dropouts-fill" class="bar-fill good" style="width:0%"></div></div>
+            </div>
+          </div>
+          <div class="system-foot">
+            <div class="predict-wrap">
+              <button id="predict-toggle" type="button" role="switch" aria-checked="false" class="switch" aria-label="Predict head position"><span class="switch-knob"></span></button>
+              <span class="switch-label">Predict head position</span>
+            </div>
+            <button id="settings-btn" type="button" class="btn btn-ghost">Settings…</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Ring stage -->
+      <div class="panel ring-stage">
+        <div class="ring-head">
+          <div class="ring-head-l"><div class="panel-head">WORLD-LOCKED RING</div><span id="facing-pill" class="pill pill-amber">Facing C</span></div>
+          <div class="ring-head-r">
+            <div class="invert-wrap">
+              <button id="invert-toggle" type="button" role="switch" aria-checked="false" class="switch" aria-label="Invert head tracking"><span class="switch-knob"></span></button>
+              <span class="switch-label">Invert tracking</span>
+            </div>
+            <button id="recenter-btn" type="button" class="btn btn-amber">Recenter</button>
+          </div>
+        </div>
+        <div class="ring-canvas">
+          <svg class="radar" viewBox="0 0 320 320" role="img" aria-label="Speaker ring with the listener's head and the active speaker.">
+            <defs><radialGradient id="cone" gradientUnits="userSpaceOnUse" cx="160" cy="160" r="110"><stop offset="0" stop-color="#35d0d0" stop-opacity=".32"></stop><stop offset="1" stop-color="#35d0d0" stop-opacity=".07"></stop></radialGradient></defs>
+            <circle cx="160" cy="160" r="110" fill="none" stroke="#2a3547" stroke-width="1.5"></circle>
+            <circle cx="160" cy="160" r="73" fill="none" stroke="#222d3f" stroke-width="1"></circle>
+            <circle cx="160" cy="160" r="37" fill="none" stroke="#222d3f" stroke-width="1"></circle>
+            <path d="M160 160L160 50M160 160L105 64.7M160 160L215 64.7M160 160L56.6 197.6M160 160L263.4 197.6M160 160L105 255.3M160 160L215 255.3" fill="none" stroke="#2b384c" stroke-width="1" stroke-dasharray="4 5"></path>
+            <path d="M40 160H280M160 44V288" fill="none" stroke="#3a475c" stroke-width="1.2" stroke-dasharray="6 6"></path>
+            <g id="radar-cone" transform="rotate(-4 160 160)"><path d="M160 160L105 64.7A110 110 0 0 1 215 64.7Z" fill="url(#cone)" stroke="#35d0d0" stroke-opacity=".45" stroke-width="1"></path></g>
+            <g id="radar-speakers" fill="#35d0d0" stroke="#151c28" stroke-width="2"><circle cx="105" cy="64.7" r="7"></circle><circle cx="215" cy="64.7" r="7"></circle><circle cx="56.6" cy="197.6" r="7"></circle><circle cx="263.4" cy="197.6" r="7"></circle><circle cx="105" cy="255.3" r="7"></circle><circle cx="215" cy="255.3" r="7"></circle></g>
+            <path d="M160 160L160 64" fill="none" stroke="#ffb340" stroke-width="1.6" stroke-dasharray="5 4"></path>
+            <circle cx="160" cy="50" r="17" fill="#ffb340" fill-opacity=".14"></circle>
+            <circle cx="160" cy="50" r="12" fill="none" stroke="#ffb340" stroke-width="1.6"></circle>
+            <circle cx="160" cy="50" r="7.5" fill="#ffb340" stroke="#151c28" stroke-width="2"></circle>
+            <g id="radar-head" transform="rotate(-4 160 160) translate(160 160) scale(1.5) translate(-160 -160)" fill="#e6edf6" stroke="#151c28" stroke-width="1.5"><ellipse cx="148.5" cy="161" rx="2.6" ry="5.5"></ellipse><ellipse cx="171.5" cy="161" rx="2.6" ry="5.5"></ellipse><ellipse cx="160" cy="161" rx="10" ry="12"></ellipse><path d="M160 142L154.5 150H165.5Z"></path></g>
+            <g font-family="'JetBrains Mono',monospace" font-size="12" fill="#b3bfd2" text-anchor="middle">
+              <text x="160" y="13">FRONT</text>
+              <text x="160" y="29" fill="#ffb340" font-weight="700">C 0°</text>
+              <text x="84" y="48">L +30°</text><text x="236" y="48">R −30°</text>
+              <text x="50" y="222">SL +110°</text><text x="270" y="222">SR −110°</text>
+              <text x="100" y="280">RL +150°</text><text x="220" y="280">RR −150°</text>
+              <text x="160" y="312">BACK</text>
+              <text x="6" y="164" text-anchor="start">LEFT</text><text x="314" y="164" text-anchor="end">RIGHT</text>
+            </g>
+          </svg>
+        </div>
+        <div class="pose-tiles">
+          <div class="tile"><span class="tile-label">YAW</span><span id="pose-yaw" class="tile-val">+4°</span></div>
+          <div class="tile"><span class="tile-label">PITCH</span><span id="pose-pitch" class="tile-val">−19°</span></div>
+          <div class="tile"><span class="tile-label">ROLL</span><span id="pose-roll" class="tile-val">+3°</span></div>
+        </div>
+      </div>
+
+      <!-- Latency -->
+      <div class="panel latency">
+        <div class="panel-head">LATENCY · HEAD MOVE → EAR</div>
+        <div class="lat-headline"><span id="lat-ms" class="lat-ms">178</span><span class="lat-unit">ms</span><span id="lat-verdict" class="pill-verdict good">GOOD</span></div>
+        <div id="lat-detail" class="mono lat-detail">median · p95 186 · p99 194</div>
+        <div id="lat-bar" class="lat-bar">
+          <div class="lat-seg seg-capture" style="flex:62 1 0">~62</div>
+          <div class="lat-seg" style="flex:47 1 0;background:#ff6b6b;color:#2a0a0a">47</div>
+          <div class="lat-seg" style="flex:47 1 0;background:#ffb340;color:#2b1a02">47</div>
+          <div class="lat-seg" style="flex:22 1 0;background:#35d0d0;color:#06222a">22</div>
+        </div>
+        <div class="lat-legend">
+          <div class="leg"><span class="leg-sw sw-capture"></span>Capture (est.)</div>
+          <div class="leg"><span class="leg-sw" style="background:#ff6b6b"></span>Camera stale</div>
+          <div class="leg"><span class="leg-sw" style="background:#ffb340"></span>FIFO queue</div>
+          <div class="leg"><span class="leg-sw" style="background:#35d0d0"></span>Device (WASAPI)</div>
+        </div>
+        <div class="lat-dist-label">Distribution (ms)</div>
+        <div class="lat-dist">
+          <div id="histogram" class="hist"></div>
+          <div id="hist-p50-line" class="hist-p50-line" style="left:48.7%"></div>
+          <div id="hist-p50-label" class="hist-p50-label" style="left:50%">p50</div>
+        </div>
+        <div class="lat-axis"><span>100</span><span>180</span><span>260</span></div>
+        <div id="lat-note" class="lat-note">Queue (47 ms) is the largest setting you can change: lower the cushion or block size.</div>
+      </div>
+    </div>
+
+    <!-- Row 3: experiments drawer -->
+    <div class="panel drawer">
+      <div class="drawer-tabs">
+        <button type="button" class="tab tab-active" data-tab="blind">Blind A/B</button>
+        <button type="button" class="tab" data-tab="loc">Localization test</button>
+        <button type="button" class="tab" data-tab="test">Test sources</button>
+        <span id="drawer-status" class="drawer-status">Status: idle</span>
+      </div>
+      <div class="drawer-body">
+        <div class="steps">
+          <span class="step step-active"><span class="step-num">1</span>Shuffle</span>
+          <span class="step-sep">›</span>
+          <span class="step">2 Compare</span>
+          <span class="step-sep">›</span>
+          <span class="step">3 Prefer</span>
+          <span class="step-sep">›</span>
+          <span class="step">4 Reveal</span>
+        </div>
+        <div class="drawer-actions">
+          <div class="ab-toggle"><button id="ab-a" type="button" class="ab ab-active">A</button><button id="ab-b" type="button" class="ab">B</button></div>
+          <button id="shuffle-start" type="button" class="btn btn-cyan btn-lg">Shuffle and start</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="./cockpit.js"></script>
+</body>
+</html>

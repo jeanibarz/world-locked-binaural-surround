@@ -1,7 +1,7 @@
 ---
 name: Binaural Headtracker — one block
-description: Do exactly one backlog block of binaural-headtracker, record it, deliver, and stop.
-cwd: /home/jean/git/binaural-headtracker
+description: Do exactly one backlog block of world-locked-binaural-surround, record it, deliver, and stop.
+cwd: /home/jean/git/world-locked-binaural-surround
 checklist:
   - Selected exactly one eligible block from docs/backlog.md using durable state
   - Implemented that one block end to end in a fresh worktree, repo left green
@@ -11,7 +11,7 @@ checklist:
 
 ## Objective
 
-Advance `binaural-headtracker` by **exactly one** backlog block, with full durable
+Advance `world-locked-binaural-surround` by **exactly one** backlog block, with full durable
 record-keeping, then **stop**. This playbook runs on a schedule; the *next*
 scheduled firing continues from durable state, so you never need to spawn a
 successor and you must never work more than one block.
@@ -43,7 +43,7 @@ block needs it; depend on it, don't duplicate it.
    next slice before starting a new one. If the chosen block is too big for one
    sitting, split it in the backlog and do only the first slice this run.
 2. **Implement it** in a fresh worktree:
-   `git fetch origin main && git worktree add ../binaural-headtracker-<slug> -b <branch> origin/main`.
+   `git fetch origin main && git worktree add ../world-locked-binaural-surround-<slug> -b <branch> origin/main`.
    Write/extend tests where code is involved. Keep the repo runnable and green.
    Prototype in Python first (requirements § 5), but the language is not locked —
    a block may prototype/benchmark a hot path in C/C++/Rust when performance is

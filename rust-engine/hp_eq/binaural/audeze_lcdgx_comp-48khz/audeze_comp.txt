@@ -1,0 +1,50 @@
+# Pre-attenuate the signals because convolution introduces some gain
+Channel: L R
+Preamp: -15 dB
+Channel: L
+Convolution: left.wav
+#Room EQ V5.20.5
+#Dated: 3 mars 2022 13:28:40
+Filter  1: ON  PK       Fc   185.5 Hz  Gain  -1.10 dB  Q  1.060
+Filter  2: ON  PK       Fc   341.0 Hz  Gain  -3.60 dB  Q  3.498
+Filter  3: ON  PK       Fc   452.0 Hz  Gain  18.00 dB  Q  1.702
+Filter  4: ON  PK       Fc   473.0 Hz  Gain -18.20 dB  Q  2.679
+Filter  5: ON  PK       Fc   743.0 Hz  Gain  -4.20 dB  Q  1.000
+Filter  6: ON  PK       Fc    1101 Hz  Gain   5.90 dB  Q  2.822
+Filter  7: ON  PK       Fc    1210 Hz  Gain   0.20 dB  Q  7.263
+Filter  8: ON  PK       Fc    1942 Hz  Gain  -3.50 dB  Q  1.001
+Filter  9: ON  PK       Fc    3014 Hz  Gain  -5.80 dB  Q  1.963
+Filter 10: ON  PK       Fc    4632 Hz  Gain   1.60 dB  Q  7.484
+Filter 11: ON  PK       Fc    6546 Hz  Gain -11.90 dB  Q  2.264
+Filter 12: ON  PK       Fc    9160 Hz  Gain -14.10 dB  Q  3.832
+Filter 13: ON  PK       Fc    9387 Hz  Gain  17.70 dB  Q  1.010
+Filter 14: ON  PK       Fc   11292 Hz  Gain -16.60 dB  Q  4.994
+Filter 15: ON  PK       Fc   11780 Hz  Gain  18.00 dB  Q  5.549
+Filter 16: ON  PK       Fc   12126 Hz  Gain -18.90 dB  Q  4.998
+Filter 17: ON  PK       Fc   15529 Hz  Gain -12.50 dB  Q  3.234
+Filter 18: ON  PK       Fc   16114 Hz  Gain  12.40 dB  Q  1.000
+Filter 19: ON  PK       Fc   18840 Hz  Gain -13.60 dB  Q  1.001  
+Channel: R
+Convolution: right.wav
+#Room EQ V5.20.5
+#Dated: 3 mars 2022 13:30:02
+Preamp: -1.2 dB
+Filter  1: ON  PK       Fc   140.0 Hz  Gain  -2.90 dB  Q  1.000
+Filter  2: ON  PK       Fc   310.0 Hz  Gain  -3.00 dB  Q  2.877
+Filter  3: ON  PK       Fc   590.0 Hz  Gain  -3.90 dB  Q  4.999
+Filter  4: ON  PK       Fc   690.0 Hz  Gain  -2.20 dB  Q  4.999
+Filter  5: ON  PK       Fc   769.0 Hz  Gain  -1.80 dB  Q  4.992
+Filter  6: ON  PK       Fc    1675 Hz  Gain  -4.90 dB  Q  2.913
+Filter  7: ON  PK       Fc    2363 Hz  Gain  -5.70 dB  Q  2.682
+Filter  8: ON  PK       Fc    2926 Hz  Gain  -4.60 dB  Q  4.640
+Filter  9: ON  PK       Fc    3404 Hz  Gain  -5.60 dB  Q  5.000
+Filter 10: ON  PK       Fc    4729 Hz  Gain  -2.40 dB  Q  4.999
+Filter 11: ON  PK       Fc    5630 Hz  Gain -13.10 dB  Q  4.997
+Filter 12: ON  PK       Fc    6981 Hz  Gain   7.50 dB  Q  7.288
+Filter 13: ON  PK       Fc    7137 Hz  Gain -13.80 dB  Q  3.066
+Filter 14: ON  PK       Fc    8516 Hz  Gain  12.80 dB  Q  1.002
+Filter 15: ON  PK       Fc    9323 Hz  Gain  -7.80 dB  Q  4.854
+Filter 16: ON  PK       Fc   12360 Hz  Gain  -7.00 dB  Q  4.963
+# Ajouté le 22/10/2024 pour compenser un excès d'aigu en comparaison du HP gauche sur bruit rose
+Filter 17: ON  PK       Fc   14979 Hz  Gain  -5.70 dB  Q  4.939
+Filter 18: ON  PK       Fc   19880 Hz  Gain  -6.50 dB  Q  1.000

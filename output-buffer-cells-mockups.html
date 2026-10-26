@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Output buffer — block-cell variants</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0d1117; --panel:#151c28; --inset:#0d1117;
+  --border:#243044; --border2:#2a3547; --hair:#1f2a3b;
+  --text:#e6edf6; --text2:#d6deea; --muted:#b3bfd2; --muted2:#5b6678;
+  --cyan:#35d0d0; --amber:#ffb340; --green:#4cd98a; --red:#ff6b6b;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,sans-serif}
+.mono{font-family:'JetBrains Mono',monospace}
+.wrap{max-width:1180px;margin:0 auto;padding:28px 16px 64px}
+h1{font-size:20px;font-weight:600;margin:0 0 4px}
+.sub{color:var(--muted);font-size:13px;margin:0 0 6px;line-height:1.5}
+.legend{color:var(--muted2);font-size:12px;margin:0 0 24px}
+.legend b{color:var(--text2);font-weight:500}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:18px}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px 16px 18px}
+.card.hl{border-color:var(--cyan)}
+.card h2{font-size:14px;font-weight:600;margin:0 0 2px;display:flex;align-items:center;gap:8px}
+.tag{font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--cyan);border:1px solid var(--cyan);border-radius:999px;padding:1px 7px}
+.card .desc{font-size:12px;color:var(--muted);margin:0 0 10px;line-height:1.5;min-height:48px}
+.meter{display:flex;flex-direction:column;gap:5px;margin-top:14px}
+.state-cap{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted2)}
+.meter-top{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+.meter-label{font-size:13px;color:var(--text2)}
+.meter-val{font:500 12px 'JetBrains Mono',monospace;color:var(--text)}
+
+/* shared block-cell base */
+.cells{display:flex;gap:3px;height:14px}
+.cell{flex:1;border-radius:3px;background:var(--inset);border:1px solid var(--border2)}
+.cell.on{border-color:transparent;background:var(--green)}
+.cell.on.good{background:var(--green)} .cell.on.warn{background:var(--amber)} .cell.on.bad{background:var(--red)}
+.cells-wrap{position:relative;padding-top:8px}
+.tgt-tick{position:absolute;top:0;width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;border-top:5px solid var(--text);transform:translateX(-50%)}
+.tgt-tick.cy{border-top-color:var(--cyan)}
+.tgt-lbl{position:absolute;top:-13px;transform:translateX(-50%);font:500 9px 'JetBrains Mono',monospace;color:var(--muted)}
+
+/* A — target outline */
+.cell.tgtA{box-shadow:inset 0 0 0 2px var(--cyan)}
+/* B — margin / headroom split */
+.cell.lack{background:rgba(255,107,107,.12);border-color:var(--red)}
+.cell.headOn{background:rgba(53,208,208,.5);border-color:transparent}
+.cell.divide{margin-left:8px}
+/* C — zone-tinted track */
+.cell.zKeep{background:rgba(76,217,138,.10)}
+.cell.zHead{background:rgba(255,179,64,.07)}
+.cell.zKeep.on{background:var(--green)} .cell.zHead.on{background:var(--amber)}
+/* D — underfill alarm */
+.cell.alarm{background:rgba(255,107,107,.16);border-color:var(--red)}
+/* E — notch gap */
+.cell.gap{margin-right:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Output buffer — block-cell variants</h1>
+  <p class="sub">All build on the <b>#4 block-cells</b> idea (one cell per FIFO block, capacity = 2&times;cushion).
+  They differ in how they show the <b>target</b> (cushion blocks) and the <b>danger of being below it</b> — which
+  is the state the owner actually sees (the meter rides the 0–1 floor).</p>
+  <p class="legend">Per variant, four states: &nbsp;<b>Critically starved</b> (1) &nbsp;·&nbsp; <b>Below margin</b> (4) &nbsp;·&nbsp; <b>On target</b> (6) &nbsp;·&nbsp; <b>Overfull</b> (11). &nbsp; Cushion = 6 blocks, capacity = 12.</p>
+  <div class="grid" id="grid"></div>
+</div>
+<script>
+const CUSH = 6, CAP = 12;
+const STATES = [
+  {cap:"Critically starved", fill:1,  text:"1 / 6 blk · low",    level:"bad"},
+  {cap:"Below margin",       fill:4,  text:"4 / 6 blk · low",    level:"warn"},
+  {cap:"On target",          fill:6,  text:"6 / 6 blk · steady", level:"good"},
+  {cap:"Overfull",           fill:11, text:"11 / 6 blk · high",  level:"warn"},
+];
+const mk = (n, fn) => Array.from({length:n}, (_, i) => fn(i)).join("");
+const tickPct = (CUSH - 0.5) / CAP * 100;
+
+const R = {
+  // A — filled cells colored by overall health; cyan outline on the target slot (the picked V4)
+  A: (f, l) => `<div class="cells-wrap"><div class="tgt-lbl" style="left:${tickPct}%">target</div><div class="tgt-tick cy" style="left:${tickPct}%"></div><div class="cells">` +
+    mk(CAP, i => `<div class="cell ${i<f?'on '+l:''} ${i===CUSH-1?'tgtA':''}"></div>`) + `</div></div>`,
+
+  // B — margin vs headroom: the first 6 cells MUST be full (empty ones go red); headroom is dim cyan
+  B: (f) => `<div class="cells">` + mk(CAP, i => {
+    const on = i < f, margin = i < CUSH;
+    let c = "cell";
+    if (on && margin) c += " on good";
+    else if (!on && margin) c += " lack";
+    else if (on && !margin) c += " headOn";
+    if (i === CUSH) c += " divide";
+    return `<div class="${c}"></div>`;
+  }) + `</div>`,
+
+  // C — every cell tinted by zone (keep-full vs headroom) even when empty; fill lights it bright
+  C: (f) => `<div class="cells">` + mk(CAP, i => {
+    const on = i < f, margin = i < CUSH;
+    return `<div class="cell ${margin?'zKeep':'zHead'} ${on?'on':''}"></div>`;
+  }) + `</div>`,
+
+  // D — underfill alarm: empty cells BELOW target are red; fill above target is amber headroom
+  D: (f) => `<div class="cells-wrap"><div class="tgt-tick" style="left:${tickPct}%"></div><div class="cells">` +
+    mk(CAP, i => {
+      const on = i < f, below = i < CUSH;
+      let c = "cell";
+      if (!on && below) c += " alarm";
+      else if (on && below) c += " on good";
+      else if (on && !below) c += " on warn";
+      return `<div class="${c}"></div>`;
+    }) + `</div></div>`,
+
+  // E — clean: a real gap after the target cell + a cyan tick; filled by overall health
+  E: (f, l) => `<div class="cells-wrap"><div class="tgt-tick cy" style="left:${tickPct}%"></div><div class="cells">` +
+    mk(CAP, i => `<div class="cell ${i<f?'on '+l:''} ${i===CUSH-1?'gap':''}"></div>`) + `</div></div>`,
+};
+
+const VARIANTS = [
+  {key:"A", name:"A · Target outline", tag:"the pick", hl:false,
+   desc:"The variant you chose, refined: filled cells by health, a cyan outline + tick on the target slot."},
+  {key:"D", name:"D · Underfill alarm", tag:"most legible", hl:true,
+   desc:"Empty cells below the target glow red — so a starved buffer literally shows red gaps up to where it should be. Fill above target is amber (headroom). The danger is impossible to miss."},
+  {key:"B", name:"B · Margin / headroom", tag:"two-part", hl:false,
+   desc:"The first 6 cells are the margin you must keep full (empty = red); a gap divides them from the dim-cyan headroom cells. Says “fill the left block, the right is spare.”"},
+  {key:"C", name:"C · Zone-tinted", tag:"always-on map", hl:false,
+   desc:"Every cell carries a faint zone tint even when empty (green = keep-full, amber = headroom); the fill lights cells brighter. The target map is always visible."},
+  {key:"E", name:"E · Notch gap", tag:"minimal", hl:false,
+   desc:"Cleanest: a real gap after the target cell plus a cyan tick, no per-cell recoloring. Target boundary obvious, lowest visual noise."},
+];
+
+document.getElementById("grid").innerHTML = VARIANTS.map(v => `
+  <div class="card ${v.hl?'hl':''}">
+    <h2>${v.name} <span class="tag">${v.tag}</span></h2>
+    <div class="desc">${v.desc}</div>
+    ${STATES.map(s => `
+      <div class="meter">
+        <div class="meter-top">
+          <span class="meter-label state-cap">${s.cap}</span>
+          <span class="meter-val">${s.text}</span>
+        </div>
+        ${R[v.key](s.fill, s.level)}
+      </div>`).join("")}
+  </div>`).join("");
+</script>
+</body>
+</html>

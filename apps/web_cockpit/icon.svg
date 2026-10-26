@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+  <!-- World-Locked Binaural Surround: a fixed star (the locked reference) in an aura of sound -->
+  <defs>
+    <radialGradient id="aur" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#35d0d0" stop-opacity=".60"/>
+      <stop offset="55%" stop-color="#35d0d0" stop-opacity=".16"/>
+      <stop offset="100%" stop-color="#35d0d0" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <circle cx="24" cy="24" r="23" fill="url(#aur)"/>
+  <circle cx="24" cy="24" r="15.5" stroke="#35d0d0" stroke-width="1.3" opacity=".4"/>
+  <path d="M24 7 L27 21 L41 24 L27 27 L24 41 L21 27 L7 24 L21 21 Z" fill="#35d0d0"/>
+  <circle cx="24" cy="24" r="2.4" fill="#e6edf6"/>
+</svg>

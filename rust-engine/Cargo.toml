@@ -1,0 +1,48 @@
+[package]
+name = "wlbs_engine"
+version = "0.1.0"
+edition = "2021"
+description = "The standalone zero-Python world-lock binaural engine: loopback-captures a 7.1 source, world-lock renders it to binaural on the native kernel, outputs via WASAPI, and serves the web cockpit — one Rust binary, no interpreter."
+publish = false
+
+[[bin]]
+name = "wlbs_engine"
+path = "src/main.rs"
+
+[dependencies]
+render_core_lib = { path = "../rust-render-core-lib" }
+binaural_conv = { path = "../rust-conv-core" }
+control_plane = { path = "../rust-control-plane" }
+serde_json = { version = "1", features = ["preserve_order"] }
+hound = "3.5"
+# Ring-interpolation DSP (timealign/minphase/notchwarp): realfft for the real transforms, rustfft
+# for the full complex FFTs (Hilbert envelope, real-cepstrum min-phase). Same versions the conv
+# kernel already resolves, so no new transitive tree.
+realfft = "3.5"
+rustfft = "6"
+
+# WASAPI audio I/O is Windows-only; on other targets the engine builds (for the pack/geometry unit
+# tests) but main() prints a notice.
+[target.'cfg(windows)'.dependencies]
+audio_io = { path = "../rust-audio-io" }
+# Variable-ratio async resampler on the output path (#192): corrects the source↔output clock drift
+# that drains the cushion FIFO (the sawtooth underruns), and converts a mismatched output-endpoint
+# rate. Polynomial (FastFixedIn) is ample for tens-of-ppm nudges and a 48k↔44.1k nominal — no sinc
+# cost. rubato 0.15 depends on realfft ^3.2, unifying with the engine's realfft 3.5 (no new tree).
+rubato = "0.15.0"
+# The Rust-native head-pose pipeline (ONNX via ort) — the zero-Python tracker.
+vision_client = { path = "../rust-vision-client", features = ["inference"] }
+# Minimal blocking HTTP (no TLS) to pull the camera MJPEG frames that feed the pose pipeline.
+ureq = { version = "2.12.1", default-features = false }
+# Direct webcam capture (MediaFoundation on Windows) — the product's default pose frame source.
+# `input-native` selects the OS-native backend (no extra runtime); frames decode to RGB for the
+# same pose pipeline the MJPEG path uses.
+nokhwa = { version = "0.10", features = ["input-native"] }
+# JPEG-encode the decoded camera frame for the cockpit `/camera` preview (BUG-07). Same version as
+# vision_client so the compiled `image` crate is shared, not duplicated.
+image = { version = "0.25.5", default-features = false, features = ["jpeg"] }
+# Ctrl-C / console-close handler for graceful shutdown + device release (BUG-15).
+ctrlc = "3.4"
+
+[profile.release]
+opt-level = 3

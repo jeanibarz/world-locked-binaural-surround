@@ -137,6 +137,15 @@ def _nice_upper_ms(diag: Diagnosis, samples: tuple[float, ...]) -> float:
     return max(80.0, math.ceil(worst / 20.0) * 20.0)
 
 
+def _nice_lower_ms(samples: tuple[float, ...], end_to_end_ms: float, hi: float) -> float:
+    """A tidy lower bound so the distribution FILLS the axis instead of hugging a 0-based right
+    edge (the latency is never near 0). Round the best value down to the previous 20 ms, keep the
+    headline marker inside the window, and leave at least a 40 ms span below the upper bound."""
+    best = min([*samples, end_to_end_ms]) if samples else end_to_end_ms
+    lo = math.floor(best / 20.0) * 20.0
+    return max(0.0, min(lo, hi - 40.0))
+
+
 # ---------------------------------------------------------------- view primitives
 
 @dataclass(frozen=True)
@@ -292,7 +301,8 @@ def build_view(
         if now is not None else None
     )
     hi = _nice_upper_ms(diag, samples)
-    histogram = tuple(latency_histogram(samples, lo_ms=0.0, hi_ms=hi, bins=hist_bins))
+    lo = _nice_lower_ms(samples, diag.end_to_end_ms, hi)
+    histogram = tuple(latency_histogram(samples, lo_ms=lo, hi_ms=hi, bins=hist_bins))
 
     measured = diag.end_to_end_measured and diag.pose_age_n > 0
     if measured:
@@ -363,7 +373,7 @@ def build_view(
         detail=detail,
         components=components,
         histogram=histogram,
-        hist_lo_ms=0.0,
+        hist_lo_ms=lo,
         hist_hi_ms=hi,
         bars=bars,
         render_label=diag.render_label,

@@ -98,6 +98,20 @@ Numbered `FR-n`. MoSCoW priority in brackets.
 - **NFR-4 CPU/GPU budget [Should].** Convolution + tracking must run comfortably
   on a typical gaming PC alongside the game. Partitioned FFT convolution; tracker
   on a separate thread/GPU.
+- **NFR-4b Pose-pipeline performance budget [Must].** The head-pose model must
+  (a) be **60 fps-capable** — either per-frame inference cheap enough to sustain
+  60 fps with headroom (~≤12–16 ms, ideally well under so it never pegs a core),
+  **or** decouple pose-inference rate from camera capture rate and predict between
+  frames via the existing One-Euro + α-β motion prediction (camera at 60 fps for
+  low capture latency without 60 inferences/s); and (b) **coexist with a running
+  video game** — measured **CPU% and GPU%** under sustained inference must leave
+  ample headroom, and the model must be **no heavier than the incumbent MediaPipe**
+  (what ships today and already coexists with the owner's games/films/music).
+  Prefer a light, ownable model; ONNX Runtime execution providers (DirectML
+  iGPU/dGPU, or an NPU EP) may offload inference off the CPU, but weigh GPU
+  contention against the game. This screens pose-model selection (R-S1) **jointly
+  with accuracy-parity** — a model that meets accuracy but busts this budget loses
+  to the lightest model that still meets accuracy parity.
 - **NFR-5 Reliability [Should].** Degrade gracefully if the camera is lost
   (freeze last pose / fade to static binaural), and if a device disappears.
 - **NFR-6 Configurability [Should].** Everything perceptually relevant is

@@ -51,7 +51,7 @@ Do **one** block per task. Do not batch blocks because setup is warm.
 
 - **Never commit to `main` in the primary checkout.** For every tracked-file
   change, create a fresh worktree:
-  `git worktree add ../binaural-headtracker-<slug> -b <branch> main`
+  `git worktree add ../world-locked-binaural-surround-<slug> -b <branch> main`
   (or `origin/main` if a remote exists). Edit, commit, and push from there.
 - Conventional Commits; small, atomic, green commits.
 - If a GitHub remote is configured: open a PR per block and, for the owner's own
@@ -165,7 +165,7 @@ gotchas that will otherwise waste a launch:
    imports work fine from Windows Python — the supported way to run the WSL checkout's
    code on the host without installing anything:
    ```bat
-   py.exe -3.12 "\\wsl.localhost\Ubuntu-22.04\home\jean\git\binaural-headtracker\apps\launch.py" listen <--flags>
+   py.exe -3.12 "\\wsl.localhost\Ubuntu-22.04\home\jean\git\world-locked-binaural-surround\apps\launch.py" listen <--flags>
    ```
    (`wslpath -w <path>` gives the UNC path for a worktree file; `host/run.cmd` wraps this
    with the owner's device flags and the exit-97 reload loop.) Launch it with the Bash
