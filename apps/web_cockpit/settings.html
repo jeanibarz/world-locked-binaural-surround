@@ -11,7 +11,8 @@
 <link rel="stylesheet" href="./settings.css">
 </head>
 <body>
-<!-- Settings dialog (560x1000). Faithful to docs/design/ui-redesign/settings/D-EngineSettings.dc.html.
+<!-- Settings dialog (560 wide, up to 1000 tall — fills a shorter window and scrolls, footer pinned).
+     Faithful to docs/design/ui-redesign/settings/D-EngineSettings.dc.html.
      settings.js populates the live options/values and wires the controls to the Python bridge. -->
 <div class="dialog">
   <div class="dialog-titlebar"><span>Settings</span>
@@ -19,6 +20,7 @@
   </div>
 
   <div class="settings-body" style="visibility:hidden"><!-- revealed by settings.js once seeded -->
+   <div class="settings-scroll"><!-- scrolls when taller than the window; footer stays pinned below -->
 
     <!-- Camera -->
     <div class="section">
@@ -116,6 +118,8 @@
       <div class="field" id="set-hpmodel"><span>Sennheiser HD 600</span><span class="caret">▾</span></div>
       <div class="note">Corrects the headphone's own frequency response. Pick your model, or switch off if your headphones are already equalized.</div>
     </div>
+
+   </div><!-- /.settings-scroll -->
 
     <div class="settings-foot">
       <button type="button" class="btn-text" id="reset-defaults">Reset to defaults</button>
