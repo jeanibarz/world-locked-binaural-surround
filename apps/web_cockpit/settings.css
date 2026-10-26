@@ -1,11 +1,16 @@
 /* Settings dialog components — exact values from docs/design/ui-redesign/settings/D-EngineSettings.dc.html.
    Loads after style.css (shares the :root tokens). */
-.dialog{width:560px;height:1000px;display:flex;flex-direction:column;background:var(--bg);
-  font-family:Inter,system-ui,sans-serif;color:var(--text);overflow:hidden}
+/* Fill the window (capped at the design's 1000px) instead of a fixed 1000px height: when the OS
+   window's client area is shorter than 1000px the dialog shrinks to fit, the sections scroll, and
+   the footer stays pinned — so Confirm/Cancel are never clipped out of view. */
+.dialog{width:560px;max-width:100vw;height:100vh;max-height:1000px;display:flex;flex-direction:column;
+  background:var(--bg);font-family:Inter,system-ui,sans-serif;color:var(--text);overflow:hidden}
 .dialog-titlebar{height:36px;flex:none;display:flex;align-items:center;justify-content:space-between;
   padding:0 12px 0 14px;background:var(--tb-bg);color:var(--tb-text);font-size:13px}
 .dialog-titlebar .x{color:var(--muted2);cursor:pointer}
-.settings-body{flex:1;min-height:0;padding:20px 24px 18px;display:flex;flex-direction:column;gap:18px}
+.settings-body{flex:1;min-height:0;display:flex;flex-direction:column}
+/* the sections scroll when they're taller than the window; the footer below stays put */
+.settings-scroll{flex:1;min-height:0;overflow-y:auto;padding:20px 24px 18px;display:flex;flex-direction:column;gap:18px}
 
 .section{display:flex;flex-direction:column;gap:10px}
 .section.divided{border-top:1px solid var(--border);padding-top:18px}
@@ -41,8 +46,9 @@
 .switch-lg[aria-checked="true"]{background:var(--cyan);border-color:var(--cyan)}
 .switch-lg[aria-checked="true"] .switch-knob{left:23px;top:3px;background:#06222a}
 
-/* footer */
-.settings-foot{margin-top:auto;display:flex;align-items:center;gap:10px}
+/* footer — pinned below the scroll area, always visible */
+.settings-foot{flex:none;display:flex;align-items:center;gap:10px;padding:14px 24px;
+  border-top:1px solid var(--border);background:var(--bg)}
 .spacer{flex:1}
 .btn-text{height:38px;padding:0 14px;border-radius:8px;border:0;background:transparent;color:var(--muted);font:500 13px Inter,sans-serif;cursor:pointer}
 .btn-outline{height:38px;padding:0 18px;border-radius:8px;border:1px solid var(--border2);background:transparent;color:var(--text);font:600 13px Inter,sans-serif;cursor:pointer}

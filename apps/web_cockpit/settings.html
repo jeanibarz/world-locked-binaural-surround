@@ -19,6 +19,7 @@
   </div>
 
   <div class="settings-body" style="visibility:hidden"><!-- revealed by settings.js once seeded -->
+   <div class="settings-scroll"><!-- scrolls when taller than the window; footer stays pinned below -->
 
     <!-- Camera -->
     <div class="section">
@@ -116,6 +117,8 @@
       <div class="field" id="set-hpmodel"><span>Sennheiser HD 600</span><span class="caret">▾</span></div>
       <div class="note">Corrects the headphone's own frequency response. Pick your model, or switch off if your headphones are already equalized.</div>
     </div>
+
+   </div><!-- /.settings-scroll -->
 
     <div class="settings-foot">
       <button type="button" class="btn-text" id="reset-defaults">Reset to defaults</button>
