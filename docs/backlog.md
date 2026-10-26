@@ -10,6 +10,12 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
 
 ## Active native-engine reliability follow-ups
 
+- [x] **Small-cushion recovery coverage:** test real pipeline stages at three/four-block targets,
+  mixed endpoint rates, fragmented packets, repeated configuration changes, and explicit timing
+  limits. Extend the Windows capture probe with gap measurements. See journal 83.
+- [ ] **Trace rare remaining underruns (#217):** collect bounded capture/render/output timing and FIFO
+  transitions around a real event, then use that evidence to choose the next robustness change.
+
 - [x] **Capture recovery after live block switches (#215):** reproduce persistent starvation with
   a real Windows capture stall, drain queued packets per service, and add packet / production
   pipeline recovery tests plus an automated host gate. See journal 82.

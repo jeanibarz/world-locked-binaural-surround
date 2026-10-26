@@ -62,6 +62,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let block_dt = block as f64 / sr; // nominal output-block period (s)
     let mut buf: Vec<f32> = Vec::with_capacity(block * ch * 4);
 
+    let mut window_gaps = Vec::<f64>::new();
+    let mut window_max_batch = 0usize;
     let mut window_start = Instant::now();
     let (mut window_frames, mut window_discont) = (0u64, 0u64);
     while start.elapsed().as_secs_f64() < secs {
@@ -88,6 +90,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         let frames = buf.len() / ch;
         total_frames += frames as u64;
+        let now = Instant::now();
+        let gap = (now - last).as_secs_f64() * 1000.0;
+        max_gap_ms = max_gap_ms.max(gap);
+        window_gaps.push(gap);
+        window_max_batch = window_max_batch.max(frames);
+        last = now;
 
         // The render worker: form whole render blocks from the captured frames and push them.
         carry += frames;
@@ -106,20 +114,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         if window_start.elapsed().as_secs_f64() >= 1.0 {
-            println!("WINDOW t={:.2} rate_hz={:.1} discontinuities={} frames_per_read={frames}",
+            window_gaps.sort_by(f64::total_cmp);
+            let p95 = window_gaps[(window_gaps.len() - 1) * 95 / 100];
+            let max_gap = window_gaps.last().copied().unwrap_or(0.0);
+            println!("WINDOW t={:.2} rate_hz={:.1} discontinuities={} frames_per_read={frames} gap_p95_ms={p95:.3} gap_max_ms={max_gap:.3} max_batch_frames={window_max_batch}",
                 start.elapsed().as_secs_f64(),
                 (total_frames - window_frames) as f64 / window_start.elapsed().as_secs_f64(),
                 discont - window_discont);
             window_frames = total_frames;
             window_discont = discont;
             window_start = Instant::now();
+            window_gaps.clear();
+            window_max_batch = 0;
         }
-        let now = Instant::now();
-        let gap = (now - last).as_secs_f64() * 1000.0;
-        if gap > max_gap_ms {
-            max_gap_ms = gap;
-        }
-        last = now;
     }
 
     let _ = src.stop();

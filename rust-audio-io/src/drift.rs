@@ -219,4 +219,47 @@ mod tests {
         let mut ctrl = DriftController::new(2048.0);
         assert!((ctrl.update(2048.0) - 1.0).abs() < 1e-12);
     }
+    #[test]
+    fn small_cushions_hold_fill_across_both_clock_drift_directions() {
+        // Ideal continuous-frame plant: isolate slow clock correction from packet jitter. Each
+        // update represents one input block; elapsed time therefore depends on block size.
+        for block in [256, 512, 1024] {
+            for cushion in [3, 4] {
+                let target = (block * cushion) as f64;
+                let mut ctrl = DriftController::new(target);
+                let mut fill = target;
+                let mut lo = target;
+                let mut hi = target;
+                for ppm in [200.0, -200.0] {
+                    // Allow 15 virtual minutes for the slow 1024-frame controller, including
+                    // convergence tighter than the reported 10 ppm settling threshold.
+                    let steps = 900 * 48_000 / block;
+                    let mut last_outside = 0;
+                    for step in 0..steps {
+                        let relative = ctrl.update(fill);
+                        fill += block as f64 - block as f64 * (1.0 + ppm * 1e-6) / relative;
+                        lo = lo.min(fill);
+                        hi = hi.max(fill);
+                        assert!(
+                            fill > 0.0 && fill < target * 2.0,
+                            "ideal clock drift alone exhausted the cushion: {block}/{cushion}"
+                        );
+                        if (ctrl.correction_ppm() - ppm).abs() > 10.0 {
+                            last_outside = step;
+                        }
+                    }
+                    let settling_s = last_outside as f64 * block as f64 / 48_000.0;
+                    assert!((fill - target).abs() < 1.0);
+                    assert!(
+                        (ctrl.correction_ppm() - ppm).abs() < 1.0,
+                        "correction {} vs {ppm}",
+                        ctrl.correction_ppm()
+                    );
+                    assert!(settling_s < 500.0);
+                    println!("DRIFT block={block} cushion={cushion} step_ppm={ppm} settle_10ppm_s={settling_s:.2} fill_min={lo:.1} fill_max={hi:.1}");
+                }
+            }
+        }
+    }
+
 }

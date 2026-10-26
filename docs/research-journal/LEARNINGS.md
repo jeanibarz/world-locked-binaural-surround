@@ -683,3 +683,14 @@ full story.
     stream until a source gap, despite adequate DSP throughput. Test finite packet queues and
     combined notifications, and verify recovery rate after the forced loss interval rather than
     averaging the whole run. (→ [82](82-wasapi-coalesced-event-recovery.md))
+
+90. **Test the actual cushion and device demand duration.** A 40 ms test cushion at block 256 is
+    eight blocks; it does not validate the owner's three/four-block margin. Output requests are
+    frames divided by endpoint rate: 960 frames at 44.1 kHz exceed a three-block 16 ms cushion.
+    Check recovery per fault and preserve an expected boundary case instead of demanding clean
+    output from impossible timing. (→ [83](83-small-cushion-recovery-coverage.md))
+91. **Clock correction and starvation recovery operate on different timescales.** The ideal
+    production-gain model takes ~59–91 s to settle at block 256, versus tens of milliseconds for
+    FIFO recovery in the virtual pipeline. PI gains apply per block, so block duration changes
+    wall-clock response. Instrument real event timing before retuning gains to chase jitter.
+    (→ [83](83-small-cushion-recovery-coverage.md))
