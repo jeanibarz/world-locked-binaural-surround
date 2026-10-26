@@ -47,6 +47,12 @@ pub struct FifoStats {
 pub struct CushionFifo<T: Clone> {
     cushion: usize,
     max_backlog: usize,
+    /// How deep to rebuild the queue after an underrun before resuming the drain. Defaults to the
+    /// full `cushion` (the journal-81 policy: restore the whole margin). The engine lowers it to a
+    /// block or two (#192) so a *rare residual* underrun — drift is now corrected upstream by the
+    /// output resampler, so underruns are no longer the periodic sawtooth — resumes almost at once
+    /// instead of dumping a full cushion of silence (the audible "crack"). Clamped to `[1, cushion]`.
+    reprime_target: usize,
     silence: T,
     q: VecDeque<T>,
     repriming: bool,
@@ -64,7 +70,28 @@ impl<T: Clone> CushionFifo<T> {
         for _ in 0..cushion {
             q.push_back(silence.clone()); // prefill the cushion with silence
         }
-        Self { cushion, max_backlog, silence, q, repriming: false, stats: FifoStats::default() }
+        Self {
+            cushion,
+            max_backlog,
+            reprime_target: cushion, // journal-81 default: rebuild the whole cushion (engine lowers it)
+            silence,
+            q,
+            repriming: false,
+            stats: FifoStats::default(),
+        }
+    }
+
+    /// Set how deep the queue is rebuilt after an underrun before the drain resumes (#192). `1`
+    /// resumes as soon as a single block is available — the shortest possible silent hole — which is
+    /// safe once the output resampler holds the fill at the cushion, so underruns are rare and
+    /// transient rather than the periodic drift sawtooth. Clamped to `[1, cushion]`.
+    pub fn set_reprime_target(&mut self, blocks: usize) {
+        self.reprime_target = blocks.clamp(1, self.cushion);
+    }
+
+    /// The current re-prime rebuild depth in blocks (see [`set_reprime_target`](Self::set_reprime_target)).
+    pub fn reprime_target(&self) -> usize {
+        self.reprime_target
     }
 
     pub fn stats(&self) -> FifoStats {
@@ -103,8 +130,8 @@ impl<T: Clone> CushionFifo<T> {
     pub fn pull(&mut self) -> (Pull, Option<T>) {
         self.stats.pulls += 1;
         if self.repriming {
-            if self.q.len() >= self.cushion {
-                self.repriming = false; // cushion rebuilt — resume draining this same pull
+            if self.q.len() >= self.reprime_target {
+                self.repriming = false; // rebuilt to the target — resume draining this same pull
             } else {
                 self.stats.reprime_silent_blocks += 1;
                 return (Pull::Repriming, Some(self.silence.clone()));
@@ -187,5 +214,35 @@ mod tests {
         assert_eq!(f.stats().underruns, 1);
         assert_eq!(f.stats().reprimes, 1);
         assert_eq!(f.stats().reprime_silent_blocks, 2); // the underrun pull + one repriming pull
+    }
+
+    #[test]
+    fn softened_reprime_resumes_at_one_block() {
+        // #192: with reprime_target = 1 the drain resumes the instant a single block is available,
+        // so a residual underrun is a one-block silent hole, not a full-cushion crack.
+        let mut f = CushionFifo::new(4, 8, 0u32);
+        f.set_reprime_target(1);
+        assert_eq!(f.reprime_target(), 1);
+        for _ in 0..4 {
+            assert_eq!(f.pull().0, Pull::Block); // drain the prefill
+        }
+        assert_eq!(f.pull().0, Pull::Underrun); // empty -> underrun + reprime
+        assert!(f.is_repriming());
+        f.push(10); // just one block rebuilt
+        let (p, b) = f.pull();
+        assert_eq!(p, Pull::Block); // resumes immediately at one block
+        assert_eq!(b, Some(10));
+        assert!(!f.is_repriming());
+        // Only the underrun pull itself was silent — no full-cushion rebuild hole.
+        assert_eq!(f.stats().reprime_silent_blocks, 1);
+    }
+
+    #[test]
+    fn reprime_target_is_clamped_to_cushion_range() {
+        let mut f = CushionFifo::new(3, 6, 0u32);
+        f.set_reprime_target(0);
+        assert_eq!(f.reprime_target(), 1); // floored at 1
+        f.set_reprime_target(99);
+        assert_eq!(f.reprime_target(), 3); // capped at the cushion
     }
 }

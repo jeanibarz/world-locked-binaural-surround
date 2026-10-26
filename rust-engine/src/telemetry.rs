@@ -80,6 +80,9 @@ pub struct TeleInput<'a> {
     pub cushion_blocks: usize,
     pub fifo_fill: usize,
     pub fifo_capacity: usize,
+    /// Live output-resampler drift correction in ppm (#192) — the PI loop's current nudge holding
+    /// the FIFO fill at the cushion. Near-zero and steady = the source/output clocks are reconciled.
+    pub resample_ppm: f64,
     pub underruns: u64,
     pub overflow_drops: u64,
     pub discontinuities: u64,
@@ -166,6 +169,7 @@ pub fn build_state(t: &TeleInput) -> Value {
         "fill_blocks": t.fifo_fill,
         "cushion_blocks": t.cushion_blocks,
         "capacity": t.fifo_capacity,
+        "resample_ppm": t.resample_ppm,
     });
 
     // --- dropouts: underruns dominate; overflow drops are the drift cap firing ---
@@ -316,6 +320,7 @@ mod tests {
             cushion_blocks: 4,
             fifo_fill: 4,
             fifo_capacity: 8,
+            resample_ppm: 0.0,
             underruns: 0,
             overflow_drops: 0,
             discontinuities: 0,
@@ -361,6 +366,7 @@ mod tests {
         }
         assert_eq!(s["buffer"]["cushion_blocks"], 4);
         assert_eq!(s["buffer"]["capacity"], 8);
+        assert!(s["buffer"]["resample_ppm"].is_number());
         assert!(s["latency"]["segments"].as_array().unwrap().len() == 4);
     }
 

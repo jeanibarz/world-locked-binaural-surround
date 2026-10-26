@@ -25,6 +25,11 @@ rustfft = "6"
 # tests) but main() prints a notice.
 [target.'cfg(windows)'.dependencies]
 audio_io = { path = "../rust-audio-io" }
+# Variable-ratio async resampler on the output path (#192): corrects the source↔output clock drift
+# that drains the cushion FIFO (the sawtooth underruns), and converts a mismatched output-endpoint
+# rate. Polynomial (FastFixedIn) is ample for tens-of-ppm nudges and a 48k↔44.1k nominal — no sinc
+# cost. rubato 0.15 depends on realfft ^3.2, unifying with the engine's realfft 3.5 (no new tree).
+rubato = "0.15.0"
 # The Rust-native head-pose pipeline (ONNX via ort) — the zero-Python tracker.
 vision_client = { path = "../rust-vision-client", features = ["inference"] }
 # Minimal blocking HTTP (no TLS) to pull the camera MJPEG frames that feed the pose pipeline.
