@@ -73,76 +73,99 @@
   }
 
   function init(cfg) {
-    cfg = cfg || {};
+    // C is the live config; seed(c) replaces it and refreshes every control, so the same function
+    // runs on first load and again after "reset to defaults". Handlers read C / the state below at
+    // click time, so they are wired exactly once.
+    let C = cfg || {};
+    let blocks = BLOCKS.slice();
+    let blockIdx = 0, cushionMs = 60, cushBlk = 2;
+    const setToggle = (id, on) => { const t = $(id); if (t) t.setAttribute("aria-checked", on ? "true" : "false"); };
+    const sr = () => C.samplerate || 48000;
+    const blockMs = () => blocks[blockIdx] / sr() * 1000;
+    const cams = () => (C.cameras || [["Camera 0", 0]]).map(([label, idx]) => ({ label, value: idx }));
+
     // --- camera / resolution / fps ---
-    const cams = (cfg.cameras || [["Camera 0", 0]]).map(([label, idx]) => ({ label, value: idx }));
     // No custom render: the picked camera's own label (its name) is what we show. (The old render
     // returned `firstChild.nodeValue`, but the field's first child is the <span> element — whose
     // nodeValue is null — so choosing a camera blanked the field.)
-    wireDropdown("set-camera", () => cams, "set_camera");
-    const RES = cfg.resolutions || ["default", "320×240", "640×480", "848×480", "1280×720"];
-    const FPS = cfg.framerates || ["default", "30 fps", "60 fps"];
-    $("set-resolution").addEventListener("click", () => openMenu($("set-resolution"), RES, (v) => { fieldText($("set-resolution"), v); call("set_cam_format", ...parseFmt(v, curFps())); }));
-    $("set-fps").addEventListener("click", () => openMenu($("set-fps"), FPS, (v) => { fieldText($("set-fps"), v); call("set_cam_format", ...parseFmt(curRes(), v)); }));
+    wireDropdown("set-camera", cams, "set_camera");
+    const RES = () => C.resolutions || ["default", "320×240", "640×480", "848×480", "1280×720"];
+    const FPS = () => C.framerates || ["default", "30 fps", "60 fps"];
+    $("set-resolution").addEventListener("click", () => openMenu($("set-resolution"), RES(), (v) => { fieldText($("set-resolution"), v); call("set_cam_format", ...parseFmt(v, curFps())); }));
+    $("set-fps").addEventListener("click", () => openMenu($("set-fps"), FPS(), (v) => { fieldText($("set-fps"), v); call("set_cam_format", ...parseFmt(curRes(), v)); }));
     wireToggle("fliph-toggle", "set_flip_h");  // camera un-mirror (#191)
     wireToggle("flipv-toggle", "set_flip_v");
     wireToggle("landmarks-toggle", "set_show_landmarks");  // FaceMesh overlay (#185)
 
     // --- engine ---
-    wireDropdown("set-method", () => cfg.methods || ["nearest", "timealign", "minphase", "notchwarp"], "set_method");
+    wireDropdown("set-method", () => C.methods || ["nearest", "timealign", "minphase", "notchwarp"], "set_method");
     wireSegment("set-backend", "set_backend");
 
-    // --- audio output --- (cushion is defined in BLOCKS; ms is shown as a derived hint)
-    const sr = cfg.samplerate || 48000;
-    let blockIdx = Math.max(0, BLOCKS.indexOf(cfg.block || 1024));
-    const blockMs = () => BLOCKS[blockIdx] / sr * 1000;
-    let cushBlk = Math.max(2, Math.round((cfg.cushion_ms != null ? cfg.cushion_ms : 60) / blockMs()));
-
+    // --- audio output --- (cushion is shown in blocks; ms is a derived hint)
+    // The engine stores `cushion_ms` and derives blocks = max(2, round(ms / block_ms)). A block-size
+    // change keeps cushion_ms and re-derives the blocks, so we mirror that (cushionMs is the source
+    // of truth; cushBlk is what the engine will derive from it at the current block size).
+    const cushFromMs = () => Math.max(2, Math.round(cushionMs / blockMs()));
     const showCushion = () => {
       $("cushion-val").textContent = cushBlk + " blk";
       $("cushion-ms").textContent = Math.round(cushBlk * blockMs()) + " ms";
     };
     const showBlock = () => {
-      $("block-val").textContent = String(BLOCKS[blockIdx]);
+      $("block-val").textContent = String(blocks[blockIdx]);
       $("block-ms").textContent = blockMs().toFixed(1) + " ms per block";
       showCushion();  // block size changes the cushion's duration, so refresh its ms hint
     };
-    $("block-minus").addEventListener("click", () => {
-      if (blockIdx > 0) { blockIdx--; showBlock(); call("set_block", BLOCKS[blockIdx]); }
-    });
-    $("block-plus").addEventListener("click", () => {
-      if (blockIdx < BLOCKS.length - 1) { blockIdx++; showBlock(); call("set_block", BLOCKS[blockIdx]); }
-    });
-    const applyCushion = () => { showCushion(); call("set_cushion", cushBlk * blockMs()); };
+    const applyBlock = () => {
+      cushBlk = cushFromMs();  // engine keeps cushion_ms and recomputes blocks for the new block size
+      showBlock(); call("set_block", blocks[blockIdx]);
+    };
+    $("block-minus").addEventListener("click", () => { if (blockIdx > 0) { blockIdx--; applyBlock(); } });
+    $("block-plus").addEventListener("click", () => { if (blockIdx < blocks.length - 1) { blockIdx++; applyBlock(); } });
+    const applyCushion = () => { cushionMs = cushBlk * blockMs(); showCushion(); call("set_cushion", cushionMs); };
     $("cushion-minus").addEventListener("click", () => { cushBlk = Math.max(2, cushBlk - 1); applyCushion(); });
     $("cushion-plus").addEventListener("click", () => { cushBlk = Math.min(64, cushBlk + 1); applyCushion(); });
-    showBlock();
 
     wireToggle("exclusive-toggle", "set_exclusive");
 
     // --- spatial filter ---
-    wireDropdown("set-hrir", () => cfg.hrir || ["mine"], "set_hrir");
+    wireDropdown("set-hrir", () => C.hrir || ["mine"], "set_hrir");
     wireSegment("set-comp", "set_comp");
 
     // --- headphone compensation (EQ on/off is visual for now; model list if provided) ---
     wireToggle("hpeq-toggle", "set_hpeq");
-    if (cfg.hp_models) wireDropdown("set-hpmodel", () => cfg.hp_models, "set_hp_model");
+    if (C.hp_models) wireDropdown("set-hpmodel", () => C.hp_models, "set_hp_model");
 
-    // --- seed current selections from the live config ---
-    if (cfg.backend) selectSeg("set-backend", cfg.backend);
-    if (cfg.comp) selectSeg("set-comp", cfg.comp);
-    if (cfg.method) fieldText($("set-method"), cfg.method);
-    if (cfg.hrir_name) fieldText($("set-hrir"), cfg.hrir_name);
-    if (cfg.camera != null) {
-      const cur = cams.find((c) => String(c.value) === String(cfg.camera));
-      if (cur) fieldText($("set-camera"), cur.label);  // show the live camera, not the HTML default
-    }
-    const setToggle = (id, on) => { const t = $(id); if (t) t.setAttribute("aria-checked", on ? "true" : "false"); };
-    if (cfg.exclusive != null) setToggle("exclusive-toggle", cfg.exclusive);
-    if (cfg.hp_eq != null) setToggle("hpeq-toggle", cfg.hp_eq);
-    if (cfg.flip_h != null) setToggle("fliph-toggle", cfg.flip_h);
-    if (cfg.flip_v != null) setToggle("flipv-toggle", cfg.flip_v);
-    if (cfg.show_landmarks != null) setToggle("landmarks-toggle", cfg.show_landmarks);
+    // --- seed current selections from the live config (idempotent; also run after reset) ---
+    const seed = (c) => {
+      C = c || {};
+      if (C.backend) selectSeg("set-backend", C.backend);
+      if (C.comp) selectSeg("set-comp", C.comp);
+      if (C.method) fieldText($("set-method"), C.method);
+      if (C.hrir_name) fieldText($("set-hrir"), C.hrir_name);
+      if (C.camera != null) {
+        const cur = cams().find((x) => String(x.value) === String(C.camera));
+        if (cur) fieldText($("set-camera"), cur.label);  // show the live camera, not the HTML default
+      }
+      // Resolution / fps must be seeded too: a lone fps change sends set_cam_format(res, fps), and
+      // an unseeded resolution would silently reset the camera to the HTML default 640x480.
+      fieldText($("set-resolution"), C.cam_w > 0 && C.cam_h > 0 ? C.cam_w + "×" + C.cam_h : "default");
+      fieldText($("set-fps"), C.cam_fps > 0 ? C.cam_fps + " fps" : "default");
+      if (C.exclusive != null) setToggle("exclusive-toggle", C.exclusive);
+      if (C.hp_eq != null) setToggle("hpeq-toggle", C.hp_eq);
+      if (C.flip_h != null) setToggle("fliph-toggle", C.flip_h);
+      if (C.flip_v != null) setToggle("flipv-toggle", C.flip_v);
+      if (C.show_landmarks != null) setToggle("landmarks-toggle", C.show_landmarks);
+      // block list: the standard sizes, plus the engine's real block when it is a non-standard one
+      // (e.g. --block 384), so the stepper shows what the engine actually runs.
+      blocks = BLOCKS.slice();
+      const blk = C.block > 0 ? Math.round(C.block) : 1024;
+      if (blocks.indexOf(blk) < 0) { blocks.push(blk); blocks.sort((x, y) => x - y); }
+      blockIdx = blocks.indexOf(blk);
+      cushionMs = C.cushion_ms != null ? C.cushion_ms : 60;
+      cushBlk = cushFromMs();
+      showBlock();
+    };
+    seed(C);
 
     // --- edit session --- changes apply live but are saved only on Confirm; Cancel / ✕ / closing
     // the window restores the engine to how it was when the dialog opened (the snapshot + revert
@@ -155,7 +178,13 @@
     $("settings-apply").addEventListener("click", () => finish("settings_commit"));   // "Confirm"
     $("settings-cancel").addEventListener("click", () => finish("settings_cancel"));
     $("settings-close").addEventListener("click", () => finish("settings_cancel"));   // ✕ = discard
-    $("reset-defaults").addEventListener("click", () => call("reset_defaults"));
+    // reset applies live in the engine, so re-read the config afterwards and re-seed the dialog;
+    // otherwise Confirm would commit values the user never saw. (No-ops standalone.)
+    $("reset-defaults").addEventListener("click", async () => {
+      await call("reset_defaults");
+      if (location.protocol.indexOf("http") !== 0) return;
+      try { seed(await (await fetch("/api/get_config")).json()); } catch (e) { /* keep current view */ }
+    });
     // closing the OS window without choosing = Cancel (restore); sendBeacon survives unload
     window.addEventListener("beforeunload", () => {
       if (done) return;

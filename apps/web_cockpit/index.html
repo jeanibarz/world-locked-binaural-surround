@@ -119,16 +119,16 @@
         <div class="lat-headline"><span id="lat-ms" class="lat-ms">178</span><span class="lat-unit">ms</span><span id="lat-verdict" class="pill-verdict good">GOOD</span></div>
         <div id="lat-detail" class="mono lat-detail">median · p95 186 · p99 194</div>
         <div id="lat-bar" class="lat-bar">
-          <div class="lat-seg seg-capture" style="flex:62 1 0">~62</div>
-          <div class="lat-seg" style="flex:47 1 0;background:#ff6b6b;color:#2a0a0a">47</div>
-          <div class="lat-seg" style="flex:47 1 0;background:#ffb340;color:#2b1a02">47</div>
-          <div class="lat-seg" style="flex:22 1 0;background:#35d0d0;color:#06222a">22</div>
+          <div class="lat-seg seg-capture" style="flex:62 1 0">cap</div>
+          <div class="lat-seg" style="flex:47 1 0;background:#35d0d0;color:#06222a">render</div>
+          <div class="lat-seg" style="flex:47 1 0;background:#2b6f78;color:#cdefff">buffer</div>
+          <div class="lat-seg" style="flex:22 1 0;background:#4cd98a;color:#06222a">out</div>
         </div>
-        <div class="lat-legend">
-          <div class="leg"><span class="leg-sw sw-capture"></span>Capture (est.)</div>
-          <div class="leg"><span class="leg-sw" style="background:#ff6b6b"></span>Camera stale</div>
-          <div class="leg"><span class="leg-sw" style="background:#ffb340"></span>FIFO queue</div>
-          <div class="leg"><span class="leg-sw" style="background:#35d0d0"></span>Device (WASAPI)</div>
+        <div id="lat-legend" class="lat-legend">
+          <div class="leg"><span class="leg-sw sw-capture"></span>cap</div>
+          <div class="leg"><span class="leg-sw" style="background:#35d0d0"></span>render</div>
+          <div class="leg"><span class="leg-sw" style="background:#2b6f78"></span>buffer</div>
+          <div class="leg"><span class="leg-sw" style="background:#4cd98a"></span>out</div>
         </div>
         <div class="lat-dist-label">Distribution (ms)</div>
         <div class="lat-dist">
