@@ -16,6 +16,7 @@
 
 mod assets;
 mod geometry;
+mod hp_eq;
 mod interp;
 mod pack;
 mod packs;
@@ -48,6 +49,7 @@ mod engine {
     use render_core_lib::{GridRender, Lfe};
 
     use crate::geometry::{head_relative_azimuths, head_relative_azimuths_5p1};
+    use crate::hp_eq::{self, OutputEq};
     use crate::pack::BrirPack;
     use crate::telemetry::{self, LatencyHistogram, TeleInput};
 
@@ -77,6 +79,13 @@ mod engine {
     /// holds the fill at the cushion, so an underrun is a rare transient (a render stall), not the
     /// periodic drift sawtooth that the old full-cushion re-prime was guarding against.
     const REPRIME_TARGET_BLOCKS: usize = 1;
+
+    /// The global headroom pre-attenuation applied to the stereo output before the headphone-EQ
+    /// chain (#193). The owner's EqualizerAPO root `config.txt` ran `Preamp: -20 dB` ahead of the
+    /// baked preset, giving the big subjective bass shelves (+22/+28 dB at 40/80 Hz) room not to
+    /// clip. We fold the same -20 dB into the EQ's per-ear gain so the engine reproduces the level
+    /// the owner listened at; the BUG-21 output clamp is the final clip safety behind it.
+    const GLOBAL_OUTPUT_PREAMP_DB: f64 = -20.0;
 
     /// Build a cushion FIFO with the engine's softened re-prime depth applied (#192). Used both at
     /// start-up and on a live block/cushion RECONFIG so the two agree.
@@ -352,7 +361,7 @@ mod engine {
             block,
             cushion_ms: latency_ms,
             exclusive: false,
-            hp_eq: false,
+            hp_eq: true, // the owner listened with the headphone comp + subjective EQ on (#193)
             hp_model: None,
             predict: false,
             invert_tracking: false,
@@ -516,6 +525,30 @@ mod engine {
 
         let mut render = build_render(&pack, n_in, block, latency_ms, &settings.method, interp_step)?;
 
+        // Post-convolution headphone comp + subjective EQ (#193) — the stereo output-bus timbre
+        // stage that reproduces the owner's EqualizerAPO chain. The bundled config dir resolves
+        // install-relative like the other assets; a missing/broken bundle degrades gracefully to
+        // "EQ disabled" rather than aborting the engine. Rebuilt on a block-size change (the comp
+        // FIR convolver is sized to the block); the slow samplerate is fixed at the pack rate.
+        let hp_eq_cfg = assets::resolve_dir(arg(&a, "--hp-eq-dir").as_deref(), "WLBS_HP_EQ_DIR", "hp_eq")
+            .join("baked_7p1_rev26_final.txt");
+        let build_hp_eq = |blk: usize| -> Option<OutputEq> {
+            match hp_eq::load_output_eq(&hp_eq_cfg, pack.samplerate, blk, GLOBAL_OUTPUT_PREAMP_DB) {
+                Ok(eq) => {
+                    println!("HP_EQ loaded (global {GLOBAL_OUTPUT_PREAMP_DB:+} dB): {}", eq.summary());
+                    Some(eq)
+                }
+                Err(e) => {
+                    eprintln!("HP_EQ_WARN {e} — headphone EQ disabled");
+                    None
+                }
+            }
+        };
+        let mut output_eq = build_hp_eq(block);
+        // Tracks the previous tick's enable state so a bypass→enable transition can clear the EQ's
+        // stale tail (FIR delay line + biquad memory) and resume without a click.
+        let mut hp_eq_was_on = false;
+
         let start = Instant::now();
         let mut in_acc: Vec<f32> = Vec::with_capacity(block * n_in * 4);
         let mut buf: Vec<f32> = Vec::with_capacity(block * n_in * 4);
@@ -634,6 +667,11 @@ mod engine {
                     if render_ok {
                         block = settings.block; // only advance the live block once render matches it
                         *lock_fifo(&fifo) = new_fifo(cushion, block);
+                        if block_changed {
+                            // The comp-FIR convolver is sized to the block, so rebuild the EQ too.
+                            output_eq = build_hp_eq(block);
+                            hp_eq_was_on = false;
+                        }
                         in_acc.clear();
                         println!("RECONFIG block={block} cushion={cushion} method={}", settings.method);
                     }
@@ -684,6 +722,18 @@ mod engine {
                     out64.resize(block * 2, 0.0);
                     let t0 = Instant::now();
                     render.process_into(&pcm64, &az, &mut out64);
+                    // Headphone comp + subjective EQ on the stereo output bus (#193), applied before
+                    // the BUG-21 clamp so any EQ overshoot is caught by that same clip safety. A
+                    // bypass→enable transition clears the EQ's stale tail to avoid a click.
+                    if settings.hp_eq {
+                        if let Some(eq) = output_eq.as_mut() {
+                            if !hp_eq_was_on {
+                                eq.reset();
+                            }
+                            eq.process_interleaved(&mut out64);
+                        }
+                    }
+                    hp_eq_was_on = settings.hp_eq;
                     let pct = if block_time > 0.0 { t0.elapsed().as_secs_f64() / block_time * 100.0 } else { 0.0 };
                     render_ema = render_ema * 0.9 + pct * 0.1;
                     if pct > render_peak { render_peak = pct; }
