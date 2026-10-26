@@ -248,6 +248,7 @@ mod engine {
             "predict": s.predict, "invert_tracking": s.invert_tracking,
             "flip_h": s.flip_h, "flip_v": s.flip_v, "show_landmarks": s.show_landmarks,
             "win_w": s.win_w, "win_h": s.win_h,
+            "camera": s.camera, "cam_w": s.cam_w, "cam_h": s.cam_h, "cam_fps": s.cam_fps,
         })
     }
 
@@ -292,8 +293,10 @@ mod engine {
         let source = arg(&a, "--source").unwrap_or_else(|| "VoiceMeeter".into());
         let output = arg(&a, "--output").unwrap_or_else(|| "Bigscreen".into());
         let port: u16 = arg_num(&a, "--port")?.unwrap_or(8732);
-        let block: usize = arg_num(&a, "--block")?.unwrap_or(256);
-        let latency_ms: f64 = arg_num(&a, "--latency-ms")?.unwrap_or(20.0);
+        // Same clamps as the settings dialog / persisted overlay: `--block 0` would divide by zero in
+        // `cushion_blocks` and attempt a huge FIFO allocation.
+        let block: usize = arg_num::<usize>(&a, "--block")?.unwrap_or(256).clamp(64, 8192);
+        let latency_ms: f64 = arg_num::<f64>(&a, "--latency-ms")?.unwrap_or(20.0).clamp(1.0, 500.0);
         let yaw_sign: f64 = arg_num(&a, "--yaw-sign")?.unwrap_or(1.0);
         // Ring-interpolation method (#187): nearest | timealign | minphase | notchwarp. The owner
         // prefers timealign, so it's the default. `--interp-step` sets the dense-ring spacing (deg):
@@ -380,7 +383,7 @@ mod engine {
 
         // --- live settings: CLI/computed defaults, then the persisted overlay (BUG-08) ---
         let store = SettingsStore::new(assets::appdata_wlbs().join("settings.json"));
-        let defaults = Settings {
+        let mut defaults = Settings {
             method: "timealign".into(), // the owner's preferred method (#187)
             hrir_name: arg(&a, "--pack").unwrap_or_else(|| "default".into()),
             backend: "rust".into(),
@@ -471,6 +474,9 @@ mod engine {
         } else {
             settings.camera.clone().or_else(|| cameras.first().map(|(id, _)| id.clone()))
         };
+        // Reset-to-defaults must restore the camera actually in use at startup (usually the auto-picked
+        // one, which `defaults.camera` — the CLI value — leaves as None), so the reconcile switches back.
+        defaults.camera = auto_cam.clone();
         let pose_source: &str;
         if let Some(id) = auto_cam {
             pose_source = "camera";
@@ -512,25 +518,6 @@ mod engine {
             pose_source = "held";
             println!("POSE none (held yaw 0)");
         }
-
-        // --- output thread: drain the FIFO to the render endpoint ---
-        // The endpoint must run at the source/pack rate (checked in output_loop). On ANY output exit
-        // — error or clean — `running` is flipped so the render loop stops filling a FIFO nobody
-        // drains ("running but no sound"), and surfaces the error to telemetry (BUG-04).
-        let output_handle = {
-            let fifo = Arc::clone(&fifo);
-            let running = Arc::clone(&running);
-            let output = output.clone();
-            let out_status = Arc::clone(&out_status);
-            let expected_sr = pack.samplerate;
-            std::thread::spawn(move || {
-                if let Err(e) = output_loop(&output, fifo, Arc::clone(&running), block, expected_sr, &out_status) {
-                    eprintln!("OUTPUT_ERROR {e}");
-                    out_status.lock().unwrap().err = Some(e);
-                }
-                running.store(false, Ordering::Relaxed);
-            })
-        };
 
         // --- capture + render thread (this thread) ---
         init_com()?;
@@ -584,6 +571,25 @@ mod engine {
         // stale tail (FIR delay line + biquad memory) and resume without a click.
         let mut hp_eq_was_on = false;
 
+        // --- output thread: drain the FIFO to the render endpoint ---
+        // The endpoint must run at the source/pack rate (checked in output_loop). On ANY output exit
+        // — error or clean — `running` is flipped so the render loop stops filling a FIFO nobody
+        // drains ("running but no sound"), and surfaces the error to telemetry (BUG-04).
+        let output_handle = {
+            let fifo = Arc::clone(&fifo);
+            let running = Arc::clone(&running);
+            let output = output.clone();
+            let out_status = Arc::clone(&out_status);
+            let expected_sr = pack.samplerate;
+            std::thread::spawn(move || {
+                if let Err(e) = output_loop(&output, fifo, Arc::clone(&running), block, expected_sr, &out_status) {
+                    eprintln!("OUTPUT_ERROR {e}");
+                    out_status.lock().unwrap().err = Some(e);
+                }
+                running.store(false, Ordering::Relaxed);
+            })
+        };
+
         let start = Instant::now();
         let mut in_acc: Vec<f32> = Vec::with_capacity(block * n_in * 4);
         let mut buf: Vec<f32> = Vec::with_capacity(block * n_in * 4);
@@ -595,6 +601,8 @@ mod engine {
         let mut render_ema = 0.0f64; // EMA of per-block render time as % of the block budget
         let mut render_peak = 0.0f64;
         let mut lat = LatencyHistogram::new(120, 20, 0.0, 120.0);
+        let mut drops = telemetry::DropWindow::new(Duration::from_secs(60)); // 60 s dropout window
+        let mut fatal: Option<String> = None; // fatal capture error: break to teardown, return after
         let mut snapshot: Option<Settings> = None; // live edit-session snapshot (begin/commit/cancel)
         let mut read_errs = 0u32; // consecutive capture-read errors (transient → retry; BUG-14)
         let mut discontinuities = 0u64; // device-signalled capture glitches (BUG-33)
@@ -666,7 +674,6 @@ mod engine {
                 }
             }
             if dirty {
-                cockpit.set_config(build_config(&settings, &cameras_json, &hrir_list, pack.samplerate));
                 // Reconcile the pose source's tracking direction to the (possibly just reverted)
                 // setting, so a toggle, a settings-dialog cancel, and reset-to-defaults all agree
                 // with the live radar/audio direction (#189). A no-op when unchanged.
@@ -678,11 +685,6 @@ mod engine {
                 // capture thread only reopens when the request actually changed; a no-op is ignored.
                 if let Some(cam_id) = settings.camera.clone() {
                     pose.set_cam_request(cam_id, settings.cam_w, settings.cam_h, settings.cam_fps);
-                }
-                // Persist immediately for the main-cockpit controls (predict/recenter/window/tab);
-                // settings-dialog changes are held until Confirm (while a snapshot is active).
-                if snapshot.is_none() {
-                    let _ = persist_tx.send(settings.to_json());
                 }
                 // Block/cushion/method are the knobs re-applied to the live audio graph here on the
                 // capture thread (the camera is switched live just above; hrir/exclusive still need a
@@ -704,6 +706,7 @@ mod engine {
                                 eprintln!("RECONFIG_ERROR {e}");
                                 settings.block = block_before;
                                 settings.method = method_before.clone();
+                                settings.cushion_ms = cush_before;
                                 false
                             }
                         }
@@ -719,8 +722,19 @@ mod engine {
                             hp_eq_was_on = false;
                         }
                         in_acc.clear();
+                        lat.clear(); // pre/post-change latency samples must not mix in the histogram
+                        drops.clear(); // the new FIFO's counters restart from 0
                         println!("RECONFIG block={block} cushion={cushion} method={}", settings.method);
                     }
+                }
+                // Only now — after the reconfig succeeded or reverted — publish and persist, so the
+                // cockpit config and the settings file always carry the live working values (a failed
+                // rebuild must not persist a block/method that would crash-loop the next launch).
+                cockpit.set_config(build_config(&settings, &cameras_json, &hrir_list, pack.samplerate));
+                // Persist immediately for the main-cockpit controls (predict/recenter/window/tab);
+                // settings-dialog changes are held until Confirm (while a snapshot is active).
+                if snapshot.is_none() {
+                    let _ = persist_tx.send(settings.to_json());
                 }
             }
 
@@ -736,8 +750,10 @@ mod engine {
                     read_errs += 1;
                     eprintln!("CAPTURE_READ_ERROR ({read_errs}) {e}");
                     if read_errs >= 200 {
-                        running.store(false, Ordering::Relaxed);
-                        return Err(format!("capture failed {read_errs}× in a row: {e}").into());
+                        // Fall through to the teardown below (join output + persist) instead of
+                        // returning here and leaking the output thread; the error is returned after.
+                        fatal = Some(format!("capture failed {read_errs}× in a row: {e}"));
+                        break;
                     }
                     std::thread::sleep(Duration::from_millis(5));
                     continue;
@@ -816,7 +832,11 @@ mod engine {
                     let f = lock_fifo(&fifo);
                     (f.cushion(), f.len(), f.stats())
                 };
-                lat.push(telemetry::estimate_total_ms(block, pack.samplerate, cushion_now, render_ema));
+                let total_ms = telemetry::estimate_total_ms(block, pack.samplerate, cushion_now, render_ema);
+                lat.axis_hi = telemetry::hist_axis_hi(total_ms);
+                lat.push(total_ms);
+                // "Dropouts, last 60 s": windowed delta of the FIFO's lifetime counters.
+                let (win_underruns, win_overflow) = drops.push(Instant::now(), st.underruns, st.overflow_drops);
                 let os = out_status.lock().unwrap().clone();
                 let cam_error = pose.cam_error();
                 let pose_stale = pose.millis_since_update().map_or(false, |m| m >= 1500);
@@ -841,8 +861,8 @@ mod engine {
                     fifo_fill: fill_now,
                     fifo_capacity: cushion_now * 2,
                     resample_ppm: os.resample_ppm,
-                    underruns: st.underruns,
-                    overflow_drops: st.overflow_drops,
+                    underruns: win_underruns,
+                    overflow_drops: win_overflow,
                     discontinuities,
                     rendered_blocks,
                     render_load_pct: render_ema,
@@ -880,6 +900,63 @@ mod engine {
         drop(persist_tx);
         let _ = persist_handle.join();
         println!("DONE rendered_blocks={rendered_blocks} elapsed_s={:.2}", start.elapsed().as_secs_f64());
+        // A dead output (e.g. device absent at startup) ends the loop before the heartbeat ever reads
+        // `out_status`, which used to exit 0 with no visible error. Push one last state carrying the
+        // error, give SSE a moment to deliver it, then fail the process.
+        let out_err = out_status.lock().unwrap().err.clone();
+        if let Some(err) = out_err {
+            let (cushion_now, fill_now) = {
+                let f = lock_fifo(&fifo);
+                (f.cushion(), f.len())
+            };
+            let os = out_status.lock().unwrap().clone();
+            let pose_stale = pose.millis_since_update().map_or(false, |m| m >= 1500);
+            let cam_error = pose.cam_error();
+            let state = telemetry::build_state(&TeleInput {
+                title: "WLBS Engine",
+                yaw_deg: *pose.yaw.lock().unwrap(),
+                predict: settings.predict,
+                invert_tracking: settings.invert_tracking,
+                flip_h: settings.flip_h,
+                flip_v: settings.flip_v,
+                block,
+                sample_rate: pack.samplerate,
+                cushion_blocks: cushion_now,
+                fifo_fill: fill_now,
+                fifo_capacity: cushion_now * 2,
+                resample_ppm: os.resample_ppm,
+                underruns: 0,
+                overflow_drops: 0,
+                discontinuities,
+                rendered_blocks,
+                render_load_pct: render_ema,
+                render_peak_pct: render_peak,
+                source_idle: true,
+                source_silent,
+                source_name: &source,
+                source_sr: sfmt.sample_rate,
+                source_ch: sfmt.channels,
+                output_name: &output,
+                output_sr: os.sr,
+                output_err: Some(err.as_str()),
+                pose_source,
+                tracking: pose.is_tracking(),
+                pose_stale,
+                cam_res: pose.cam_res(),
+                cam_error: cam_error.as_deref(),
+                mmcss,
+                show_landmarks: false,
+                landmarks: None,
+                face_box: None,
+                lat: &lat,
+            });
+            cockpit.push_state(telemetry::wrap_state(state));
+            std::thread::sleep(Duration::from_millis(300));
+            return Err(format!("output failed: {err}").into());
+        }
+        if let Some(e) = fatal {
+            return Err(e.into());
+        }
         Ok(())
     }
 
