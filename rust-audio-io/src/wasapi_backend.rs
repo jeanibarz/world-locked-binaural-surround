@@ -168,16 +168,25 @@ impl AudioSource for WasapiLoopback {
             return Ok(None); // timed out
         }
         let info = self.capture.read_from_device_to_deque(&mut self.scratch).map_err(|e| e.to_string())?;
-        // Drain whole samples from the byte deque → f32.
+        // Drain whole samples from the byte deque → f32. When the device flags the packet SILENT its
+        // buffer contents are undefined and must be treated as silence, so emit zeros (still draining
+        // the bytes so the sample count, frames * channels, is preserved).
         let bps = self.bytes_per_sample;
+        let silent = info.flags.silent;
+        let start_len = out.len();
         let mut buf = [0u8; 4];
         while self.scratch.len() >= bps {
             for b in buf.iter_mut().take(bps) {
                 *b = self.scratch.pop_front().unwrap();
             }
-            out.push(bytes_to_f32(&buf[..bps], self.sample_type, self.bits));
+            out.push(if silent { 0.0 } else { bytes_to_f32(&buf[..bps], self.sample_type, self.bits) });
         }
-        Ok(Some(CaptureFlags { discontinuity: info.flags.data_discontinuity, silent: info.flags.silent }))
+        if out.len() == start_len {
+            // Empty packet (a spurious wake yields AUDCLNT_S_BUFFER_EMPTY / 0 frames): not a real
+            // capture, so let the caller's timeout/heartbeat path handle it.
+            return Ok(None);
+        }
+        Ok(Some(CaptureFlags { discontinuity: info.flags.data_discontinuity, silent }))
     }
 
     fn stop(&mut self) -> Result<(), String> {
