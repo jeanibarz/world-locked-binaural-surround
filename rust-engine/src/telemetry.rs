@@ -36,6 +36,11 @@ impl LatencyHistogram {
         self.samples.push_back(ms);
     }
 
+    /// Drop all samples (a block/cushion reconfig changes the latency, so old samples would mix).
+    pub fn clear(&mut self) {
+        self.samples.clear();
+    }
+
     /// Bin heights normalised to 0..100 (percent of the tallest bin), for the UI's `height: h%` bars.
     pub fn heights_pct(&self) -> Vec<u32> {
         let mut counts = vec![0u32; self.bins];
@@ -62,6 +67,42 @@ impl LatencyHistogram {
         let med = v[v.len() / 2];
         let span = (self.axis_hi - self.axis_lo).max(1e-9);
         Some((((med - self.axis_lo) / span) * 100.0).clamp(0.0, 100.0))
+    }
+}
+
+/// Latency-histogram upper axis (ms) for the current estimate: at least 120 ms, else 1.5x the
+/// estimate, rounded up to a multiple of 10 so the axis doesn't jitter with every sample.
+pub fn hist_axis_hi(total_ms: f64) -> f64 {
+    let want = (1.5 * total_ms).max(120.0);
+    if want.is_finite() { (want / 10.0).ceil() * 10.0 } else { 120.0 }
+}
+
+/// Sliding window over cumulative (underruns, overflow_drops) counters, yielding the delta over the
+/// last `span` — the honest "dropouts, last 60 s" figure instead of lifetime totals.
+pub struct DropWindow {
+    span: std::time::Duration,
+    entries: std::collections::VecDeque<(std::time::Instant, u64, u64)>,
+}
+
+impl DropWindow {
+    pub fn new(span: std::time::Duration) -> Self {
+        Self { span, entries: std::collections::VecDeque::new() }
+    }
+
+    /// Forget history (the FIFO's counters restart from 0 on a reconfig).
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    /// Record the current cumulative counters; returns (underruns, overflow_drops) within the window.
+    pub fn push(&mut self, now: std::time::Instant, underruns: u64, overflow: u64) -> (u64, u64) {
+        self.entries.push_back((now, underruns, overflow));
+        // Keep the newest entry at-or-before the cutoff as the baseline; drop anything older.
+        while self.entries.len() >= 2 && now.duration_since(self.entries[1].0) >= self.span {
+            self.entries.pop_front();
+        }
+        let (_, u0, o0) = self.entries[0];
+        (underruns.saturating_sub(u0), overflow.saturating_sub(o0))
     }
 }
 
@@ -424,6 +465,26 @@ mod tests {
         inp.underruns = 3;
         let s = build_state(&inp);
         assert_eq!(s["dropouts"]["color"], "#f2545b");
+    }
+
+    #[test]
+    fn axis_hi_floor_and_scale() {
+        assert_eq!(hist_axis_hi(30.0), 120.0);
+        assert_eq!(hist_axis_hi(170.0), 260.0); // 255 -> 260
+        assert_eq!(hist_axis_hi(f64::NAN), 120.0);
+    }
+
+    #[test]
+    fn drop_window_reports_delta_over_span() {
+        use std::time::{Duration, Instant};
+        let t0 = Instant::now();
+        let mut w = DropWindow::new(Duration::from_secs(60));
+        assert_eq!(w.push(t0, 5, 1), (0, 0)); // lifetime counts before the first sample don't count
+        assert_eq!(w.push(t0 + Duration::from_secs(30), 7, 1), (2, 0));
+        assert_eq!(w.push(t0 + Duration::from_secs(70), 8, 3), (3, 2)); // baseline t0 is still the newest entry at-or-before the 60 s cutoff
+        assert_eq!(w.push(t0 + Duration::from_secs(200), 8, 3), (0, 0));
+        w.clear();
+        assert_eq!(w.push(t0 + Duration::from_secs(201), 0, 0), (0, 0)); // counters restarted
     }
 
     #[test]
