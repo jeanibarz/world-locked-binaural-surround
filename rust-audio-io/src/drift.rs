@@ -33,6 +33,11 @@ const DEFAULT_KI: f64 = 2.0e-5;
 /// ppm, far inside this bound. The resampler must be built to allow at least this much relative
 /// swing (see [`MAX_RESAMPLE_RATIO_RELATIVE`]).
 const DEFAULT_MAX_REL: f64 = 0.004;
+/// Low-pass (EMA) coefficient applied to the measured fill before the control law. The fill is
+/// quantised to whole blocks and jitters ±1 block push-to-pull, which would otherwise drive the
+/// proportional term at block rate (a fast, if quiet, ratio wobble). Smoothing it keeps the ratio
+/// slow — the controller tracks the drift *trend*, not the per-block jitter. ≈20-sample time const.
+const DEFAULT_EMA_ALPHA: f64 = 0.05;
 
 /// The relative-ratio bound to construct the output resampler with (`max_resample_ratio_relative`).
 /// Must exceed [`DriftController`]'s clamp so a saturated correction is always a legal ratio; the
@@ -47,6 +52,8 @@ pub struct DriftController {
     kp: f64,
     ki: f64,
     max_rel: f64,
+    ema_alpha: f64,
+    filtered_fill: f64,
     integral: f64,
     last_correction: f64,
 }
@@ -56,17 +63,21 @@ impl DriftController {
     /// the tuned default gains. A non-positive setpoint is floored to 1.0 so the normalisation never
     /// divides by zero.
     pub fn new(setpoint_frames: f64) -> Self {
-        Self::with_gains(setpoint_frames, DEFAULT_KP, DEFAULT_KI, DEFAULT_MAX_REL)
+        Self::with_gains(setpoint_frames, DEFAULT_KP, DEFAULT_KI, DEFAULT_MAX_REL, DEFAULT_EMA_ALPHA)
     }
 
-    /// As [`new`](Self::new) but with explicit gains and clamp — used by the controller unit tests
-    /// to exercise convergence without waiting out the production (deliberately slow) time constant.
-    pub fn with_gains(setpoint_frames: f64, kp: f64, ki: f64, max_rel: f64) -> Self {
+    /// As [`new`](Self::new) but with explicit gains, clamp, and fill-smoothing coefficient
+    /// (`ema_alpha` in `(0, 1]`; 1.0 disables smoothing) — used by the controller unit tests to
+    /// exercise the control law on its own, without waiting out the production time constant.
+    pub fn with_gains(setpoint_frames: f64, kp: f64, ki: f64, max_rel: f64, ema_alpha: f64) -> Self {
+        let setpoint = setpoint_frames.max(1.0);
         Self {
-            setpoint: setpoint_frames.max(1.0),
+            setpoint,
             kp,
             ki,
             max_rel: max_rel.max(0.0),
+            ema_alpha: ema_alpha.clamp(1.0e-6, 1.0),
+            filtered_fill: setpoint, // start at the setpoint so there is no startup transient
             integral: 0.0,
             last_correction: 0.0,
         }
@@ -79,8 +90,11 @@ impl DriftController {
     /// filled (the output clock is fast), so the correction goes positive — a larger ratio makes the
     /// resampler draw fewer source frames per output frame, letting the FIFO refill (and vice-versa).
     pub fn update(&mut self, fill_frames: f64) -> f64 {
+        // Smooth the block-quantised fill so the control law tracks the drift trend, not per-block
+        // push/pull jitter (which would wobble the ratio at block rate).
+        self.filtered_fill += self.ema_alpha * (fill_frames - self.filtered_fill);
         // Normalise the error by the setpoint so the gains are independent of block / cushion size.
-        let err = (fill_frames - self.setpoint) / self.setpoint;
+        let err = (self.filtered_fill - self.setpoint) / self.setpoint;
         self.integral += err;
         // Anti-windup: bound the integral so its term alone can never exceed the clamp. Without this
         // a long saturation (e.g. a startup transient) would wind the integral far past the clamp and
@@ -121,7 +135,11 @@ mod tests {
         let setpoint = 2048.0; // a 2-block cushion at block = 1024
         // Faster-than-production gains so the test converges in a few thousand ticks instead of the
         // production minutes; the dynamics (and the steady-state result) are identical.
-        let mut ctrl = DriftController::with_gains(setpoint, 0.02, 2.0e-3, 0.02);
+        // Deliberately faster-than-production gains, and smoothing off (ema_alpha = 1.0), so the test
+        // isolates the control law and converges in a few thousand ticks. The production gains
+        // (DEFAULT_KP/KI) + fill smoothing reach the SAME steady state — the correction settles at the
+        // drift — but slower by design; `production_gains_converge_and_stay_bounded` covers those.
+        let mut ctrl = DriftController::with_gains(setpoint, 0.02, 2.0e-3, 0.02, 1.0);
         let mut fill = setpoint;
         let mut fills = Vec::with_capacity(ticks);
         for _ in 0..ticks {
@@ -173,6 +191,26 @@ mod tests {
             let rel = ctrl.update(fill);
             assert!((0.996..=1.004).contains(&rel), "ratio {rel} out of clamp for fill {fill}");
         }
+    }
+
+    #[test]
+    fn production_gains_converge_and_stay_bounded() {
+        // The default (production) gains must still pull the fill back to the setpoint under a
+        // realistic drift and never diverge — just more slowly than the tuned-up tests above.
+        let out_per_tick = 1024.0;
+        let setpoint = 4096.0; // a 4-block cushion at block 1024
+        let mut ctrl = DriftController::new(setpoint);
+        let mut fill = setpoint;
+        let mut max_fill = fill;
+        for _ in 0..600_000 {
+            let rel = ctrl.update(fill);
+            fill += out_per_tick - out_per_tick * (1.0 + 60.0e-6) / rel;
+            fill = fill.max(0.0);
+            max_fill = max_fill.max(fill);
+        }
+        assert!((fill - setpoint).abs() < 50.0, "production gains left fill {fill:.0} vs {setpoint}");
+        assert!(max_fill < setpoint * 2.0, "fill overshot to {max_fill:.0} (would overflow backlog)");
+        assert!((ctrl.correction_ppm() - 60.0).abs() < 10.0, "correction {:.1} ppm", ctrl.correction_ppm());
     }
 
     #[test]

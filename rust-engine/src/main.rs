@@ -901,6 +901,7 @@ mod engine {
         // sample and ramp the first samples back up on resume, keeping even the rare glitch soft.
         let mut last_silent = false;
         let (mut last_l, mut last_r) = (0.0f32, 0.0f32);
+        let mut last_rel = 1.0f64; // held ratio, reused while the controller is frozen (see below)
         let mut ppm_tick = 0u32;
 
         while running.load(Ordering::Relaxed) {
@@ -959,8 +960,17 @@ mod engine {
                 }
                 last_silent = is_silent;
 
-                // Drive the drift ratio from the pre-pull fill, then resample this block.
-                let rel = ctrl.update((fill_blocks * cur_block) as f64);
+                // Drive the drift ratio from the pre-pull fill, then resample this block. Freeze the
+                // controller while the FIFO has no real data to give (underrun / repriming): the fill
+                // is 0 there because the source has stalled, not because of clock drift, so
+                // integrating it would wind the integral to its clamp and leave the ratio saturated
+                // for seconds after the source resumes (a latency swell). Hold the last ratio instead.
+                let rel = if pull == Pull::Block {
+                    ctrl.update((fill_blocks * cur_block) as f64)
+                } else {
+                    last_rel
+                };
+                last_rel = rel;
                 resampler
                     .set_resample_ratio_relative(rel, true)
                     .map_err(|e| format!("set resample ratio {rel:.6}: {e}"))?;
