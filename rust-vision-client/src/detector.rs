@@ -58,9 +58,28 @@ fn sigmoid(x: f32) -> f32 {
 }
 
 /// Decode the raw tensors into scored detections (score ≥ [`MIN_SCORE`]), pre-NMS.
-pub fn decode(regressors: &[f32], scores: &[f32], anchors: &[Anchor]) -> Vec<Detection> {
-    assert_eq!(regressors.len(), anchors.len() * NUM_COORDS);
-    assert_eq!(scores.len(), anchors.len());
+///
+/// Returns `Err` (not a panic) if the tensor lengths don't match the anchor set — a wrong/mismatched
+/// model must surface as a clean error, not crash the capture thread.
+pub fn decode(
+    regressors: &[f32],
+    scores: &[f32],
+    anchors: &[Anchor],
+) -> Result<Vec<Detection>, String> {
+    if regressors.len() != anchors.len() * NUM_COORDS {
+        return Err(format!(
+            "detector regressors length {} != {} anchors x {NUM_COORDS}",
+            regressors.len(),
+            anchors.len()
+        ));
+    }
+    if scores.len() != anchors.len() {
+        return Err(format!(
+            "detector scores length {} != {} anchors",
+            scores.len(),
+            anchors.len()
+        ));
+    }
     let mut out = Vec::new();
     for (i, a) in anchors.iter().enumerate() {
         let s = sigmoid(scores[i].clamp(-SCORE_CLIP, SCORE_CLIP));
@@ -88,7 +107,7 @@ pub fn decode(regressors: &[f32], scores: &[f32], anchors: &[Anchor]) -> Vec<Det
             keypoints,
         });
     }
-    out
+    Ok(out)
 }
 
 /// Weighted NMS (MediaPipe's weighted algorithm): for each cluster (IoU ≥ 0.3 with the current
@@ -137,8 +156,12 @@ pub fn weighted_nms(mut dets: Vec<Detection>) -> Vec<Detection> {
 }
 
 /// Full detector postprocess: decode + weighted NMS → detections (score-desc). Empty if no face.
-pub fn detections(regressors: &[f32], scores: &[f32], anchors: &[Anchor]) -> Vec<Detection> {
-    weighted_nms(decode(regressors, scores, anchors))
+pub fn detections(
+    regressors: &[f32],
+    scores: &[f32],
+    anchors: &[Anchor],
+) -> Result<Vec<Detection>, String> {
+    Ok(weighted_nms(decode(regressors, scores, anchors)?))
 }
 
 #[cfg(test)]
@@ -174,7 +197,18 @@ mod tests {
         let regr = vec![0.0f32; 2 * NUM_COORDS];
         // logit 0 -> sigmoid 0.5 (>= MIN_SCORE 0.5, kept); logit -5 -> ~0.007 (dropped)
         let scores = vec![0.0, -5.0];
-        let d = decode(&regr, &scores, &anchors);
+        let d = decode(&regr, &scores, &anchors).unwrap();
         assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn decode_rejects_mismatched_tensor_lengths() {
+        let anchors = vec![Anchor { x_center: 0.5, y_center: 0.5 }; 2];
+        let good_regr = vec![0.0f32; 2 * NUM_COORDS];
+        let good_scores = vec![0.0f32; 2];
+        assert!(decode(&good_regr[..NUM_COORDS], &good_scores, &anchors).is_err());
+        assert!(decode(&good_regr, &good_scores[..1], &anchors).is_err());
+        assert!(detections(&good_regr, &[], &anchors).is_err());
+        assert!(decode(&good_regr, &good_scores, &anchors).is_ok());
     }
 }
