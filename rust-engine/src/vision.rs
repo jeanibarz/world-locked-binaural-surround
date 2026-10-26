@@ -11,6 +11,7 @@
 
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -48,6 +49,10 @@ pub struct PoseState {
     /// Un-mirror the camera frame vertically (an upside-down mount). Off by default; `--flip-v` /
     /// the cockpit toggle set it. Same source-side application as `flip_h`.
     flip_v: AtomicBool,
+    /// Bumps on every real change to the flip flags (inside `set_flips`, under the `yaw0` lock). The
+    /// camera thread snapshots it with the flags before inference and drops the result if it moved,
+    /// so a pose computed in the old orientation can't become the new neutral.
+    flip_gen: AtomicU64,
     /// Epoch-millis of the last pose update, or 0 if no pose has been produced yet.
     last_update: AtomicU64,
     /// The active camera resolution, once a camera stream is open.
@@ -77,6 +82,7 @@ impl PoseState {
             invert: AtomicBool::new(false),
             flip_h: AtomicBool::new(false),
             flip_v: AtomicBool::new(false),
+            flip_gen: AtomicU64::new(0),
             last_update: AtomicU64::new(0),
             cam_res: Mutex::new(None),
             cam_error: Mutex::new(None),
@@ -174,7 +180,32 @@ impl PoseState {
         if was_h != flip_h || was_v != flip_v {
             *y0 = None; // next pose defines the new neutral in the new orientation
             *self.yaw.lock().unwrap() = 0.0;
+            self.flip_gen.fetch_add(1, Ordering::Relaxed); // invalidate in-flight old-orientation poses
         }
+    }
+
+    /// The current flip generation. Read it **before** the flip flags so a toggle landing in between
+    /// is seen as a change (the pose is then dropped, never mis-published).
+    fn flip_gen(&self) -> u64 {
+        self.flip_gen.load(Ordering::Relaxed)
+    }
+
+    /// Publish a pose computed under flip generation `gen`, unless the flips changed since (then the
+    /// pose is in the old orientation and would become the new neutral — it is dropped). The
+    /// generation is checked under the `yaw0` lock `set_flips` holds while bumping it, so the check
+    /// and the publish are atomic w.r.t. a toggle. Returns whether the pose was published.
+    fn update_raw_if_gen(&self, raw_yaw: f64, gen: u64) -> bool {
+        let mut y0 = self.yaw0.lock().unwrap();
+        if self.flip_gen.load(Ordering::Relaxed) != gen {
+            return false;
+        }
+        if y0.is_none() {
+            *y0 = Some(raw_yaw);
+        }
+        *self.yaw.lock().unwrap() =
+            crate::geometry::published_yaw(raw_yaw, y0.unwrap(), self.inverted());
+        self.last_update.store(now_ms(), Ordering::Relaxed);
+        true
     }
 
     fn update_raw(&self, raw_yaw: f64) {
@@ -313,16 +344,52 @@ pub fn spawn_camera_pose(
         // full-frame buffer every frame (BUG-29). Empty until a flip is first active.
         let mut flip_buf: Vec<u8> = Vec::new();
         let mut last_preview = std::time::Instant::now() - std::time::Duration::from_secs(1);
-        let (mut ok, mut miss, mut decode_fail, mut n) = (0u64, 0u64, 0u64, 0usize);
+        let (mut ok, mut miss, mut decode_fail, mut est_err, mut n) = (0u64, 0u64, 0u64, 0u64, 0usize);
+        let (mut consec_est_err, mut est_err_flagged) = (0u32, false);
 
         // Outer loop: (re)open the camera, so an unplug/replug recovers instead of freezing (BUG-30)
         // and a settings-dialog camera/format switch takes effect live (BUG-34). The request (id +
         // resolution/fps) is re-read here each time, so the newest selection wins on every reopen.
         while running.load(Ordering::Relaxed) {
             let ((id, req_w, req_h, req_fps), open_gen) = pose.cam_request();
-            let mut cam = match open_camera(&id, req_w, req_h, req_fps) {
-                Ok(c) => c,
-                Err(e) => {
+            // `cam.frame()` blocks with no timeout, so a stalled-but-open camera (USB stall, privacy
+            // shutter, driver hang) would hang this loop — and with it the live-switch check and
+            // shutdown. The camera is opened and read on a capture worker (nokhwa's `Camera` is not
+            // `Send`, so it must be created on the thread that uses it); this loop only ever waits on
+            // the channel with a short timeout, so `running` / `cam_req_gen` stay prompt and a
+            // silent stall is detected.
+            let worker = CaptureWorker::spawn(id.clone(), req_w, req_h, req_fps);
+            let open_started = std::time::Instant::now();
+            let opened = loop {
+                if !running.load(Ordering::Relaxed) {
+                    worker.retire();
+                    return;
+                }
+                if pose.cam_req_gen() != open_gen {
+                    break None; // switched while opening → reopen with the new request, no backoff
+                }
+                match worker.rx.recv_timeout(std::time::Duration::from_millis(100)) {
+                    Ok(CapMsg::Opened(w, h)) => break Some(Ok((w, h))),
+                    Ok(CapMsg::OpenFailed(e)) => break Some(Err(e)),
+                    Ok(_) => {} // frames only follow `Opened`; ignore anything else
+                    Err(RecvTimeoutError::Timeout) => {
+                        if open_started.elapsed() >= OPEN_TIMEOUT {
+                            break Some(Err(format!("open timed out after {}s", OPEN_TIMEOUT.as_secs())));
+                        }
+                    }
+                    Err(RecvTimeoutError::Disconnected) => {
+                        break Some(Err("capture thread ended during open".to_string()));
+                    }
+                }
+            };
+            let (cam_w, cam_h) = match opened {
+                None => {
+                    worker.retire();
+                    continue;
+                }
+                Some(Ok(wh)) => wh,
+                Some(Err(e)) => {
+                    worker.retire();
                     pose.set_cam_error(format!("camera unavailable: {e}"));
                     eprintln!("VISION_ERROR camera open (id {id}): {e}");
                     // Back off ~2 s, then retry — unless we're shutting down or the user picked a
@@ -339,32 +406,53 @@ pub fn spawn_camera_pose(
                     continue;
                 }
             };
-            let res = cam.resolution();
-            pose.set_cam_res(res.width(), res.height());
+            pose.set_cam_res(cam_w, cam_h);
             pose.clear_cam_error();
-            println!("POSE camera id={id} {}x{}", res.width(), res.height());
+            println!("POSE camera id={id} {cam_w}x{cam_h}");
 
             let mut consec_frame_err = 0u32;
+            let mut last_frame_at = std::time::Instant::now();
+            let mut got_first = false;
             while running.load(Ordering::Relaxed) {
                 // A camera/format switch arrived → drop this device and reopen with the new request.
                 if pose.cam_req_gen() != open_gen {
                     break;
                 }
-                let frame = match cam.frame() {
-                    Ok(f) => {
+                let msg = match worker.rx.recv_timeout(std::time::Duration::from_millis(100)) {
+                    Ok(m) => m,
+                    Err(RecvTimeoutError::Timeout) => {
+                        let limit = if got_first { FRAME_STALL } else { FIRST_FRAME_STALL };
+                        if last_frame_at.elapsed() >= limit {
+                            eprintln!("VISION_ERROR camera stalled: no frame for {limit:?}");
+                            pose.set_cam_error(format!("camera stalled: no frame for {}s", limit.as_secs()));
+                            break; // drop to the outer loop and try to reopen
+                        }
+                        continue;
+                    }
+                    Err(RecvTimeoutError::Disconnected) => {
+                        pose.set_cam_error("camera capture thread ended".to_string());
+                        break;
+                    }
+                };
+                let frame = match msg {
+                    CapMsg::Frame(f) => {
                         consec_frame_err = 0;
+                        got_first = true;
+                        last_frame_at = std::time::Instant::now();
                         f
                     }
-                    Err(e) => {
+                    CapMsg::FrameErr(e) => {
+                        // The worker already paused 100 ms after reporting this error.
                         consec_frame_err += 1;
+                        last_frame_at = std::time::Instant::now(); // the device is answering (with errors)
                         eprintln!("VISION_ERROR frame ({consec_frame_err}): {e}");
                         if consec_frame_err >= 10 {
                             pose.set_cam_error(format!("camera lost: {e}"));
                             break; // drop to the outer loop and try to reopen
                         }
-                        std::thread::sleep(std::time::Duration::from_millis(100));
                         continue;
                     }
+                    CapMsg::Opened(..) | CapMsg::OpenFailed(_) => continue, // only sent once, pre-loop
                 };
                 n += 1;
                 if !n.is_multiple_of(stride) {
@@ -386,6 +474,9 @@ pub fn spawn_camera_pose(
                 // straight through (no copy).
                 let (w, h) = (decoded.width() as usize, decoded.height() as usize);
                 let raw = decoded.as_raw();
+                // Snapshot the flip generation BEFORE the flags: inference takes tens of ms, and a
+                // toggle in that window must invalidate this (old-orientation) pose.
+                let flip_gen = pose.flip_gen();
                 let (fh, fv) = (pose.flip_h(), pose.flip_v());
                 let rgb: &[u8] = if (fh || fv) && raw.len() >= w * h * 3 {
                     flip_rgb_into(&mut flip_buf, raw, w, h, fh, fv);
@@ -407,26 +498,132 @@ pub fn spawn_camera_pose(
                 img.px.extend(rgb.iter().map(|&b| b as f32));
                 match pipe.estimate(&img) {
                     Ok(Some(est)) => {
+                        consec_est_err = 0;
+                        if est_err_flagged {
+                            pose.clear_cam_error();
+                            est_err_flagged = false;
+                        }
+                        // The flips changed during inference → this pose is in the old orientation;
+                        // publishing it would make it the new neutral. Drop it (and its overlay).
+                        if !pose.update_raw_if_gen(est.pose.0, flip_gen) {
+                            pose.set_landmarks(None);
+                            continue;
+                        }
                         ok += 1;
-                        pose.update_raw(est.pose.0);
                         // Capture the FaceMesh overlay for the cockpit preview (#185). The landmarks
                         // are already in the un-mirrored frame's normalized space (same frame as the
                         // `/camera` JPEG above), so the overlay aligns with the preview. Purely
                         // cosmetic; it never touches the audio render thread.
                         pose.set_landmarks(pack_landmarks(&est.landmarks));
                     }
-                    _ => {
+                    Ok(None) => {
+                        consec_est_err = 0;
                         miss += 1;
                         pose.set_landmarks(None); // no face this frame → clear the overlay
                     }
+                    Err(e) => {
+                        // An inference/model error is NOT "no face found": log it (rate-limited) and
+                        // surface it after a run of them so it can be diagnosed.
+                        est_err += 1;
+                        consec_est_err += 1;
+                        pose.set_landmarks(None);
+                        if est_err == 1 || est_err.is_multiple_of(30) {
+                            eprintln!("VISION_ERROR estimate (total {est_err}): {e}");
+                        }
+                        if consec_est_err >= EST_ERR_THRESHOLD && !est_err_flagged {
+                            pose.set_cam_error(format!("pose pipeline error: {e}"));
+                            est_err_flagged = true;
+                        }
+                    }
                 }
-                if (ok + miss).is_multiple_of(30) {
-                    eprintln!("VISION ok={ok} miss={miss} decode_fail={decode_fail} yaw={:.1}", *pose.yaw.lock().unwrap());
+                if (ok + miss + est_err).is_multiple_of(30) {
+                    eprintln!("VISION ok={ok} miss={miss} est_err={est_err} decode_fail={decode_fail} yaw={:.1}", *pose.yaw.lock().unwrap());
                 }
             }
-            let _ = cam.stop_stream(); // release the device before reopen / exit (BUG-30)
+            worker.retire(); // release the device before reopen / exit (BUG-30)
         }
     });
+}
+
+/// How long a **running** camera may go without delivering a frame (or error) before it is treated as
+/// stalled and reopened.
+const FRAME_STALL: std::time::Duration = std::time::Duration::from_secs(2);
+/// Allowance for the first frame after open (auto-exposure / stream start-up is slower).
+const FIRST_FRAME_STALL: std::time::Duration = std::time::Duration::from_secs(5);
+/// Consecutive `estimate()` errors before `cam_error` is raised.
+const EST_ERR_THRESHOLD: u32 = 10;
+
+/// Upper bound on opening a camera before it is reported unavailable (opens normally take well under
+/// a second; this only catches a hung driver).
+const OPEN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// What the capture worker reports: the open outcome once, then a frame or frame error per read.
+enum CapMsg {
+    Opened(u32, u32),
+    OpenFailed(String),
+    Frame(nokhwa::Buffer),
+    FrameErr(String),
+}
+
+/// A camera opened and read on a dedicated capture thread. The blocking `Camera::frame()` calls run
+/// there and results are handed over a one-slot channel, so the consumer can wait with a timeout.
+struct CaptureWorker {
+    rx: Receiver<CapMsg>,
+    stop: Arc<AtomicBool>,
+    finished: Arc<AtomicBool>,
+    handle: std::thread::JoinHandle<()>,
+}
+
+impl CaptureWorker {
+    fn spawn(id: String, w: u32, h: u32, fps: u32) -> Self {
+        let (tx, rx) = sync_channel(1);
+        let stop = Arc::new(AtomicBool::new(false));
+        let finished = Arc::new(AtomicBool::new(false));
+        let (s, f) = (stop.clone(), finished.clone());
+        let handle = std::thread::spawn(move || {
+            match open_camera(&id, w, h, fps) {
+                Ok(mut cam) => {
+                    let res = cam.resolution();
+                    // A closed receiver (consumer reopened / shut down) ends the worker.
+                    let mut alive = tx.send(CapMsg::Opened(res.width(), res.height())).is_ok();
+                    while alive && !s.load(Ordering::Relaxed) {
+                        let msg = match cam.frame() {
+                            Ok(b) => CapMsg::Frame(b),
+                            Err(e) => CapMsg::FrameErr(e.to_string()),
+                        };
+                        let failed = matches!(msg, CapMsg::FrameErr(_));
+                        alive = tx.send(msg).is_ok();
+                        if failed {
+                            std::thread::sleep(std::time::Duration::from_millis(100));
+                        }
+                    }
+                    let _ = cam.stop_stream(); // release the device (BUG-30)
+                }
+                Err(e) => {
+                    let _ = tx.send(CapMsg::OpenFailed(e));
+                }
+            }
+            f.store(true, Ordering::Release);
+        });
+        Self { rx, stop, finished, handle }
+    }
+
+    /// Stop the worker and wait (bounded, ~1 s) for it to release the device. If it is wedged inside
+    /// a stalled `frame()` it is left detached: it exits and stops the stream on its own if that call
+    /// ever returns (its next `send` fails once `rx` is dropped here), and the caller's reopen backs
+    /// off normally if the device is still held.
+    fn retire(self) {
+        let Self { rx, stop, finished, handle } = self;
+        stop.store(true, Ordering::Relaxed);
+        drop(rx); // unblocks a worker parked in `send`
+        for _ in 0..100 {
+            if finished.load(Ordering::Acquire) {
+                let _ = handle.join();
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
 }
 
 /// Open a camera at a requested resolution/fps (0 ⇒ a controlled 640×480@30 default, not nokhwa's

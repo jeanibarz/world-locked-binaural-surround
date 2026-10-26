@@ -66,14 +66,16 @@ impl Pipeline {
     }
 
     /// Run the full pipeline on one image. `None` if no face clears the detector threshold.
-    pub fn estimate(&mut self, img: &RgbImage) -> ort::Result<Option<Estimate>> {
+    ///
+    /// Returns `Err(String)` (never a panic) for an ONNX runtime error, a missing output tensor, or
+    /// an output of the wrong length — so a mismatched model surfaces as a diagnosable error.
+    pub fn estimate(&mut self, img: &RgbImage) -> Result<Option<Estimate>, String> {
         let (det_tensor, lb) = crate::image_util::letterbox_128(img);
-        let det_out = self
-            .detector
-            .run(ort::inputs! { "input" => Tensor::from_array(([1_i64, 128, 128, 3], det_tensor))? })?;
-        let (_, regressors) = det_out["regressors"].try_extract_tensor::<f32>()?;
-        let (_, scores) = det_out["classificators"].try_extract_tensor::<f32>()?;
-        let dets = detections(regressors, scores, &self.anchors);
+        let det_in = Tensor::from_array(([1_i64, 128, 128, 3], det_tensor)).map_err(ort_err)?;
+        let det_out = self.detector.run(ort::inputs! { "input" => det_in }).map_err(ort_err)?;
+        let regressors = named_f32(&det_out, "regressors")?;
+        let scores = named_f32(&det_out, "classificators")?;
+        let dets = detections(regressors, scores, &self.anchors)?;
         let Some(best) = dets.into_iter().next() else {
             return Ok(None); // weighted_nms keeps the global max first
         };
@@ -81,11 +83,10 @@ impl Pipeline {
 
         let rect = detection_to_rect(&best, &lb);
         let crop = rect.crop_256(img);
-        let mesh_out = self
-            .mesh
-            .run(ort::inputs! { "input_12" => Tensor::from_array(([1_i64, 256, 256, 3], crop))? })?;
-        let (_, lm) = mesh_out["Identity"].try_extract_tensor::<f32>()?; // 1×1×1×1434
-        debug_assert_eq!(lm.len(), NUM_LANDMARKS * 3);
+        let mesh_in = Tensor::from_array(([1_i64, 256, 256, 3], crop)).map_err(ort_err)?;
+        let mesh_out = self.mesh.run(ort::inputs! { "input_12" => mesh_in }).map_err(ort_err)?;
+        let lm = named_f32(&mesh_out, "Identity")?; // 1×1×1×1434
+        check_landmark_len(lm.len())?;
 
         // Project all 478 landmarks back to the image (NormalizedLandmark convention).
         let (w, h) = (lb.img_w as f64, lb.img_h as f64);
@@ -105,6 +106,34 @@ impl Pipeline {
             .collect();
         let pose = solve_pose(&self.canonical_rigid, &detected);
         Ok(Some(Estimate { pose, landmarks, score }))
+    }
+}
+
+fn ort_err(e: ort::Error) -> String {
+    e.to_string()
+}
+
+/// Look up the named f32 output tensor's data, returning a descriptive `Err` (not a panic) if the
+/// model has no such output or it isn't an f32 tensor.
+fn named_f32<'a>(
+    outputs: &'a ort::session::SessionOutputs<'_>,
+    name: &str,
+) -> Result<&'a [f32], String> {
+    let v = outputs.get(name).ok_or_else(|| format!("model output {name:?} not found"))?;
+    let (_, data) = v
+        .try_extract_tensor::<f32>()
+        .map_err(|e| format!("model output {name:?}: {e}"))?;
+    Ok(data)
+}
+
+/// The FaceMesh landmark tensor must hold exactly `NUM_LANDMARKS`×3 floats; a different model (e.g.
+/// the 468-point mesh, 1404 floats) would otherwise index out of bounds.
+fn check_landmark_len(len: usize) -> Result<(), String> {
+    let want = NUM_LANDMARKS * 3;
+    if len == want {
+        Ok(())
+    } else {
+        Err(format!("facemesh landmark tensor length {len} != {want} ({NUM_LANDMARKS}x3)"))
     }
 }
 
@@ -153,4 +182,16 @@ pub fn decode_image(bytes: &[u8]) -> Result<RgbImage, image::ImageError> {
     let (w, h) = (rgb.width() as usize, rgb.height() as usize);
     let px: Vec<f32> = rgb.into_raw().into_iter().map(|b| b as f32).collect();
     Ok(RgbImage { w, h, px })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn landmark_len_validated() {
+        assert!(check_landmark_len(1434).is_ok());
+        assert!(check_landmark_len(1404).is_err()); // 468-point mesh
+        assert!(check_landmark_len(0).is_err());
+    }
 }
