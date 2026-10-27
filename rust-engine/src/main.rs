@@ -923,7 +923,15 @@ mod engine {
                     let f = lock_fifo(&fifo);
                     (f.cushion(), f.len(), f.stats())
                 };
-                let total_ms = telemetry::estimate_total_ms(block, pack.samplerate, cushion_now, render_ema);
+                // Head-tracking (camera) latency stage: the measured inter-pose interval, but only
+                // for a live camera/MJPEG tracker — a demo/held yaw has no camera stage. Folded into
+                // the end-to-end estimate so the cockpit reports head→ear, not just the audio path.
+                let pose_interval_ms = match pose_source {
+                    "camera" | "mjpeg" => pose.pose_interval_ms().unwrap_or(0.0),
+                    _ => 0.0,
+                };
+                let total_ms = telemetry::estimate_total_ms(
+                    block, pack.samplerate, cushion_now, render_ema, pose_interval_ms);
                 lat.axis_hi = telemetry::hist_axis_hi(total_ms);
                 lat.push(total_ms);
                 // "Dropouts, last 60 s": windowed delta of the FIFO's lifetime counters.
@@ -976,6 +984,7 @@ mod engine {
                     pose_source,
                     tracking: pose.is_tracking(),
                     pose_stale,
+                    pose_interval_ms,
                     cam_res: pose.cam_res(),
                     cam_error: cam_error.as_deref(),
                     mmcss,
@@ -1050,6 +1059,7 @@ mod engine {
                 pose_source,
                 tracking: pose.is_tracking(),
                 pose_stale,
+                pose_interval_ms: 0.0, // teardown: no live tracker, report the audio path only
                 cam_res: pose.cam_res(),
                 cam_error: cam_error.as_deref(),
                 mmcss,

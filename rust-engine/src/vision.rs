@@ -55,6 +55,11 @@ pub struct PoseState {
     flip_gen: AtomicU64,
     /// Epoch-millis of the last pose update, or 0 if no pose has been produced yet.
     last_update: AtomicU64,
+    /// Smoothed inter-pose interval in milliseconds (an EMA), stored as `f64` bits; 0 until two
+    /// poses exist. This is the camera's real pose rate (inference-bound, not the nominal fps), the
+    /// input to the cockpit's head-tracking latency estimate (`1.5 ×` it, matching the legacy
+    /// Python `tracking_ms`). Updated on the camera thread, read at the telemetry cadence.
+    interval_ms: AtomicU64,
     /// The active camera resolution, once a camera stream is open.
     cam_res: Mutex<Option<(u32, u32)>>,
     /// A camera/pipeline open failure, so the cockpit can say "camera unavailable" instead of
@@ -84,6 +89,7 @@ impl PoseState {
             flip_v: AtomicBool::new(false),
             flip_gen: AtomicU64::new(0),
             last_update: AtomicU64::new(0),
+            interval_ms: AtomicU64::new(0),
             cam_res: Mutex::new(None),
             cam_error: Mutex::new(None),
             landmarks: Mutex::new(None),
@@ -204,7 +210,7 @@ impl PoseState {
         }
         *self.yaw.lock().unwrap() =
             crate::geometry::published_yaw(raw_yaw, y0.unwrap(), self.inverted());
-        self.last_update.store(now_ms(), Ordering::Relaxed);
+        self.note_pose_update();
         true
     }
 
@@ -215,7 +221,37 @@ impl PoseState {
         }
         *self.yaw.lock().unwrap() =
             crate::geometry::published_yaw(raw_yaw, y0.unwrap(), self.inverted());
-        self.last_update.store(now_ms(), Ordering::Relaxed);
+        self.note_pose_update();
+    }
+
+    /// Record that a pose was just published: stamp the liveness time and fold the gap since the
+    /// previous pose into the inter-pose interval EMA (the camera's real, inference-bound pose
+    /// rate — the input to the head-tracking latency estimate). A gap > 1 s is treated as a fresh
+    /// start (tracking was lost and regained), not a real interval, so it can't inflate the
+    /// estimate. Atomics only — it takes no lock itself, so it is safe to call under the `yaw0`
+    /// lock the callers still hold (their `yaw` guard has already dropped at its own statement).
+    fn note_pose_update(&self) {
+        let now = now_ms();
+        let prev = self.last_update.swap(now, Ordering::Relaxed);
+        if prev != 0 {
+            let dt = now.saturating_sub(prev) as f64;
+            if dt > 0.0 && dt < 1000.0 {
+                let cur = f64::from_bits(self.interval_ms.load(Ordering::Relaxed));
+                let ema = if cur <= 0.0 { dt } else { 0.8 * cur + 0.2 * dt };
+                self.interval_ms.store(ema.to_bits(), Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// Smoothed inter-pose interval (ms), or `None` before two poses exist. The cockpit's
+    /// head-tracking latency stage is `1.5 ×` this (see [`crate::telemetry::tracking_stage_ms`]).
+    pub fn pose_interval_ms(&self) -> Option<f64> {
+        let v = f64::from_bits(self.interval_ms.load(Ordering::Relaxed));
+        if v > 0.0 {
+            Some(v)
+        } else {
+            None
+        }
     }
 
     /// Fold the current offset into neutral so the direction the head faces right now reads as 0°
@@ -484,8 +520,18 @@ pub fn spawn_camera_pose(
                 } else {
                     raw
                 };
+                // Refresh the preview at up to 25 fps (40 ms), fast enough that the camera picture is
+                // never staler than the landmark overlay, which the cockpit redraws at the 50 ms
+                // telemetry cadence. The previous 80 ms (≈12 fps) throttle refreshed the image slower
+                // than the overlay — at the default stride 2 / 30 fps it skipped every other pose
+                // frame (≈7 fps) — so during a fast head turn the landmark cloud, carried on the
+                // low-latency SSE/canvas path, reached the new position a frame or two before the
+                // MJPEG `<img>` picture caught up ("landmarks more reactive than the camera"). 40 ms
+                // pushes every pose frame at the defaults while still bounding the JPEG-encode cost
+                // on high-resolution / low-stride configs; the MJPEG fan-out already drops frames a
+                // slow client can't take.
                 if let Some(cp) = &cockpit {
-                    if last_preview.elapsed() >= std::time::Duration::from_millis(80) {
+                    if last_preview.elapsed() >= std::time::Duration::from_millis(40) {
                         if let Some(jpeg) = encode_jpeg(rgb, w as u32, h as u32) {
                             cp.set_frame(jpeg);
                         }
