@@ -31,8 +31,6 @@ edit the `set` lines at the top of the copied `run.cmd` — the rest is mode dis
 | --- | --- |
 | `run.cmd` / `run.cmd listen` | daily world-lock passthrough, **cockpit** UI |
 | `run.cmd test` | passthrough + loads `hrir_sets\` for the RFC-0003 **blind A/B & localization test** |
-| `run.cmd calibrate` | calibration GUI — recenter / axis-sign check |
-| `run.cmd latency` | headless latency sweep against the real FiiO device |
 
 Flags after the mode are forwarded, e.g. `run.cmd listen --method nearest --block 1024`,
 `run.cmd listen --ui console`. `listen`/`test` relaunch automatically on the in-app Reload

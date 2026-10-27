@@ -1,6 +1,6 @@
 """Camera & audio-device selection for the host GUIs (B6.2).
 
-The host apps (``apps/calibration_gui.py``, ``apps/voicemeeter_passthrough.py``) need to
+The host app (``apps/voicemeeter_passthrough.py``) needs to
 let the owner pick *which* webcam and *which* audio output to use — on Windows there
 are usually several (the laptop cam, a USB cam; the speakers, the headphones, a
 VoiceMeeter endpoint). This module splits that the project's way:

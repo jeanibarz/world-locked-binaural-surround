@@ -241,8 +241,12 @@ with our own measurements. See journal 36.)
 - **Detecting the latency itself** (the scene swims/lags): just-noticeable total system latency
   in dynamic binaural synthesis clusters **~50–75 ms** (Lindau 2009, lowest ~52 ms). So a pose
   age comfortably **under ~50 ms is below most listeners' detection threshold**, under ~30 ms is
-  generous headroom. This sets NFR-1's `< ~50 ms` pose-to-audio goal. The current ~70–110 ms
-  (journal 26) is still *above* threshold — hence "it reacts too slowly".
+  generous headroom. This sets NFR-1's `< ~50 ms` pose-to-audio goal. Since journal 26 the lag
+  was traced to the output **device buffer** (MME ~90–100 ms → WASAPI shared ~22 ms, journals
+  42–44) and the ~40 ms camera staleness cancelled by **orientation prediction** (journal 47),
+  bringing the live head-move→ear baseline from ~140–200 ms down to roughly **~70 ms** (sub-50 ms
+  on the synthetic component-split bench; the live floor is dominated by the FIFO `queue` term,
+  journal 48). Closing the rest of the gap to this goal is Track B (journals 51–80).
 - **Resolving the angular error as an angle**: the minimum audible *movement* angle grows with
   velocity — **~8° at 90°/s** (Perrott & Musicant 1977). So the ~3° latency-lag during a turn is
   **below** MAMA and is not itself resolved *during* motion; what is heard is the temporal lag.

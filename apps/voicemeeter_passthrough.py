@@ -120,7 +120,7 @@ MUTED = (171, 151, 139)
 ACCENT = (214, 214, 56)
 EXPERIMENT_METHODS = ("nearest", "timealign", "minphase", "notchwarp")
 # main() returns this so the host launcher can relaunch (pick up code changes) without the
-# user re-running run.cmd. run_passthrough.cmd loops while it sees this exit code; any other
+# user re-running run.cmd. run.cmd loops while it sees this exit code; any other
 # code (0 = quit) ends. Kept distinct from 0/1/signal codes. See AGENTS.md / journal 39.
 RESTART_EXIT_CODE = 97
 
