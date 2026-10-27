@@ -96,6 +96,10 @@ Host artifacts, outside git: `C:\Users\ibarz\WLBS-Engine\traces\live-20261027-01
 SHA-256: `740fcdcc115f1a7b16dc58ab86b1824dee6374913fe2e06242c3e565bb0a5e7d`.
 The artifact was built from code commit `04784d1`; later delivery edits update documentation only.
 
+## Delivery
+
+Implementation and validation: [PR #219](https://github.com/jeanibarz/world-locked-binaural-surround/pull/219).
+
 ## Decision
 
 Use this opt-in evidence to choose subsequent robustness work. Do not infer a causal fix
