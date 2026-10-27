@@ -80,6 +80,8 @@ New here? Start with the onboarding guides:
   tracker and its model.
 - [`docs/choosing-an-hrir-set.md`](docs/choosing-an-hrir-set.md) — what an HRIR is,
   which set to use, and how to load one in the app.
+- [`docs/headphone-compensation.md`](docs/headphone-compensation.md) — making the
+  render sound neutral on your own headphones.
 
 ## Intended distribution
 
