@@ -103,7 +103,9 @@ def test_interpolation_weights_exact_hit_is_one_hot():
 
 def test_interpolation_weights_closer_neighbour_dominates():
     w = interpolation_weights(np.array([1.0, 10.0]), power=2.0)
-    assert w[0] > w[1]
+    # Inverse-distance^power: 1/1^2 and 1/10^2 → [100/101, 1/101]. Pin the exact split so a
+    # wrong exponent is caught (power=1 would give [10/11, 1/11]); `w[0] > w[1]` alone is blind.
+    assert w == pytest.approx([100 / 101, 1 / 101])
     assert w.sum() == pytest.approx(1.0)
 
 

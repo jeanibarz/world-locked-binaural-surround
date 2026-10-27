@@ -148,11 +148,18 @@ def test_head_translation_changes_angles():
     # Head steps forward (+x) 1 m toward a front speaker at 2 m: the side speakers
     # swing further back; the centre stays dead ahead.
     layout = layout_7p1(distance=2.0)
-    moved = layout.head_relative_directions(head_position=np.array([1.0, 0.0, 0.0]))
+    head = np.array([1.0, 0.0, 0.0])
+    moved = layout.head_relative_directions(head_position=head)
     base = layout.head_relative_directions()
     assert np.isclose(moved[layout.index("C")][0], 0.0, atol=1e-9)  # still ahead
-    # side-left (90deg at origin) moves behind the listener -> |az| > 90
-    assert abs(moved[layout.index("SL")][0]) > abs(base[layout.index("SL")][0])
+    # SL (nominal 110°) swings further back. Pin the exact azimuth, reconstructed
+    # independently from the public world position via az = atan2(y, x) with no head
+    # rotation (so a wrong offset sign or a spurious rotation is caught, not just "it grew").
+    sl = layout.index("SL")
+    rel = layout.positions[sl] - head
+    expected_az = np.degrees(np.arctan2(rel[1], rel[0]))
+    assert abs(expected_az) > abs(base[sl][0])  # it did move back
+    assert moved[sl][0] == pytest.approx(expected_az, abs=1e-9)
 
 
 def test_speaker_on_head_raises():

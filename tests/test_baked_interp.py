@@ -102,7 +102,7 @@ def test_tail_power_is_preserved_across_the_pan():
     lo = brir.index("L")
     ref = np.sqrt(np.mean(brir.left[lo, SPLIT:] ** 2))  # an endpoint tail RMS
     for az in (30.0, 50.0, 70.0, 90.0, 110.0):  # L(30) → SL(110)
-        left, _ = interpolate_baked_brir(brir, az)
+        left, _ = interpolate_baked_brir(brir, az, method="timealign")  # synthesis path
         rms = np.sqrt(np.mean(left[SPLIT:] ** 2))
         assert abs(20 * np.log10(rms / ref)) < 1.0  # within 1 dB everywhere
 
@@ -120,8 +120,8 @@ def test_onset_ignores_a_loud_late_reflection():
         i = doctored.index(ch)
         doctored.left[i, 1500] = 5.0  # tail reflection 5x the direct delta
         doctored.right[i, 1500] = 5.0
-    left_c, _ = interpolate_baked_brir(clean, 60.0)
-    left_d, _ = interpolate_baked_brir(doctored, 60.0)
+    left_c, _ = interpolate_baked_brir(clean, 60.0, method="timealign")  # synthesis path
+    left_d, _ = interpolate_baked_brir(doctored, 60.0, method="timealign")
     assert np.allclose(left_d[:180], left_c[:180], atol=1e-12)  # direct unaffected
     assert abs(left_d[1500]) > 3.0  # the reflection is held in place in the tail
 
@@ -131,7 +131,7 @@ def test_back_gap_interpolation_is_a_single_arrival():
     # single clean arrival (one dominant direct peak), not two — the whole point vs
     # amplitude-panning two whole BRIRs.
     brir = _synthetic_set()
-    left, right = interpolate_baked_brir(brir, 180.0)
+    left, right = interpolate_baked_brir(brir, 180.0, method="timealign")  # synthesis path
     direct = np.abs(left[:SPLIT]) + np.abs(right[:SPLIT])
     peak = direct.max()
     # Only one sample region should be near the peak (a single wavefront).
@@ -141,7 +141,7 @@ def test_back_gap_interpolation_is_a_single_arrival():
 def test_wraparound_bracket_front_right_to_center():
     # 345° sits between FR (330°) and C (360°≡0°); should interpolate, not error.
     brir = _synthetic_set()
-    left, right = interpolate_baked_brir(brir, 345.0)
+    left, right = interpolate_baked_brir(brir, 345.0, method="timealign")  # synthesis path
     assert left.shape == (N,) and right.shape == (N,)
     itd = estimate_delay(right) - estimate_delay(left)
     assert itd < 0  # right-ear leads on the right side
