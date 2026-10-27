@@ -15,6 +15,7 @@
 #![cfg_attr(not(windows), allow(dead_code))]
 
 mod assets;
+mod audio_trace;
 // Pure capture-mode selection used by the Windows-only `vision` module. Compiled under `test` too
 // so its unit tests run on Linux/CI, where the `vision` module itself is `cfg`-ed out.
 #[cfg(any(windows, test))]
@@ -41,13 +42,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(windows)]
 mod engine {
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
     use audio_io::wasapi_backend::{init_com, set_high_priority, set_pro_audio, WasapiLoopback, WasapiRender};
     use audio_io::{cushion_blocks, AudioOutput, AudioSource, CushionFifo};
     use crate::output_stream::OutputResampler;
+    use crate::audio_trace::{Event as TraceEvent, Session as TraceSession, Trace};
     use binaural_conv::BusConvolverCore;
     use control_plane::settings::SettingsStore;
     use control_plane::Cockpit;
@@ -433,6 +435,17 @@ mod engine {
         let hrir_list: Vec<String> = packs::list_packs().into_iter().map(|p| p.name).collect();
         let mut block = settings.block; // the live block size (the settings dialog can change it)
 
+        // Optional diagnostics: bounded event submission here, JSON/file work on its own thread.
+        let trace_session = arg(&a, "--audio-trace").map(|path| {
+            TraceSession::start(std::path::Path::new(&path), serde_json::json!({
+                "source_rate": pack.samplerate, "source": source, "output": output,
+                "settings": settings.to_json(), "version": env!("CARGO_PKG_VERSION"),
+            }))
+        }).transpose()?;
+        let trace = trace_session.as_ref().map_or_else(Trace::default, TraceSession::trace);
+        let trace_block = Arc::new(AtomicUsize::new(block));
+        if trace.enabled() { println!("AUDIO_TRACE enabled"); }
+
         // Persist off the real-time capture thread: an `fsync` can stall tens of ms, which on the
         // capture thread would be an audio dropout. The thread sends settings JSON to this saver.
         let (persist_tx, persist_rx) = std::sync::mpsc::channel::<serde_json::Value>();
@@ -597,8 +610,10 @@ mod engine {
             let out_status = Arc::clone(&out_status);
             let src_idle = Arc::clone(&src_idle);
             let expected_sr = pack.samplerate;
+            let trace = trace.clone();
+            let trace_block = Arc::clone(&trace_block);
             std::thread::spawn(move || {
-                if let Err(e) = output_loop(&output, fifo, Arc::clone(&running), block, expected_sr, &out_status, &src_idle) {
+                if let Err(e) = output_loop(&output, fifo, Arc::clone(&running), block, expected_sr, &out_status, &src_idle, &trace, &trace_block) {
                     eprintln!("OUTPUT_ERROR {e}");
                     out_status.lock().unwrap().err = Some(e);
                 }
@@ -622,6 +637,7 @@ mod engine {
         let mut snapshot: Option<Settings> = None; // live edit-session snapshot (begin/commit/cancel)
         let mut read_errs = 0u32; // consecutive capture-read errors (transient → retry; BUG-14)
         let mut discontinuities = 0u64; // device-signalled capture glitches (BUG-33)
+        let mut last_trace_capture = Instant::now();
         let mut source_silent = false; // last capture buffer was device-flagged silent (BUG-33)
         while running.load(Ordering::Relaxed) {
             if run_secs > 0.0 && start.elapsed().as_secs_f64() >= run_secs {
@@ -713,6 +729,7 @@ mod engine {
                 let block_changed = settings.block != block_before;
                 let method_changed = settings.method != method_before;
                 if block_changed || method_changed || settings.cushion_ms != cush_before {
+                    let trace_reconfigure = trace.enabled().then(Instant::now);
                     let new_block = settings.block;
                     let cushion = cushion_blocks(settings.cushion_ms, pack.samplerate, new_block);
                     let render_ok = if block_changed || method_changed {
@@ -731,7 +748,12 @@ mod engine {
                     };
                     if render_ok {
                         block = settings.block; // only advance the live block once render matches it
-                        *lock_fifo(&fifo) = new_fifo(cushion, block);
+                        let replacement = new_fifo(cushion, block);
+                        {
+                            let mut f = lock_fifo(&fifo);
+                            *f = replacement;
+                            trace_block.store(block, Ordering::Relaxed);
+                        }
                         if block_changed {
                             // The comp-FIR convolver is sized to the block, so rebuild the EQ too.
                             output_eq = build_hp_eq(block);
@@ -741,6 +763,9 @@ mod engine {
                         lat.clear(); // pre/post-change latency samples must not mix in the histogram
                         drops.clear(); // the new FIFO's counters restart from 0
                         println!("RECONFIG block={block} cushion={cushion} method={}", settings.method);
+                        if let Some(t) = trace_reconfigure {
+                            trace.record(TraceEvent::Reconfigure { elapsed_us: t.elapsed().as_micros() as u64, block, cushion });
+                        }
                     }
                 }
                 // Only now — after the reconfig succeeded or reverted — publish and persist, so the
@@ -760,10 +785,12 @@ mod engine {
             // and heartbeat responsive (~20 Hz) even when an idle loopback emits no capture events.
             // A transient read error is retried rather than aborting the whole engine (BUG-14); only
             // a sustained run of errors (device truly gone) gives up.
+            let trace_read = trace.enabled().then(Instant::now);
             let flags = match src.read(&mut buf, 50) {
                 Ok(f) => { read_errs = 0; f }
                 Err(e) => {
                     read_errs += 1;
+                    trace.record(TraceEvent::CaptureError);
                     eprintln!("CAPTURE_READ_ERROR ({read_errs}) {e}");
                     if read_errs >= 200 {
                         // Fall through to the teardown below (join output + persist) instead of
@@ -775,7 +802,19 @@ mod engine {
                     continue;
                 }
             };
+            if let Some(t) = trace_read {
+                let now = Instant::now();
+                trace.record(TraceEvent::Capture {
+                    gap_us: now.duration_since(last_trace_capture).as_micros() as u64,
+                    read_us: t.elapsed().as_micros() as u64, frames: buf.len() / n_in,
+                    discontinuity: flags.map_or(false, |f| f.discontinuity),
+                    silent: flags.map_or(false, |f| f.silent),
+                });
+                if !buf.is_empty() { last_trace_capture = now; }
+            }
             if let Some(flags) = flags {
+                let trace_render = trace.enabled().then(Instant::now);
+                let trace_blocks_before = rendered_blocks;
                 if flags.discontinuity {
                     discontinuities += 1; // device-signalled glitch (BUG-33) — surfaced in telemetry
                 }
@@ -837,6 +876,13 @@ mod engine {
                         .collect();
                     lock_fifo(&fifo).push(stereo);
                     rendered_blocks += 1;
+                }
+                if let Some(t) = trace_render {
+                    trace.record(TraceEvent::Render {
+                        elapsed_us: t.elapsed().as_micros() as u64,
+                        frames: (rendered_blocks - trace_blocks_before) as usize * block,
+                        block, cushion: cushion_blocks(settings.cushion_ms, pack.samplerate, block),
+                    });
                 }
             } else if last_audio.elapsed() >= Duration::from_millis(250) {
                 // Sustained idle: an idle/silent loopback (e.g. VoiceMeeter with nothing playing)
@@ -929,6 +975,9 @@ mod engine {
         // notices `running==false` within one wait timeout (≤1 s). Pose/camera threads are left to
         // exit on `running` — interrupting a blocked camera read is BUG-30 (vision batch).
         let _ = output_handle.join();
+        if let Some(session) = trace_session {
+            if let Err(e) = session.finish() { eprintln!("AUDIO_TRACE_ERROR {e}"); }
+        }
         // Flush any pending save (e.g. a settings_commit sent just before shutdown) before exit.
         drop(persist_tx);
         let _ = persist_handle.join();
@@ -1073,6 +1122,8 @@ mod engine {
         expected_sr: u32,
         status: &Arc<Mutex<OutputStatus>>,
         src_idle: &Arc<AtomicBool>,
+        trace: &Trace,
+        trace_block: &Arc<AtomicUsize>,
     ) -> Result<(), String> {
         init_com()?;
         set_pro_audio();
@@ -1100,12 +1151,25 @@ mod engine {
         let mut pending: Vec<f32> = Vec::with_capacity(block * 4);
         let mut frame_buf: Vec<f32> = Vec::with_capacity(block * out_ch);
         let mut ppm_tick = 0u32;
+        let mut last_trace_output = Instant::now();
 
         while running.load(Ordering::Relaxed) {
             if !out.wait(1000)? {
                 continue;
             }
             let need = out.frames_needed()?;
+            if trace.enabled() {
+                let now = Instant::now();
+                let (fill, cushion, current_block) = {
+                    let f = lock_fifo(&fifo);
+                    (f.len(), f.cushion(), trace_block.load(Ordering::Relaxed))
+                };
+                trace.record(TraceEvent::Output {
+                    gap_us: now.duration_since(last_trace_output).as_micros() as u64,
+                    frames: need, fill, block: current_block, cushion, sample_rate: ofmt.sample_rate,
+                });
+                last_trace_output = now;
+            }
             while pending.len() / 2 < need {
                 // Pull one input block + the pre-pull fill snapshot under a single lock.
                 let (pull, mut blk, fill_blocks, cushion_now) = {
@@ -1115,6 +1179,9 @@ mod engine {
                     let (p, b) = f.pull();
                     (p, b.unwrap_or_else(|| vec![0.0f32; stream.block_frames().max(block) * 2]), fill_before, cush)
                 };
+                trace.record(TraceEvent::Fifo {
+                    pull, fill: fill_blocks, block: blk.len() / 2, cushion: cushion_now,
+                });
                 stream.process_into(
                     pull, &mut blk, fill_blocks, cushion_now,
                     src_idle.load(Ordering::Relaxed), &mut pending,

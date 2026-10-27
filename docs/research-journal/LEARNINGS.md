@@ -694,3 +694,9 @@ full story.
     FIFO recovery in the virtual pipeline. PI gains apply per block, so block duration changes
     wall-clock response. Instrument real event timing before retuning gains to chase jitter.
     (→ [83](83-small-cushion-recovery-coverage.md))
+
+92. **A delayed measurement needs an overlap interval, not retroactive causality.** Capture or
+    render work can finish after the FIFO underruns. Retain enough posthistory and separate later
+    durations spanning the trigger from actual pretrigger observations. Capture gaps already
+    include read waits, so adding the two fabricates overlap. Report missing windows/dropped events
+    rather than treating absent evidence as a clean stream. (→ [84](84-bounded-underrun-timing-trace.md))

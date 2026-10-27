@@ -97,6 +97,8 @@ The ordered work blocks live in [`../backlog.md`](../backlog.md).
 
 | 83 | [Small-cushion recovery coverage](83-small-cushion-recovery-coverage.md) | Three/four-block recovery, mixed rates and packet timing, per-ear signal checks, real Windows capture-gap measurements, and an explicit output-burst boundary. |
 
+| 84 | [Bounded underrun timing trace](84-bounded-underrun-timing-trace.md) | Opt-in capture/render/output/FIFO incident windows with bounded recording, loss reporting, and separate pretrigger/overlapping evidence. |
+
 See also [`LEARNINGS.md`](LEARNINGS.md) — the cumulative, numbered lessons.
 
 ## Maintenance protocol (the contract)

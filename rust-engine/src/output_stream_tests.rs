@@ -1,4 +1,5 @@
 use super::*;
+use crate::audio_trace::{Event, Recorder};
 use audio_io::{
     capture::{read_available, PacketSource},
     cushion_blocks, CaptureFlags, CushionFifo,
@@ -73,6 +74,10 @@ struct Rig {
     measured: Vec<f32>,
     target_cushion: Option<usize>,
     last_output_energy: f64,
+    recorder: Option<Recorder<Vec<u8>>>,
+    timestamp_us: u64,
+    last_capture_us: Option<u64>,
+    last_output_us: Option<u64>,
 }
 
 impl Rig {
@@ -92,6 +97,10 @@ impl Rig {
             measured: Vec::new(),
             target_cushion: None,
             last_output_energy: 0.0,
+            recorder: None,
+            timestamp_us: 0,
+            last_capture_us: None,
+            last_output_us: None,
         };
         rig.reconfigure(512);
         rig
@@ -157,7 +166,25 @@ impl Rig {
                 self.device.read_packet(&mut batch).unwrap();
             }
         } else {
-            read_available(&mut self.device, &mut batch, 50).unwrap();
+            let flags = read_available(&mut self.device, &mut batch, 50).unwrap();
+            if let (Some(recorder), Some(flags)) = (&mut self.recorder, flags) {
+                let gap_us = self
+                    .last_capture_us
+                    .map_or(0, |last| self.timestamp_us - last);
+                recorder
+                    .push(
+                        self.timestamp_us,
+                        Event::Capture {
+                            gap_us,
+                            read_us: 0,
+                            frames: batch.len() / 8,
+                            discontinuity: flags.discontinuity,
+                            silent: flags.silent,
+                        },
+                    )
+                    .unwrap();
+                self.last_capture_us = Some(self.timestamp_us);
+            }
         }
         self.captured.extend(batch);
         while self.captured.len() >= self.block * 8 {
@@ -180,9 +207,40 @@ impl Rig {
         self.output_frames(480, measure);
     }
     fn output_frames(&mut self, frames: usize, measure: bool) {
+        if let Some(recorder) = &mut self.recorder {
+            recorder
+                .push(
+                    self.timestamp_us,
+                    Event::Output {
+                        gap_us: self
+                            .last_output_us
+                            .map_or(0, |last| self.timestamp_us - last),
+                        frames,
+                        fill: self.fifo.len(),
+                        block: self.block,
+                        cushion: self.fifo.cushion(),
+                        sample_rate: 48_000,
+                    },
+                )
+                .unwrap();
+            self.last_output_us = Some(self.timestamp_us);
+        }
         while self.pending.len() < frames * 2 {
             let fill = self.fifo.len();
             let (pull, block) = self.fifo.pull();
+            if let Some(recorder) = &mut self.recorder {
+                recorder
+                    .push(
+                        self.timestamp_us,
+                        Event::Fifo {
+                            pull,
+                            fill,
+                            block: self.block,
+                            cushion: self.fifo.cushion(),
+                        },
+                    )
+                    .unwrap();
+            }
             let before = self.pending.len();
             self.stream
                 .process_into(
@@ -196,7 +254,10 @@ impl Rig {
                 .unwrap();
             assert!(self.stream.correction_ppm().abs() <= 4000.00001);
             // A failure to produce output must terminate the test instead of spinning forever.
-            assert!(self.pending.len() > before, "resampler made no output progress");
+            assert!(
+                self.pending.len() > before,
+                "resampler made no output progress"
+            );
         }
         self.max_pending = self.max_pending.max(self.pending.len() / 2);
         self.last_output_energy = self.pending[..frames * 2]
@@ -672,4 +733,108 @@ fn silent_source_packets_keep_clock_running_but_short_capture_gap_triggers_repri
     assert!(!rig.fifo.is_repriming());
     assert_eq!(rig.fifo.stats().underruns, before + 1);
     assert!(rig.last_output_energy > 0.003);
+}
+
+#[test]
+fn virtual_pipeline_trace_retains_capture_stall_underrun_and_recovery() {
+    for stall_ms in [80usize, 180] {
+        let mut rig = Rig::new();
+        rig.target_cushion = Some(3);
+        rig.reconfigure(256);
+        let mut resumed_signal_us = None;
+        for ms in 0..2500usize {
+            rig.timestamp_us = ms as u64 * 1000;
+            if ms == 500 {
+                // Attach after startup so the only incident comes from the injected stall.
+                rig.recorder = Some(
+                    Recorder::new(
+                        Vec::new(),
+                        serde_json::json!({
+                            "source_rate": 48000, "clock": "virtual", "stall_ms": stall_ms
+                        }),
+                    )
+                    .unwrap(),
+                );
+            }
+            if ms % 10 == 0 {
+                rig.capture_packet();
+            }
+            if !(1000..1000 + stall_ms).contains(&ms) {
+                rig.render_available(false);
+                assert!(rig.captured.len() < rig.block * 8);
+            }
+            if ms % 10 == 0 {
+                rig.output_event(false);
+                if ms >= 1000 + stall_ms
+                    && resumed_signal_us.is_none()
+                    && rig.last_output_energy > 0.001
+                {
+                    resumed_signal_us = Some(rig.timestamp_us);
+                }
+            }
+            assert!(rig.device.queued_frames <= 2880);
+            assert!(rig.fifo.len() <= rig.fifo.cushion() * 2);
+            assert!(rig.pending.len() / 2 <= 480 + 2 * rig.block);
+        }
+        assert_eq!(rig.fifo.stats().underruns, 1);
+        assert_eq!(rig.fifo.stats().reprimes, 1);
+        assert!(!rig.fifo.is_repriming());
+        assert!(rig.device.lost_frames > 0);
+        let signal_us = resumed_signal_us.expect("rendered signal never recovered");
+        assert!(signal_us <= (1000 + stall_ms + 100) as u64 * 1000);
+        let text = String::from_utf8(rig.recorder.take().unwrap().finish(0).unwrap()).unwrap();
+        let rows: Vec<serde_json::Value> = text
+            .lines()
+            .map(|s| serde_json::from_str(s).unwrap())
+            .collect();
+        let incidents: Vec<_> = rows.iter().filter(|r| r["type"] == "incident").collect();
+        assert_eq!(incidents.len(), 1);
+        let incident = incidents[0];
+        let trigger_us = incident["trigger_us"].as_u64().unwrap();
+        assert!((1_000_000..(1000 + stall_ms) as u64 * 1000).contains(&trigger_us));
+        assert_eq!(incident["triggers"], 1);
+        assert_eq!(incident["shutdown_flush"], false);
+        assert_eq!(incident["window_truncated"], false);
+        assert_eq!(incident["evidence"]["capture_gap"], false);
+        assert_eq!(
+            incident["overlapping_duration_evidence"]["capture_gap"],
+            true
+        );
+        assert_eq!(incident["evidence"]["output_gap"], false);
+        assert_eq!(incident["evidence"]["output_demand_burst"], false);
+        let events: Vec<_> = rows.iter().filter(|r| r["type"] == "event").collect();
+        assert!(events
+            .iter()
+            .any(|e| e["at_us"].as_u64().unwrap() < trigger_us
+                && e["observation"]["stage"] == "capture"));
+        let underrun = events
+            .iter()
+            .position(|e| e["observation"]["pull"] == "underrun")
+            .unwrap();
+        assert_eq!(events[underrun]["at_us"], trigger_us);
+        assert!(events[underrun + 1..]
+            .iter()
+            .any(|e| e["observation"]["pull"] == "repriming"));
+        assert!(events[underrun + 1..]
+            .iter()
+            .any(|e| e["observation"]["pull"] == "block"
+                && e["at_us"].as_u64().unwrap() >= (1000 + stall_ms) as u64 * 1000));
+        let resumed_capture = events
+            .iter()
+            .find(|e| {
+                e["observation"]["stage"] == "capture"
+                    && e["at_us"].as_u64().unwrap() >= (1000 + stall_ms) as u64 * 1000
+            })
+            .unwrap();
+        let gap_us = resumed_capture["observation"]["gap_us"].as_u64().unwrap();
+        assert!(gap_us >= stall_ms as u64 * 1000);
+        assert!(resumed_capture["at_us"].as_u64().unwrap() - gap_us <= trigger_us);
+        assert_eq!(resumed_capture["observation"]["discontinuity"], true);
+        assert_eq!(resumed_capture["observation"]["frames"], 2880);
+        let footer = rows.last().unwrap();
+        assert_eq!(footer["incidents"], 1);
+        assert_eq!(footer["queue_drops"], 0);
+        assert_eq!(footer["truncated"], false);
+        println!("virtual stall={stall_ms}ms: trace trigger={trigger_us}us, resumed capture gap={gap_us}us, output signal={signal_us}us, FIFO underruns=1, bounded queues");
+    }
 }
