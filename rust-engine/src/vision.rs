@@ -382,6 +382,10 @@ pub fn spawn_camera_pose(
         let mut last_preview = std::time::Instant::now() - std::time::Duration::from_secs(1);
         let (mut ok, mut miss, mut decode_fail, mut est_err, mut n) = (0u64, 0u64, 0u64, 0u64, 0usize);
         let (mut consec_est_err, mut est_err_flagged) = (0u32, false);
+        // EMA of wall-clock inference time per solved frame (ms) — surfaced in the VISION log so the
+        // execution provider is obvious at a glance: ~10-20 ms = DirectML GPU, ~100 ms+ = CPU
+        // fallback. The head-tracking latency is inference-bound, so this is the number to watch.
+        let mut infer_ema_ms = 0.0f64;
 
         // Outer loop: (re)open the camera, so an unplug/replug recovers instead of freezing (BUG-30)
         // and a settings-dialog camera/format switch takes effect live (BUG-34). The request (id +
@@ -542,7 +546,11 @@ pub fn spawn_camera_pose(
                 img.h = h;
                 img.px.clear();
                 img.px.extend(rgb.iter().map(|&b| b as f32));
-                match pipe.estimate(&img) {
+                let infer_t0 = std::time::Instant::now();
+                let est_result = pipe.estimate(&img);
+                let infer_ms = infer_t0.elapsed().as_secs_f64() * 1000.0;
+                infer_ema_ms = if infer_ema_ms <= 0.0 { infer_ms } else { 0.8 * infer_ema_ms + 0.2 * infer_ms };
+                match est_result {
                     Ok(Some(est)) => {
                         consec_est_err = 0;
                         if est_err_flagged {
@@ -583,7 +591,7 @@ pub fn spawn_camera_pose(
                     }
                 }
                 if (ok + miss + est_err).is_multiple_of(30) {
-                    eprintln!("VISION ok={ok} miss={miss} est_err={est_err} decode_fail={decode_fail} yaw={:.1}", *pose.yaw.lock().unwrap());
+                    eprintln!("VISION ok={ok} miss={miss} est_err={est_err} decode_fail={decode_fail} infer_ms={infer_ema_ms:.0} yaw={:.1}", *pose.yaw.lock().unwrap());
                 }
             }
             worker.retire(); // release the device before reopen / exit (BUG-30)
