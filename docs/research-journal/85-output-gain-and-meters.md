@@ -87,5 +87,5 @@ local Chromium evidence, not a native host-DPI assertion.
 ## Decision
 
 Deliver adjustable gain with measured headroom and explicit clipping visibility. Leave the
-owner's initial gain at zero; they can raise it gradually while observing representative
-material. A limiter would need a separate evaluation of waveform changes and latency.
+default gain at zero. The live setting subsequently reached +24 dB as recorded above;
+usable gain should be judged while observing representative material. A limiter would need a separate evaluation of waveform changes and latency.
