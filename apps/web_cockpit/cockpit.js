@@ -23,6 +23,82 @@
     setTimeout(() => t.remove(), 5000);
   }
 
+  // Gain commands are acknowledged by engine state, rather than the queued HTTP response.
+  let outputGain = null, gainEditing = false, gainPending = null, gainTimer = null;
+  let gainStateVersion = 0, gainRequestVersion = 0;
+  const validGain = (v) => typeof v === "number" && Number.isFinite(v) && v >= -24 && v <= 24;
+  const gainText = (v) => (v > 0 ? "+" : "") + v.toFixed(1) + " dB";
+  function drawGain() {
+    const slider = $("output-gain"), reset = $("output-gain-reset");
+    if (!slider) return;
+    slider.disabled = outputGain === null || gainPending !== null;
+    if (reset) reset.disabled = slider.disabled;
+    if (!gainEditing && gainPending === null && outputGain !== null) {
+      slider.value = outputGain;
+      setText("output-gain-value", gainText(outputGain));
+    }
+  }
+  function receiveGain(v) {
+    if (!validGain(v)) return;
+    gainStateVersion++;
+    outputGain = v;
+    if (gainPending !== null && Math.abs(v - gainPending) < 0.001) {
+      gainPending = null; clearTimeout(gainTimer);
+      setText("output-gain-help", "Raise gradually; reduce gain if clipping increases.");
+    }
+    drawGain();
+  }
+  async function submitGain(v) {
+    gainEditing = false;
+    if (!validGain(v) || outputGain === null || gainPending !== null) { drawGain(); return; }
+    const requestVersion = ++gainRequestVersion;
+    gainPending = v; drawGain();
+    setText("output-gain-value", gainText(v));
+    setText("output-gain-help", "Applying gain…");
+    const failed = () => {
+      if (gainPending === null || requestVersion !== gainRequestVersion) return;
+      gainPending = null; clearTimeout(gainTimer); drawGain();
+      setText("output-gain-help", "Gain was not confirmed. Check the connection and try again.");
+    };
+    // The settings dispatcher is asynchronous; ordinary old SSE snapshots are not a rejection.
+    gainTimer = setTimeout(async () => {
+      const controller = new AbortController();
+      const deadline = setTimeout(() => { controller.abort(); failed(); }, 1000);
+      try {
+        const r = await fetch("/api/get_config", { signal: controller.signal });
+        if (r.ok) { const c = await r.json(); if (requestVersion === gainRequestVersion) receiveGain(c.output_gain_db); }
+      } catch (_) { /* Restore the last engine-confirmed value below. */ }
+      clearTimeout(deadline);
+      failed();
+    }, 4000);
+    try {
+      const r = await fetch("/api/set_output_gain", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify([v]),
+      });
+      if (!r.ok) failed();
+    } catch (_) { failed(); }
+  }
+  const levelText = (v) => v === null ? "−∞" : typeof v === "number" && Number.isFinite(v) ? (v > 0 ? "+" : "") + v.toFixed(1) : "—";
+  function renderOutputLevel(level) {
+    if (!level) return;
+    receiveGain(level.gain_db);
+    const peak = level.peak_dbfs, rms = level.rms_dbfs;
+    const text = "Peak " + levelText(peak) + " · RMS " + levelText(rms) + " dBFS";
+    setText("output-level-text", text);
+    const pct = (v) => typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.min(100, (v + 60) / 60 * 100)) : 0;
+    const fill = $("output-level-fill"), marker = $("output-level-peak");
+    if (fill) { fill.style.width = pct(rms) + "%"; fill.className = "bar-fill " + (typeof peak === "number" && peak > 0 ? "bad" : typeof peak === "number" && peak > -3 ? "warn" : "good"); }
+    if (marker) marker.style.left = pct(peak) + "%";
+    const bar = $("output-level-bar"); if (bar) bar.setAttribute("aria-label", text);
+    const clipping = $("output-clipping");
+    if (clipping) {
+      const total = level.clipped_total, bad = level.non_finite_total;
+      const known = Number.isFinite(total) && Number.isFinite(bad);
+      clipping.textContent = known ? "Clipped samples: " + total.toLocaleString() + " since start" + (bad > 0 ? " · invalid samples: " + bad.toLocaleString() : "") + (total > 0 ? " · reduce gain if rising" : "") : "Clipping: waiting…";
+      clipping.className = "output-hint" + (bad > 0 ? " bad" : total > 0 ? " warn" : "");
+    }
+  }
+
   // ---- output-buffer cell meter ---------------------------------------------
   // One cell per FIFO block (capacity = 2x cushion). Margin cells (1..cushion) are green when full
   // and red when empty (the underfill alarm); headroom cells are cyan spare, amber in the top ~25%
@@ -181,6 +257,7 @@
     }
 
     // meters
+    renderOutputLevel(s.output_level);
     if (s.render_load) {
       setText("render-load-txt", s.render_load.text);
       const f = $("render-load-fill"); if (f) { f.style.width = (s.render_load.pct || 0) + "%"; f.className = "bar-fill " + (s.render_load.level || "good"); }
@@ -250,6 +327,13 @@
 
   // ---- control wiring --------------------------------------------------------
   function wire() {
+    const gain = $("output-gain"), gainReset = $("output-gain-reset");
+    if (gain) {
+      gain.addEventListener("input", () => { gainEditing = true; setText("output-gain-value", gainText(Number(gain.value))); });
+      gain.addEventListener("change", () => submitGain(Number(gain.value)));
+      gain.addEventListener("blur", () => { gainEditing = false; drawGain(); });
+    }
+    if (gainReset) gainReset.addEventListener("click", () => submitGain(0));
     const pt = $("predict-toggle");
     if (pt) pt.addEventListener("click", () => {
       const on = pt.getAttribute("aria-checked") !== "true";
@@ -289,6 +373,10 @@
     const alive = () => { if (gone) { clearTimeout(gone); gone = null; } };
     const lost = () => {
       dropped = true;
+      gainStateVersion++; gainRequestVersion++;
+      outputGain = null; gainEditing = false; gainPending = null; clearTimeout(gainTimer); drawGain();
+      setText("output-gain-value", "Disconnected");
+      setText("output-level-text", "Waiting for audio levels…");
       lastOverlay = null; drawOverlay();  // clear stale landmark dots if the feed drops (#185)
       if (gone) return;
       // grace long enough that a reset-to-defaults relaunch (exit 97 -> re-open on the same port,
@@ -351,7 +439,9 @@
       // Size the window reliably from the page: Chrome ignores --window-size for an --app window when
       // Chrome is already running (and our port changes each launch, so it can't remember either), so
       // resize ourselves to the saved size. window.resizeTo works on a standalone --app window.
-      fetch("/api/get_config").then((r) => r.json()).then((c) => {
+      const startupGainVersion = gainStateVersion;
+      fetch("/api/get_config").then((r) => { if (!r.ok) throw new Error("config unavailable"); return r.json(); }).then((c) => {
+        if (gainStateVersion === startupGainVersion) receiveGain(c.output_gain_db);
         if (c.win_w && c.win_h) { try { window.resizeTo(c.win_w, c.win_h); } catch (_) { /* blocked */ } }
       }).catch(() => {});
       // remember the window size: report it (debounced) on resize so the engine reopens at this

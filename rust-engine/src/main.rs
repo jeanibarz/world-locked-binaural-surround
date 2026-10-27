@@ -24,6 +24,9 @@ mod geometry;
 mod hp_eq;
 mod interp;
 mod output_stream;
+mod output_gain;
+#[cfg(test)]
+mod gain_pipeline_tests;
 mod pack;
 mod packs;
 mod telemetry;
@@ -121,6 +124,7 @@ mod engine {
         cushion_ms: f64,
         exclusive: bool,
         hp_eq: bool,
+        output_gain_db: f64,
         hp_model: Option<String>,
         predict: bool,
         /// Head-tracking direction override (BUG #189/#191). `false` passes the pose through with the
@@ -192,6 +196,9 @@ mod engine {
             if let Some(b) = o.get("hp_eq").and_then(|x| x.as_bool()) {
                 if schema >= SETTINGS_SCHEMA || b { self.hp_eq = b; }
             }
+            if let Some(n) = o.get("output_gain_db").and_then(|x| x.as_f64()) {
+                if crate::output_gain::valid_gain_db(n) { self.output_gain_db = n; }
+            }
             if let Some(s) = o.get("hp_model").and_then(|x| x.as_str()) { self.hp_model = Some(s.into()); }
             if let Some(b) = o.get("predict").and_then(|x| x.as_bool()) { self.predict = b; }
             if let Some(b) = o.get("invert_tracking").and_then(|x| x.as_bool()) { self.invert_tracking = b; }
@@ -221,6 +228,7 @@ mod engine {
                 "method": self.method, "hrir_name": self.hrir_name, "backend": self.backend,
                 "comp": self.comp, "block": self.block, "cushion_ms": self.cushion_ms,
                 "exclusive": self.exclusive, "hp_eq": self.hp_eq, "hp_model": self.hp_model,
+                "output_gain_db": self.output_gain_db,
                 "predict": self.predict, "invert_tracking": self.invert_tracking,
                 "flip_h": self.flip_h, "flip_v": self.flip_v,
                 "show_landmarks": self.show_landmarks, "camera": self.camera,
@@ -247,6 +255,7 @@ mod engine {
             "samplerate": samplerate,
             "backend": s.backend, "method": s.method, "hrir_name": s.hrir_name, "comp": s.comp,
             "block": s.block, "cushion_ms": s.cushion_ms, "exclusive": s.exclusive,
+            "output_gain_db": s.output_gain_db,
             "hp_eq": s.hp_eq, "hp_models": s.hp_model.clone().map(|m| vec![m]),
             "predict": s.predict, "invert_tracking": s.invert_tracking,
             "flip_h": s.flip_h, "flip_v": s.flip_v, "show_landmarks": s.show_landmarks,
@@ -401,6 +410,7 @@ mod engine {
             block,
             cushion_ms: latency_ms,
             exclusive: false,
+            output_gain_db: 0.0,
             hp_eq: true, // the owner listened with the headphone comp + subjective EQ on (#193)
             hp_model: None,
             predict: false,
@@ -588,6 +598,8 @@ mod engine {
             }
         };
         let mut output_eq = build_hp_eq(block);
+        let mut output_gain = crate::output_gain::GainStage::new(pack.samplerate);
+        output_gain.set_gain_db(settings.output_gain_db);
         // Tracks the previous tick's enable state so a bypass→enable transition can clear the EQ's
         // stale tail (FIR delay line + biquad memory) and resume without a click.
         let mut hp_eq_was_on = false;
@@ -676,6 +688,11 @@ mod engine {
                     "set_hrir" => { if let Some(s) = a0.and_then(|v| v.as_str()) { settings.hrir_name = s.into(); dirty = true; } }
                     "set_comp" => { if let Some(s) = a0.and_then(|v| v.as_str()) { settings.comp = s.into(); dirty = true; } }
                     "set_exclusive" => { if let Some(b) = a0.and_then(|v| v.as_bool()) { settings.exclusive = b; dirty = true; } }
+                    "set_output_gain" => {
+                        if let Some(n) = a0.and_then(|v| v.as_f64()) {
+                            if crate::output_gain::valid_gain_db(n) { settings.output_gain_db = n; dirty = true; }
+                        }
+                    }
                     "set_hpeq" => { if let Some(b) = a0.and_then(|v| v.as_bool()) { settings.hp_eq = b; dirty = true; } }
                     "set_hp_model" => { if let Some(s) = a0.and_then(|v| v.as_str()) { settings.hp_model = Some(s.into()); dirty = true; } }
                     "set_block" => { if let Some(n) = a0.and_then(|v| v.as_u64()) { settings.block = (n as usize).clamp(64, 8192); dirty = true; } }
@@ -706,6 +723,7 @@ mod engine {
                 }
             }
             if dirty {
+                output_gain.set_gain_db(settings.output_gain_db);
                 // Reconcile the pose source's tracking direction to the (possibly just reverted)
                 // setting, so a toggle, a settings-dialog cancel, and reset-to-defaults all agree
                 // with the live radar/audio direction (#189). A no-op when unchanged.
@@ -861,19 +879,13 @@ mod engine {
                         }
                     }
                     hp_eq_was_on = settings.hp_eq;
+                    // Shared gain follows EQ (including bypass) and meters before the final clamp.
+                    // FIFO blocks own their samples, so this replaces the previous collect allocation.
+                    let mut stereo: StereoBlock = Vec::with_capacity(out64.len());
+                    output_gain.process_into(&out64, &mut stereo);
                     let pct = if block_time > 0.0 { t0.elapsed().as_secs_f64() / block_time * 100.0 } else { 0.0 };
                     render_ema = render_ema * 0.9 + pct * 0.1;
                     if pct > render_peak { render_peak = pct; }
-                    // Clamp to [-1,1] and drop non-finite samples before the device: the Float32
-                    // output path does no clamping, so an overshoot would clip and a stray NaN/Inf
-                    // (e.g. from a bad render) would reach the endpoint (BUG-21).
-                    let stereo: StereoBlock = out64
-                        .iter()
-                        .map(|&v| {
-                            let s = v as f32;
-                            if s.is_finite() { s.clamp(-1.0, 1.0) } else { 0.0 }
-                        })
-                        .collect();
                     lock_fifo(&fifo).push(stereo);
                     rendered_blocks += 1;
                 }
@@ -927,6 +939,7 @@ mod engine {
                 } else {
                     None
                 };
+                let levels = output_gain.take_metrics();
                 let state = telemetry::build_state(&TeleInput {
                     title: "WLBS Engine",
                     yaw_deg: cur_yaw,
@@ -946,6 +959,12 @@ mod engine {
                     rendered_blocks,
                     render_load_pct: render_ema,
                     render_peak_pct: render_peak,
+                    output_gain_db: output_gain.gain_db(),
+                    output_peak_dbfs: levels.peak_dbfs,
+                    output_rms_dbfs: levels.rms_dbfs,
+                    output_clipped_samples: levels.clipped_samples,
+                    output_clipped_total: levels.clipped_total,
+                    output_non_finite_total: levels.non_finite_total,
                     source_idle,
                     source_silent,
                     source_name: &source,
@@ -994,6 +1013,7 @@ mod engine {
             let os = out_status.lock().unwrap().clone();
             let pose_stale = pose.millis_since_update().map_or(false, |m| m >= 1500);
             let cam_error = pose.cam_error();
+            let levels = output_gain.take_metrics();
             let state = telemetry::build_state(&TeleInput {
                 title: "WLBS Engine",
                 yaw_deg: *pose.yaw.lock().unwrap(),
@@ -1013,6 +1033,12 @@ mod engine {
                 rendered_blocks,
                 render_load_pct: render_ema,
                 render_peak_pct: render_peak,
+                output_gain_db: output_gain.gain_db(),
+                output_peak_dbfs: levels.peak_dbfs,
+                output_rms_dbfs: levels.rms_dbfs,
+                output_clipped_samples: levels.clipped_samples,
+                output_clipped_total: levels.clipped_total,
+                output_non_finite_total: levels.non_finite_total,
                 source_idle: true,
                 source_silent,
                 source_name: &source,

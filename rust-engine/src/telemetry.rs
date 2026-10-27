@@ -140,6 +140,15 @@ pub struct TeleInput<'a> {
     pub output_name: &'a str,
     pub output_sr: u32,
     pub output_err: Option<&'a str>,
+    /// User gain applied to the final stereo output, before the safety clamp.
+    pub output_gain_db: f64,
+    /// Peak and RMS before the safety clamp for this heartbeat; silence has no finite dBFS value.
+    pub output_peak_dbfs: Option<f64>,
+    pub output_rms_dbfs: Option<f64>,
+    /// Sample values exceeding full scale during this heartbeat (each stereo channel counts).
+    pub output_clipped_samples: u64,
+    pub output_clipped_total: u64,
+    pub output_non_finite_total: u64,
     /// Where head pose comes from: "camera" | "mjpeg" | "image" | "demo" | "held".
     pub pose_source: &'a str,
     pub tracking: bool,
@@ -324,6 +333,14 @@ pub fn build_state(t: &TeleInput) -> Value {
         "show_landmarks": t.show_landmarks,
         "health": health,
         "render_load": render_load,
+        "output_level": {
+            "gain_db": t.output_gain_db,
+            "peak_dbfs": t.output_peak_dbfs.filter(|v| v.is_finite()),
+            "rms_dbfs": t.output_rms_dbfs.filter(|v| v.is_finite()),
+            "clipped_samples": t.output_clipped_samples,
+            "clipped_total": t.output_clipped_total,
+            "non_finite_total": t.output_non_finite_total,
+        },
         "buffer": buffer,
         "dropouts": dropouts,
         "predict": t.predict,
@@ -400,6 +417,12 @@ mod tests {
             output_name: "Headphones",
             output_sr: 48_000,
             output_err: None,
+            output_gain_db: 0.0,
+            output_peak_dbfs: None,
+            output_rms_dbfs: None,
+            output_clipped_samples: 0,
+            output_clipped_total: 0,
+            output_non_finite_total: 0,
             pose_source: "camera",
             tracking: true,
             pose_stale: false,
@@ -429,13 +452,58 @@ mod tests {
         let s = build_state(&sample_input(&lat));
         for key in ["title", "cam_res", "face_badge", "face_locked", "show_landmarks", "health",
                     "render_load", "buffer", "dropouts", "predict", "invert_tracking", "flip_h",
-                    "flip_v", "pose", "facing", "latency"] {
+                    "flip_v", "pose", "facing", "latency", "output_level"] {
             assert!(s.get(key).is_some(), "missing state field {key}");
         }
         assert_eq!(s["buffer"]["cushion_blocks"], 4);
         assert_eq!(s["buffer"]["capacity"], 8);
         assert!(s["buffer"]["resample_ppm"].is_number());
         assert!(s["latency"]["segments"].as_array().unwrap().len() == 4);
+    }
+
+    #[test]
+    fn output_levels_preserve_silence_as_null() {
+        let lat = LatencyHistogram::new(64, 20, 0.0, 120.0);
+        let state = build_state(&sample_input(&lat));
+        assert_eq!(state["output_level"], json!({
+            "gain_db": 0.0, "peak_dbfs": null, "rms_dbfs": null,
+            "clipped_samples": 0, "clipped_total": 0, "non_finite_total": 0,
+        }));
+    }
+
+    #[test]
+    fn output_levels_keep_overshoot_and_distinct_interval_and_lifetime_counts() {
+        let lat = LatencyHistogram::new(64, 20, 0.0, 120.0);
+        let mut input = sample_input(&lat);
+        input.output_gain_db = 12.0;
+        input.output_peak_dbfs = Some(6.0);
+        input.output_rms_dbfs = Some(-3.25);
+        input.output_clipped_samples = 17;
+        input.output_clipped_total = 1017;
+        input.output_non_finite_total = 2;
+        let frame: Value = serde_json::from_str(&wrap_state(build_state(&input))).unwrap();
+        assert_eq!(frame["state"]["output_level"], json!({
+            "gain_db": 12.0, "peak_dbfs": 6.0, "rms_dbfs": -3.25,
+            "clipped_samples": 17, "clipped_total": 1017, "non_finite_total": 2,
+        }));
+        input.output_clipped_samples = 0;
+        let next = build_state(&input);
+        assert_eq!(next["output_level"]["clipped_samples"], 0);
+        assert_eq!(next["output_level"]["clipped_total"], 1017);
+    }
+
+    #[test]
+    fn output_levels_replace_non_finite_measurements_with_null() {
+        let lat = LatencyHistogram::new(64, 20, 0.0, 120.0);
+        let mut input = sample_input(&lat);
+        for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            input.output_peak_dbfs = Some(invalid);
+            input.output_rms_dbfs = Some(invalid);
+            let state = build_state(&input);
+            assert!(state["output_level"]["peak_dbfs"].is_null());
+            assert!(state["output_level"]["rms_dbfs"].is_null());
+            assert!(serde_json::from_str::<Value>(&wrap_state(state)).is_ok());
+        }
     }
 
     #[test]

@@ -154,3 +154,17 @@ html,body{margin:0;background:var(--bg)}
 .ab-toggle{display:flex;background:var(--inset);border:1px solid var(--border2);border-radius:10px;padding:3px;gap:3px}
 .ab{width:76px;height:44px;border:0;border-radius:8px;background:transparent;color:var(--text2);font:700 16px Inter,sans-serif;cursor:pointer}
 .ab-active{background:#1b2432;color:var(--text)}
+
+/* Output controls use a separate compact row so system telemetry keeps its space. */
+.output-panel{flex:none;display:grid;grid-template-columns:minmax(260px,1fr) minmax(320px,1.5fr);gap:24px;padding:10px 16px}
+.output-gain-control,.output-level-control{min-width:0;display:flex;flex-direction:column;gap:6px}
+.output-gain-row{display:flex;align-items:center;gap:12px}
+#output-gain{flex:1;min-width:0;margin:0;accent-color:var(--cyan);cursor:pointer}
+#output-gain:disabled{cursor:default;opacity:.5}
+#output-gain-reset{height:26px;padding:0 10px;font-size:12px;white-space:nowrap}
+#output-gain-reset:disabled{opacity:.5;cursor:default}
+#output-gain:focus-visible,#output-gain-reset:focus-visible{outline:2px solid var(--cyan);outline-offset:3px}
+.output-hint{font-size:11px;color:var(--muted);line-height:1.4;overflow-wrap:anywhere}
+.output-level-bar{margin:4px 0 5px}
+#output-clipping.warn{color:var(--amber)}
+#output-clipping.bad{color:var(--red)}

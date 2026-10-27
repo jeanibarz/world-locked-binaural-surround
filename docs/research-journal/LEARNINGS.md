@@ -700,3 +700,8 @@ full story.
     durations spanning the trigger from actual pretrigger observations. Capture gaps already
     include read waits, so adding the two fabricates overlap. Report missing windows/dropped events
     rather than treating absent evidence as a clean stream. (→ [84](84-bounded-underrun-timing-trace.md))
+
+93. **An impulse peak is not playback headroom.** Small BRIR taps can still have near-unity
+    frequency response. Assess the summed, EQ'd signal before clipping, and preserve the
+    filters' relative levels. Apply a shared-ear output trim with visible clipping rather than
+    normalizing each filter independently. (→ [85](85-output-gain-and-meters.md))
