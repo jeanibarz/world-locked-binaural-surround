@@ -56,6 +56,13 @@ pub fn resolve_file(cli: Option<&str>, env_key: &str, rel: &str) -> PathBuf {
     appdata_wlbs().join(rel)
 }
 
+/// Process-global lock serialising every test that mutates the shared `APPDATA` env var the asset
+/// resolvers read (the `packs` and `hp_profiles` stores both do). A per-module lock only serialises
+/// its own module's tests, so two modules racing `set_var`/`remove_var` on `APPDATA` would clobber
+/// each other under cargo's parallel runner — this one lock is shared by both.
+#[cfg(test)]
+pub(crate) static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;

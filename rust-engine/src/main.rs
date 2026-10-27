@@ -22,6 +22,7 @@ mod audio_trace;
 mod camera_fmt;
 mod geometry;
 mod hp_eq;
+mod hp_profiles;
 mod interp;
 mod output_stream;
 mod output_gain;
@@ -244,6 +245,7 @@ mod engine {
         s: &Settings,
         cameras_json: &serde_json::Value,
         hrir_list: &[String],
+        hp_models: &[String],
         samplerate: u32,
     ) -> serde_json::Value {
         serde_json::json!({
@@ -256,7 +258,13 @@ mod engine {
             "backend": s.backend, "method": s.method, "hrir_name": s.hrir_name, "comp": s.comp,
             "block": s.block, "cushion_ms": s.cushion_ms, "exclusive": s.exclusive,
             "output_gain_db": s.output_gain_db,
-            "hp_eq": s.hp_eq, "hp_models": s.hp_model.clone().map(|m| vec![m]),
+            // #240: the discovered headphone-comp profiles populate the cockpit model dropdown
+            // (`settings.js` wires it only when `hp_models` is a non-empty list — null leaves the
+            // field inert when there is nothing to pick), and `hp_model` is the current selection so
+            // the field shows it.
+            "hp_eq": s.hp_eq,
+            "hp_models": if hp_models.is_empty() { serde_json::Value::Null } else { serde_json::json!(hp_models) },
+            "hp_model": s.hp_model,
             "predict": s.predict, "invert_tracking": s.invert_tracking,
             "flip_h": s.flip_h, "flip_v": s.flip_v, "show_landmarks": s.show_landmarks,
             "win_w": s.win_w, "win_h": s.win_h,
@@ -265,7 +273,7 @@ mod engine {
     }
 
     pub fn run() -> Result<(), Box<dyn std::error::Error>> {
-        use crate::{assets, packs};
+        use crate::{assets, hp_profiles, packs};
         let a: Vec<String> = std::env::args().collect();
 
         // Raise the whole process to HIGH priority before spawning any thread, so normal-priority
@@ -285,6 +293,21 @@ mod engine {
         }
         if let Some(src) = arg(&a, "--import-pack") {
             let dst = packs::import_pack(std::path::Path::new(&src), arg(&a, "--name").as_deref())?;
+            println!("imported -> {}", dst.display());
+            return Ok(());
+        }
+        // Headphone-comp profile management (#240), the `--import-pack`/`--list-packs` analogue for
+        // the post-downmix EQ store (bundled default + %APPDATA%\WLBS\hp_eq\<name>), then exit.
+        if flag(&a, "--list-hp-eq") {
+            let default_dir = assets::resolve_dir(arg(&a, "--hp-eq-dir").as_deref(), "WLBS_HP_EQ_DIR", "hp_eq");
+            println!("hp-eq profiles dir: {}", crate::hp_profiles::user_hp_eq_dir().display());
+            for p in crate::hp_profiles::list_profiles(&default_dir) {
+                println!("  {}  {}", p.name, p.dir.display());
+            }
+            return Ok(());
+        }
+        if let Some(src) = arg(&a, "--import-hp-eq") {
+            let dst = crate::hp_profiles::import_profile(std::path::Path::new(&src), arg(&a, "--name").as_deref())?;
             println!("imported -> {}", dst.display());
             return Ok(());
         }
@@ -443,6 +466,32 @@ mod engine {
         if flag(&a, "--flip-v") { settings.flip_v = true; }
         if flag(&a, "--no-flip-v") { settings.flip_v = false; }
         let hrir_list: Vec<String> = packs::list_packs().into_iter().map(|p| p.name).collect();
+
+        // --- headphone-comp profiles (#240): discover the installed profiles, resolve the
+        // restored/selected one, and fall back gracefully when it is gone ---
+        // The install-relative `hp_eq/` dir (honouring --hp-eq-dir / WLBS_HP_EQ_DIR) is the bundled
+        // "default" profile; user profiles live under %APPDATA%\WLBS\hp_eq\<name>. Resolved once:
+        // imports happen via the --import-hp-eq subcommand (which exits), so the set is fixed for a run.
+        let hp_eq_default_dir =
+            assets::resolve_dir(arg(&a, "--hp-eq-dir").as_deref(), "WLBS_HP_EQ_DIR", "hp_eq");
+        let hp_models: Vec<String> =
+            hp_profiles::list_profiles(&hp_eq_default_dir).into_iter().map(|p| p.name).collect();
+        // Restore the persisted selection; default to "default" when unset. If a saved profile is no
+        // longer installed, fall back to "default" (or none) and warn — the engine must not carry a
+        // dangling selection the dropdown can't show (graceful degradation per the acceptance).
+        let default_selection = hp_models.iter().any(|n| n == "default").then(|| "default".to_string());
+        // Reset-to-defaults must restore the resolvable default profile, not the struct's placeholder
+        // `None` (mirrors the `defaults.camera` fix-up below for the auto-picked camera).
+        defaults.hp_model = default_selection.clone();
+        match settings.hp_model.clone() {
+            None => settings.hp_model = default_selection,
+            Some(name) if hp_profiles::resolve_profile(&name, &hp_eq_default_dir).is_none() => {
+                eprintln!("HP_EQ_WARN saved headphone profile {name:?} not found — falling back to {}",
+                    if default_selection.is_some() { "\"default\"" } else { "none (compensation off)" });
+                settings.hp_model = default_selection;
+            }
+            _ => {} // a saved profile that still resolves — keep it
+        }
         let mut block = settings.block; // the live block size (the settings dialog can change it)
 
         // Optional diagnostics: bounded event submission here, JSON/file work on its own thread.
@@ -487,7 +536,7 @@ mod engine {
         }
 
         // --- control-plane cockpit (tokio) ---
-        let cockpit = Cockpit::new(web_dir, build_config(&settings, &cameras_json, &hrir_list, pack.samplerate));
+        let cockpit = Cockpit::new(web_dir, build_config(&settings, &cameras_json, &hrir_list, &hp_models, pack.samplerate));
         {
             let cockpit = Arc::clone(&cockpit);
             std::thread::spawn(move || control_plane::serve_blocking(cockpit, port));
@@ -579,16 +628,36 @@ mod engine {
         let mut render = build_render(&pack, n_in, block, latency_ms, &settings.method, interp_step)?;
 
         // Post-convolution headphone comp + subjective EQ (#193) — the stereo output-bus timbre
-        // stage that reproduces the owner's EqualizerAPO chain. The bundled config dir resolves
-        // install-relative like the other assets; a missing/broken bundle degrades gracefully to
-        // "EQ disabled" rather than aborting the engine. Rebuilt on a block-size change (the comp
-        // FIR convolver is sized to the block); the slow samplerate is fixed at the pack rate.
-        let hp_eq_cfg = assets::resolve_dir(arg(&a, "--hp-eq-dir").as_deref(), "WLBS_HP_EQ_DIR", "hp_eq")
-            .join("baked_7p1_rev26_final.txt");
-        let build_hp_eq = |blk: usize| -> Option<OutputEq> {
-            match hp_eq::load_output_eq(&hp_eq_cfg, pack.samplerate, blk, GLOBAL_OUTPUT_PREAMP_DB) {
+        // stage that reproduces an EqualizerAPO chain. The selected profile's config is resolved
+        // per build (#240): the model picker switches profiles live, so the fixed-path closure is
+        // gone — `build_hp_eq` re-resolves `hp_model` → a profile config each time it runs. A
+        // missing/broken profile degrades gracefully to "EQ disabled" (HP_EQ_WARN) rather than
+        // aborting the engine. Rebuilt on a block-size change (the comp FIR convolver is sized to
+        // the block) and on a model change; the samplerate is fixed at the pack rate.
+        let build_hp_eq = |blk: usize, model: &Option<String>| -> Option<OutputEq> {
+            // Resolve the selected profile, falling back to "default" when the chosen one is gone
+            // (e.g. deleted after it was picked). `None` here means no profile at all → EQ off.
+            let name = model.as_deref().unwrap_or("default");
+            let cfg = match hp_profiles::resolve_profile(name, &hp_eq_default_dir) {
+                Some(c) => c,
+                None => {
+                    if name != "default" {
+                        if let Some(c) = hp_profiles::resolve_profile("default", &hp_eq_default_dir) {
+                            eprintln!("HP_EQ_WARN profile {name:?} not found — using \"default\"");
+                            c
+                        } else {
+                            eprintln!("HP_EQ_WARN no headphone-comp profile {name:?} (and no default) — headphone EQ disabled");
+                            return None;
+                        }
+                    } else {
+                        eprintln!("HP_EQ_WARN no \"default\" headphone-comp profile installed — headphone EQ disabled");
+                        return None;
+                    }
+                }
+            };
+            match hp_eq::load_output_eq(&cfg, pack.samplerate, blk, GLOBAL_OUTPUT_PREAMP_DB) {
                 Ok(eq) => {
-                    println!("HP_EQ loaded (global {GLOBAL_OUTPUT_PREAMP_DB:+} dB): {}", eq.summary());
+                    println!("HP_EQ loaded profile {name:?} (global {GLOBAL_OUTPUT_PREAMP_DB:+} dB): {}", eq.summary());
                     Some(eq)
                 }
                 Err(e) => {
@@ -597,7 +666,7 @@ mod engine {
                 }
             }
         };
-        let mut output_eq = build_hp_eq(block);
+        let mut output_eq = build_hp_eq(block, &settings.hp_model);
         let mut output_gain = crate::output_gain::GainStage::new(pack.samplerate);
         output_gain.set_gain_db(settings.output_gain_db);
         // Tracks the previous tick's enable state so a bypass→enable transition can clear the EQ's
@@ -660,6 +729,7 @@ mod engine {
             let block_before = settings.block;
             let cush_before = settings.cushion_ms;
             let method_before = settings.method.clone();
+            let hp_model_before = settings.hp_model.clone();
             let mut dirty = false;
             for (name, args) in cockpit.take_dispatched() {
                 let a0 = args.get(0);
@@ -773,8 +843,9 @@ mod engine {
                             trace_block.store(block, Ordering::Relaxed);
                         }
                         if block_changed {
-                            // The comp-FIR convolver is sized to the block, so rebuild the EQ too.
-                            output_eq = build_hp_eq(block);
+                            // The comp-FIR convolver is sized to the block, so rebuild the EQ too
+                            // (picking up the current profile selection).
+                            output_eq = build_hp_eq(block, &settings.hp_model);
                             hp_eq_was_on = false;
                         }
                         in_acc.clear();
@@ -786,10 +857,22 @@ mod engine {
                         }
                     }
                 }
+                // Headphone-profile switch (#240): the model picker re-resolves the selected profile
+                // and rebuilds the OutputEq live, so the comp/EQ changes without a restart. When the
+                // block also changed this tick, the block-size rebuild above already rebuilt with the
+                // current `hp_model` (`settings.block` still equals `block_before` only when it
+                // didn't), so skip the redundant rebuild. Clearing `hp_eq_was_on` forces the next
+                // enabled tick to reset the fresh chain's state — the same click-free path `set_hpeq`
+                // uses on a bypass→enable transition.
+                if settings.hp_model != hp_model_before && settings.block == block_before {
+                    output_eq = build_hp_eq(block, &settings.hp_model);
+                    hp_eq_was_on = false;
+                    println!("HP_MODEL switched to {:?}", settings.hp_model);
+                }
                 // Only now — after the reconfig succeeded or reverted — publish and persist, so the
                 // cockpit config and the settings file always carry the live working values (a failed
                 // rebuild must not persist a block/method that would crash-loop the next launch).
-                cockpit.set_config(build_config(&settings, &cameras_json, &hrir_list, pack.samplerate));
+                cockpit.set_config(build_config(&settings, &cameras_json, &hrir_list, &hp_models, pack.samplerate));
                 // Persist immediately for the main-cockpit controls (predict/recenter/window/tab);
                 // settings-dialog changes are held until Confirm (while a snapshot is active).
                 if snapshot.is_none() {

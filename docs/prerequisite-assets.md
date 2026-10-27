@@ -52,9 +52,10 @@ with it. There is nothing to place.
 > into the bundle — the config lives in the source tree at
 > `rust-engine/hp_eq/baked_7p1_rev26_final.txt` and no build script ships it. So on
 > a script-built bundle, headphone EQ is absent and the engine logs
-> `HP_EQ_WARN … headphone EQ disabled` and renders without it until you supply a
-> config (put one under `<install>/hp_eq/` or `%APPDATA%\WLBS\hp_eq\`, or point
-> `--hp-eq-dir` / `WLBS_HP_EQ_DIR` at it). See
+> `HP_EQ_WARN … headphone EQ disabled` and renders without it until you install a
+> profile — `wlbs_engine.exe --import-hp-eq <profile-dir> [--name …]`, then pick it
+> in the cockpit's model picker (or point `--hp-eq-dir` / `WLBS_HP_EQ_DIR` at a
+> `default` profile dir for a one-off). See
 > [`headphone-compensation.md`](headphone-compensation.md) for how to obtain and
 > load a profile.
 
