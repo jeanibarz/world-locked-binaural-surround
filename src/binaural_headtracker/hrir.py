@@ -74,6 +74,22 @@ def resample_irs(irs: np.ndarray, src_rate: float, dst_rate: float) -> np.ndarra
     return resample_poly(np.asarray(irs, dtype=np.float64), up, down, axis=-1)
 
 
+def _attr_str(value: object) -> str:
+    """Decode an HDF5/SOFA attribute to ``str``.
+
+    h5py returns string attributes either as ``str`` (variable-length UTF-8) or as
+    ``bytes`` (fixed-length, the convention MATLAB-written SOFA files use), and sometimes
+    wrapped in a 0-/1-d array. ``str(b"cartesian")`` yields the literal ``"b'cartesian'"``,
+    so a bytes-typed ``SourcePosition.Type`` must be *decoded*, not stringified, or a
+    Cartesian position set is silently treated as spherical (regression #223).
+    """
+    if isinstance(value, np.ndarray):
+        value = value.ravel()[0] if value.size else ""
+    if isinstance(value, bytes):  # also catches numpy.bytes_ (a bytes subclass)
+        return value.decode("ascii", "ignore")
+    return str(value)
+
+
 def _to_spherical(pos: np.ndarray, pos_type: str) -> np.ndarray:
     """Return (M, 3) spherical (az deg [0,360), el deg, radius) from SourcePosition."""
     pos = np.asarray(pos, dtype=np.float64)
@@ -172,7 +188,7 @@ def load_sofa(path, target_rate: int | None = None) -> HRIRSet:
         sr = float(np.asarray(f["Data.SamplingRate"]).ravel()[0])
         pos_type = ""
         if "SourcePosition" in f:
-            pos_type = str(f["SourcePosition"].attrs.get("Type", b"spherical"))
+            pos_type = _attr_str(f["SourcePosition"].attrs.get("Type", b"spherical"))
 
     if ir.ndim != 3 or ir.shape[1] != 2:
         raise ValueError(f"expected Data.IR of shape (M, 2, N), got {ir.shape}")
