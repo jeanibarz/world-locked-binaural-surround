@@ -51,10 +51,11 @@ the camera. Measuring **pose age at the moment the sound is heard** as a distrib
 (journal 40) traced the lag to the output **device buffer**: the output had silently been on
 **MME** (~90–100 ms), and moving it to **WASAPI** shared cut that to ~22 ms (journals 42–44).
 The remaining ~40 ms of **camera staleness** is cancelled by **orientation prediction** to the
-audio-render instant (an α-β extrapolation over the live-measured pose age; journal 47). That
-brought the measured head-move→ear latency down around the **~50 ms** detection threshold
-(from ~140–200 ms), meeting the latency milestone. The open lever is a custom **pull-driven
-virtual audio driver** to remove VoiceMeeter (Track B, journals 51–80). The psychoacoustics
+audio-render instant (an α-β extrapolation over the live-measured pose age; journal 47).
+Together those took the live head-move→ear latency from ~140–200 ms down to roughly **~70 ms**
+(sub-50 ms on the synthetic component-split bench, but the live floor is dominated by the FIFO
+`queue` term; journals 42–48). Closing the rest of the gap to the `< ~50 ms` target is the
+custom **pull-driven virtual audio driver** that removes VoiceMeeter (Track B, journals 51–80). The psychoacoustics
 that set the target (detection threshold ≈ 50–75 ms; a few degrees of lag is sub-threshold
 *during* a turn but not at the stop) are in
 [`docs/requirements.md`](docs/requirements.md) § 7 and journal entry 36.
