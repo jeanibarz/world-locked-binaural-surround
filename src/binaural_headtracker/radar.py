@@ -4,7 +4,7 @@ The GUI's right panel is a bird's-eye "radar": the listener at the centre facing
 *up* (screen −y = front), and the world-locked speakers placed around them. This
 module is the pure geometry — azimuth → radar pixel, and which speaker the head is
 most facing — so it is unit-tested with no camera/OpenCV; the drawing shell lives in
-``apps/calibration_gui.py``.
+``apps/_console.py`` (and the Dear PyGui cockpit).
 
 Azimuth convention matches the world model and `hrir`: ``az`` is degrees
 counter-clockwise from front, ``+90`` = the left ear. On the radar, front is up and

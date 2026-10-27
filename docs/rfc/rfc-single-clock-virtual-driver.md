@@ -1,6 +1,10 @@
 # RFC: Cut the live latency floor & remove VoiceMeeter — resampler first, driver gated
 
-**Status:** Approved (owner, 2026-10-20) — Track A authorized; Track B gated on B-pre
+**Status:** Approved (owner, 2026-10-20). **Track A:** A0 done — the `queue` term is jitter, not
+clock skew, so A1's drift servo was deprioritized (journal 52). **Track B:** the B-pre gate
+**PASSED** (journal 59) and the custom pull-driven SYSVAD driver is validated end-to-end on the
+host — real audio world-locks through it, VoiceMeeter-free (journals 68–80; see
+[`rfc-sysvad-real-loopback.md`](rfc-sysvad-real-loopback.md)). Integration into the daily app ongoing.
 **Date:** 2026-10-20
 **Author:** Jean Ibarz (with Claude)
 

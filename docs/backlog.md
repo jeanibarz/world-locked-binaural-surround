@@ -418,31 +418,6 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   `rust/build-wheels.sh`; launcher uses `--rust`. See journal 28.)_
 - [~] **B8.5** **Pose-age / motion→sound latency measurement harness.** Measure the
   true *pose age at the ear* as a **distribution (p50/p95/p99 + extremes, not a mean)**,
-  _(**Software path done** (journal 40): pure `latency.LatencyProbe`/`LatencyStats` (p50/p95/p99 +
-  min/max/mean over a rolling window); the passthrough carries `HeadPose.t` through to the render
-  worker, which records pose-age-at-ear = `(now−pose_t) + FIFO-ahead·block + device buffer` each
-  block. The **S** panel's head→ear becomes **measured** (p50 + p95/p99 tail, `camera-front`≈1 frame
-  still estimated), and the session distribution prints on exit. The pose timestamp is the seam B8.6
-  needs. 9 tests (326 total). **Remaining (needs host hardware):** the external **motion→sound**
-  cross-check with a motorised/visual rotation reference (§ 7.3c) to validate the software number
-  and capture the camera exposure the software stamp can't see.)_
-- [~] **B8.5b** **Automated latency sweep + component split.** `apps/latency_bench.py` runs the real
-  render pipeline with a **synthetic pose** (yaw sweep, no camera) + **synthetic sine** (no
-  VoiceMeeter), warm-up-discarded, and reports latency **split by stage** — stale (pose age) / queue
-  (FIFO) / device (output buffer) — as distributions, plus dropouts and a tone-integrity check.
-  `apps/latency_sweep.py` drives a grid as fresh subprocesses and ranks them; `--output sim` runs
-  anywhere, `--output device [--exclusive]` measures the real FiiO buffer on the host
-  (`run_latency_sweep.cmd`). 3 tests (324 total). **Finding (journal 42):** queue ≈ cushion×block and
-  stale ≈ one camera interval (both small); the ~75 ms gap between the sim's 68 ms and the real 143 ms
-  is the **WASAPI shared-mode device buffer (~90–100 ms)** — why block size barely moved the total.
-  **Remaining:** run the host device sweep to confirm shared-vs-exclusive, then act on B0.5.)_
-- [~] **B8.5c** **Output was on MME → prefer WASAPI.** The sweep's ambiguous-`"FiiO"` failure (4 host
-  APIs) revealed `resolve_output_device` returned the **first** match = **MME** (~90–100 ms shared
-  buffer), so the passthrough output had been on MME — the fixed device term journal 42 pinned. Now
-  the resolver prefers **WASAPI** (then WDM-KS, DirectSound, MME) for an ambiguous name; the bench
-  resolves via the same helper; the passthrough logs the output host API + buffer on startup. Likely
-  the single biggest latency win, no DSP change. 1 test (325 total). Journal 43. **Remaining:** the
-  host sweep now runs — quantify shared vs exclusive, then wire opt-in exclusive (B0.5).
   via three measurements (requirements § 7.3): (a) **camera→app** — a known temporal
   signal (LED / on-screen timecode) in view vs the frame's software-availability
   timestamp, accounting for exposure window + rolling-shutter skew; (b) **per-stage
@@ -452,6 +427,31 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
   identification. Carries a pose **timestamp** end-to-end (the seam B8.6 needs). Decides
   whether the current C270 is already good enough before any camera spend. _(from journal
   36; feeds NFR-1 and B8.6.)_
+  _(**Software path done** (journal 40): pure `latency.LatencyProbe`/`LatencyStats` (p50/p95/p99 +
+  min/max/mean over a rolling window); the passthrough carries `HeadPose.t` through to the render
+  worker, which records pose-age-at-ear = `(now−pose_t) + FIFO-ahead·block + device buffer` each
+  block. The **S** panel's head→ear becomes **measured** (p50 + p95/p99 tail, `camera-front`≈1 frame
+  still estimated), and the session distribution prints on exit. The pose timestamp is the seam B8.6
+  needs. 9 tests (326 total). **Remaining (needs host hardware):** the external **motion→sound**
+  cross-check with a motorised/visual rotation reference (§ 7.3c) to validate the software number
+  and capture the camera exposure the software stamp can't see.)_
+- [x] **B8.5b** **Automated latency sweep + component split.** `apps/latency_bench.py` runs the real
+  render pipeline with a **synthetic pose** (yaw sweep, no camera) + **synthetic sine** (no
+  VoiceMeeter), warm-up-discarded, and reports latency **split by stage** — stale (pose age) / queue
+  (FIFO) / device (output buffer) — as distributions, plus dropouts and a tone-integrity check.
+  `apps/latency_sweep.py` drives a grid as fresh subprocesses and ranks them; `--output sim` runs
+  anywhere, `--output device [--exclusive]` measures the real FiiO buffer on the host
+  (`run_latency_sweep.cmd`). 3 tests (324 total). **Finding (journal 42):** queue ≈ cushion×block and
+  stale ≈ one camera interval (both small); the ~75 ms gap between the sim's 68 ms and the real 143 ms
+  is the **WASAPI shared-mode device buffer (~90–100 ms)** — why block size barely moved the total.
+  (The host device sweep ran and B0.5 landed — journal 44.)_
+- [x] **B8.5c** **Output was on MME → prefer WASAPI.** The sweep's ambiguous-`"FiiO"` failure (4 host
+  APIs) revealed `resolve_output_device` returned the **first** match = **MME** (~90–100 ms shared
+  buffer), so the passthrough output had been on MME — the fixed device term journal 42 pinned. Now
+  the resolver prefers **WASAPI** (then WDM-KS, DirectSound, MME) for an ambiguous name; the bench
+  resolves via the same helper; the passthrough logs the output host API + buffer on startup. Likely
+  the single biggest latency win, no DSP change. 1 test (325 total). Journal 43. (Shared-vs-exclusive
+  quantified and opt-in exclusive wired — B0.5, journal 44.)
 - [x] **B8.6** **Orientation prediction to the audio-render instant.** _(Done, first cut, journal 47:
   `prediction.py` — a per-Euler-angle **α-β** tracker (position+velocity) extrapolates the pose
   forward by a bounded horizon, with the step clamped (`max_rate_dps × horizon`) so an abrupt stop
@@ -475,9 +475,11 @@ _(the chain appends here as it learns)_
 
 - [x] **B0.5** Exclusive-mode low-latency audit. _(Done, journal 44: the output endpoint's
   WASAPI buffer is **13 ms exclusive** vs **22 ms shared** vs ~90–100 ms on MME; the passthrough
-  gained opt-in `--exclusive` (falls back to shared) and the launcher uses it. This — plus the
+  gained opt-in `--exclusive` (falls back to shared); the launcher was then reverted to **shared**
+  because exclusive broke the two-clock sync (journal 45). This — plus the
   MME→WASAPI resolver fix (B8.5c) — took **head-move→ear to p50 35–46 ms, under the ~50 ms
-  threshold**, with no DSP change. Measured via the component-split bench, B8.5b.)_
+  threshold** on the component-split bench, B8.5b, with no DSP change (the real live baseline is
+  ~70 ms — see B8.7).)_
 - [x] **B8.7** (RFC) ~~**Eliminate VoiceMeeter via an EqualizerAPO VST.**~~ **SUPERSEDED — premise
   invalid.** The EqualizerAPO-VST-on-a-"7.1 FiiO endpoint" plan is physically impossible: the K11 is a
   **stereo** USB DAC, so Windows can expose only 2 channels on it (an 8-channel virtual render endpoint

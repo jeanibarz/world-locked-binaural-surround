@@ -146,12 +146,12 @@ restart. (Owner granted "max autonomy", journal 54.)
 
 ### Running the host GUI apps (camera + audio + a window) — ON WINDOWS, not WSL
 
-The host apps — the world-lock passthrough engine (daily driver + the cockpit UI) and
-`calibration_gui.py` — and the vision/audio spikes need a **real webcam, a real audio
+The host apps — the world-lock passthrough engine (daily driver + the cockpit UI) — and
+the vision/audio spikes need a **real webcam, a real audio
 output, and a display** — they **must run on the Windows host**, never under WSL (no
 `/dev/video*`, no WASAPI, and the package's `cv2`/`mediapipe`/`sounddevice` aren't even
 installed on the WSL side). There is **one** host entrypoint, `apps/launch.py`, with a
-**mode** as its first argument (`listen` | `test` | `calibrate` | `latency`); the host's
+**mode** as its first argument (`listen` | `test`); the host's
 single `run.cmd` (tracked template in `host/`) forwards to it. Drive it through interop
 with the **host** Python, which *does* have those libs (`py.exe -3.12` →
 `C:\Users\<user>\AppData\Local\Programs\Python\Python312`). The recipe, with the two
@@ -193,9 +193,11 @@ pixel measurement, never by reasoning about the math or by an isolated probe** �
 **headless** (no window, no dialog), so they're easier than the GUI apps above — don't write
 "needs host hardware, deferred" without first running it from here:
 
-- **Device buffer + split, unattended:** `apps/latency_sweep.py` / `latency_bench.py
-  --output device --audio-device FiiO` plays a synthetic tone to the real endpoint and reports
-  the true device buffer. (`run.cmd latency` on the host writes `latency_sweep_results.json`.)
+- **Device buffer + split, unattended:** the passthrough's own live latency probe splits
+  pose-age-at-the-ear into **stale / queue / device** (shown in the S-panel and printed on exit;
+  journals 46/85). The standalone `latency_sweep`/`latency_bench` apps and the `latency` mode were
+  retired once the live probe replaced them; to isolate the device buffer, replicate the pipeline
+  with a synthetic pose as in the next bullet.
 - **The live `queue`/`stale` audio-pipeline terms do NOT need a face.** The camera only sets a
   pose *value + timestamp*; it does not touch FIFO timing. To measure them unattended, replicate
   the passthrough's loopback-capture → burst-drain worker → output FIFO with a **synthetic
@@ -248,10 +250,11 @@ the Python that runs the app. (See journal 28.)
 ### Build & deploy to the owner's Windows host — the current runbook
 
 The owner runs the apps on the **Windows host** (native `py -3.12`), driven from the WSL
-worktree via the host-local launchers in `C:\Users\ibarz\BinauralHeadtracker\`:
-`run.cmd` (a menu) → `run_binaural.cmd` (snare demo) / `run_passthrough.cmd` (world-lock all
-system audio) → `launch_live.py` / `launch_passthrough.py`, which inject the permanent WSL
-checkout's `src`/`apps` onto `sys.path` and call the app's `main()`. Host assets kept out of
+worktree via the **single** host-local `run.cmd` in `C:\Users\ibarz\BinauralHeadtracker\`,
+which forwards to `apps/launch.py <mode>` (`listen` = daily world-lock passthrough, `test` =
++ HRIR-set blind A/B & localization), injecting the permanent WSL checkout's `src`/`apps` onto
+`sys.path` before calling the app's `main()`. (The old `run_binaural.cmd` / `run_passthrough.cmd`
+/ `launch_live.py` / `launch_passthrough.py` zoo was consolidated into it — journal 64.) Host assets kept out of
 git live there too: `face_landmarker.task`, `dry_snare.wav`, the baked BRIR dir (under the
 EqualizerAPO config), and `wheels/` (the built kernel).
 
@@ -262,8 +265,8 @@ Fast path (what the launchers already do): **CPU, no GPU, via the native Rust ke
 2. **Install it into the host Python**: copy the wheel to `C:\…\BinauralHeadtracker\wheels\`
    and `py -3.12 -m pip install --force-reinstall "C:\…\wheels\<wheel>"`. Verify
    `py -3.12 -c "import binaural_kernel"`.
-3. **Run**: double-click `run.cmd` (daily `listen`), or pass a mode — `run.cmd test` /
-   `calibrate` / `latency`. That one script is the **only** host entrypoint (it forwards to
+3. **Run**: double-click `run.cmd` (daily `listen`), or pass a mode — `run.cmd test`.
+   That one script is the **only** host entrypoint (it forwards to
    `apps/launch.py`); the passthrough uses `--rust --lfe-mode brir --output-eq
    <rev26_final.txt>` at a small `--block` with a low `--latency-ms` for snappy head-tracking.
    `--gpu` (CuPy) stays available as an alternative but needs the CUDA-12 wheel set above;
@@ -275,15 +278,15 @@ only a **kernel** change (anything under `rust/`) requires rebuilding + reinstal
 (steps 1–2). Sharing with a colleague: build their platform's wheel (Linux native / Windows via
 cargo-xwin / macOS on a Mac), or they run the pure-Python fallback.
 
-**Latency sweep (automated characterisation).** `run_latency_sweep.cmd` → `launch_sweep.py` →
-`apps/latency_sweep.py` runs `apps/latency_bench.py` once per setting with a synthetic pose + sine
-(no camera/VoiceMeeter) on the real FiiO output, and prints a ranked table that **splits latency into
-stale / queue / device** and flags dropouts + tone integrity. Use it to confirm the WASAPI
-shared-vs-exclusive device-buffer finding (journal 42) and to pick block/cushion, instead of hand
-edits + restarts. `--output sim` runs headless anywhere (no device buffer).
+**Latency characterisation.** The standalone latency-sweep/bench apps (`latency_sweep.py` /
+`latency_bench.py`) and the `latency` run mode were retired; the passthrough now measures
+pose-age-at-the-ear **live** and **splits it into stale / queue / device** in the S-panel and on
+exit (journals 46/85). To characterise block/cushion offline, drive the pipeline with a synthetic
+pose (see "Measurements & latency experiments" above). The WASAPI-shared-vs-MME device-buffer
+finding is journals 42–44.
 
 **In-app reload (so a code change needs no manual restart).** The passthrough returns exit code
-`RESTART_EXIT_CODE` (97) when the owner presses **Enter** (the *Reload* button); `run_passthrough.cmd`
+`RESTART_EXIT_CODE` (97) when the owner presses **Enter** (the *Reload* button); `run.cmd`
 wraps the `py` call in a `:loop` that relaunches while it sees 97, so a fresh process picks up the
 latest WSL code and re-opens the audio devices cleanly — no closing the window or re-running
 `run.cmd`. Quit (**Q**/**Esc**) exits 0 and falls through to `pause`. Any new host launcher that
