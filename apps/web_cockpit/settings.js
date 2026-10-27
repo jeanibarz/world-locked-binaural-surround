@@ -131,7 +131,9 @@
     wireDropdown("set-hrir", () => C.hrir || ["mine"], "set_hrir");
     wireSegment("set-comp", "set_comp");
 
-    // --- headphone compensation (EQ on/off is visual for now; model list if provided) ---
+    // --- headphone compensation --- EQ on/off toggle, plus the model picker (#240): wired to a
+    // real dropdown when the engine reports discovered profiles (`hp_models`), so choosing one
+    // switches the engine's loaded compensation profile live.
     wireToggle("hpeq-toggle", "set_hpeq");
     if (C.hp_models) wireDropdown("set-hpmodel", () => C.hp_models, "set_hp_model");
 
@@ -152,6 +154,9 @@
       fieldText($("set-fps"), C.cam_fps > 0 ? C.cam_fps + " fps" : "default");
       if (C.exclusive != null) setToggle("exclusive-toggle", C.exclusive);
       if (C.hp_eq != null) setToggle("hpeq-toggle", C.hp_eq);
+      // Headphone-comp model picker (#240): show the live selection (the engine's resolved profile
+      // name), not the static HTML placeholder, so the field reflects what is actually loaded.
+      if (C.hp_model) fieldText($("set-hpmodel"), C.hp_model);
       if (C.flip_h != null) setToggle("fliph-toggle", C.flip_h);
       if (C.flip_v != null) setToggle("flipv-toggle", C.flip_v);
       if (C.show_landmarks != null) setToggle("landmarks-toggle", C.show_landmarks);

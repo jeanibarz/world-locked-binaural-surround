@@ -33,16 +33,25 @@ headphones**. To make the render neutral on *your* gear you either switch it off
 (if your headphones are already equalized elsewhere) or load a profile for your own
 headphones.
 
-## In the app: the on/off toggle
+## In the app: the on/off toggle and the model picker
 
-In the cockpit **Settings**, under **HEADPHONE COMPENSATION**, there is a switch.
-It is **on by default** (the owner listened with compensation enabled). Turn it off
-if your headphones are already corrected by other software, or to hear the bare
-bake.
+In the cockpit **Settings**, under **HEADPHONE COMPENSATION**, there is a switch
+and a **model picker**.
 
-> The Settings note mentions picking your headphone **model**. That model picker is
-> **not wired yet** — today the toggle only enables or bypasses the single loaded
-> profile. Loading a *different* profile is done on disk, as described next.
+- The **switch** is **on by default** (the owner listened with compensation
+  enabled). Turn it off if your headphones are already corrected by other software,
+  or to hear the bare bake.
+- The **model picker** lists the headphone-comp *profiles* installed on your
+  machine. The bundled owner profile appears as **`default`**; any profiles you
+  import (see below) appear by their folder name. Choosing one makes the engine load
+  and apply that profile **live** — no restart, and with no audible click (the
+  switch's click-free enable/bypass path is reused for the swap). The selection is
+  saved and restored on the next launch; if a saved profile has since been removed,
+  the engine logs `HP_EQ_WARN …` and falls back to `default` (or, if there is no
+  `default` either, renders without compensation) rather than failing.
+
+The picker only lists profiles that exist on disk, so to pick *your* headphones you
+first install a profile for them, as described next.
 
 ## How to obtain a profile for your headphones
 
@@ -73,39 +82,43 @@ to the `L` and `R` buses and carries a per-ear compensation/EQ chain.** The load
 applies it. If it finds no L/R chain it logs `HP_EQ_WARN … headphone EQ disabled`
 and renders without compensation rather than failing.
 
-### Standalone engine
+### Standalone engine — the profile store
 
-The engine reads its headphone-EQ config from a **directory**, resolved like the
-other assets (CLI flag → environment variable → next to the exe → `%APPDATA%\WLBS`):
+Headphone-comp profiles work just like BRIR packs. A **profile** is a directory
+holding an EqualizerAPO config plus any FIR WAVs it `Include:`s / convolves, and it
+lives under a per-user store:
 
-| Source | How |
+| | Location |
 |---|---|
-| `--hp-eq-dir <dir>` | command-line flag |
-| `WLBS_HP_EQ_DIR` | environment variable |
-| `<install>/hp_eq/` | bundled, next to `wlbs_engine.exe` |
-| `%APPDATA%\WLBS\hp_eq\` | per-user fallback |
+| Bundled **`default`** profile | the install-relative `hp_eq/` dir (`--hp-eq-dir <dir>` → `WLBS_HP_EQ_DIR` → `<install>/hp_eq/` → `%APPDATA%\WLBS\hp_eq\`) |
+| Your imported profiles | `%APPDATA%\WLBS\hp_eq\<name>\` — one subdirectory per profile |
 
-Inside that directory the engine opens a config file named **`baked_7p1_rev26_final.txt`**,
-and resolves any `Include:` / `Convolution:` paths **relative to that directory**
-(the owner's config keeps its correction FIR under
-`binaural/audeze_lcdgx_comp-48khz/`, relative to the config file). So to load your
-own profile:
+Inside a profile directory the engine opens a config file named **`config.txt`**
+(the owner's bundled profile keeps its historical name `baked_7p1_rev26_final.txt`,
+which is also accepted), and resolves any `Include:` / `Convolution:` paths
+**relative to that directory** (the owner's config keeps its correction FIR under
+`binaural/audeze_lcdgx_comp-48khz/`, relative to the config file).
 
-1. Put your EqualizerAPO config — and any FIR WAVs it `Include:`s / convolves — into
-   a directory, with the top-level config file named `baked_7p1_rev26_final.txt`.
-2. Point the engine at that directory with `--hp-eq-dir <dir>` or
-   `WLBS_HP_EQ_DIR`, or drop it in `%APPDATA%\WLBS\hp_eq\`, or replace the bundled
-   `hp_eq/` folder.
-3. Start the engine and confirm the `HP_EQ loaded …` line (not `HP_EQ_WARN`) in its
-   console output.
+**Import a profile (the `--import-pack` analogue):**
 
-> **Limitation (and the code follow-up this issue tracks).** There is **no in-app
-> picker or import command** for headphone compensation — unlike BRIR packs, which
-> have `--import-pack` — and the standalone engine currently looks for the fixed
-> filename `baked_7p1_rev26_final.txt`. Loading your own profile therefore means
-> placing the file at the resolved path under that name (or overriding the
-> directory). Surfacing a cleaner import path is the **code** half of this issue and
-> is out of scope for this docs change.
+```
+wlbs_engine.exe --import-hp-eq <path-to-profile-dir> [--name my-cans]
+```
+
+This copies the directory into `%APPDATA%\WLBS\hp_eq\<name>` (the name defaults to
+the source folder's basename). The source must contain a top-level config file named
+`config.txt` (name your EqualizerAPO export that inside the folder). List what is
+installed with:
+
+```
+wlbs_engine.exe --list-hp-eq
+```
+
+Once imported, the profile shows up in the cockpit's model picker and switches live
+when you select it — no file juggling and no restart. You can still drive the
+`default` profile's location directly with `--hp-eq-dir <dir>` / `WLBS_HP_EQ_DIR` for
+a one-off, and the engine prints a `HP_EQ loaded profile "<name>" …` line (not
+`HP_EQ_WARN`) on its console when a profile loads.
 
 ### Python / developer launcher
 

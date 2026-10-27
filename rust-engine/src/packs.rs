@@ -173,8 +173,9 @@ pub fn import_pack(src: &Path, name: Option<&str>) -> Result<PathBuf, String> {
 mod tests {
     use super::*;
 
-    /// Serialises the tests that point `APPDATA` at a temp dir (process-global env).
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    /// Serialises the tests that point `APPDATA` at a temp dir (process-global env). Shared with the
+    /// sibling `hp_profiles` store so the two modules' APPDATA-mutating tests don't race each other.
+    use crate::assets::ENV_TEST_LOCK as ENV_LOCK;
 
     fn tmp() -> PathBuf {
         let d = std::env::temp_dir().join(format!("wlbs_packs_test_{}_{}", std::process::id(), rand_suffix()));
