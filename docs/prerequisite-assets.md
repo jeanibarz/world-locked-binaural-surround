@@ -39,12 +39,23 @@ bundle is self-contained — drop it anywhere and run it (see
     facemesh.onnx        turns that face into a head orientation (yaw/pitch/roll)
     canonical_face_model.obj   the reference head the pose is solved against
   packs/default/         the default BRIR pack: <ch>_L.wav / <ch>_R.wav for L R C LFE RL RR SL SR
-  hp_eq/                 the headphone-compensation + subjective-EQ config (see §3)
   web_cockpit/           the cockpit UI the engine serves in your browser
 ```
 
 **If you received a bundle, you do not need to download any of these** — they ship
 with it. There is nothing to place.
+
+> **One asset the bundle script does *not* place: the headphone-comp config.** The
+> engine also looks for a headphone-compensation config at `<install>/hp_eq/`
+> install-relative (resolution order below), and defaults it **on**. But the repo's
+> bundle script (`host/bundle-engine.sh`) does **not** copy an `hp_eq/` directory
+> into the bundle — the config lives in the source tree at
+> `rust-engine/hp_eq/baked_7p1_rev26_final.txt` and no build script ships it. So on
+> a script-built bundle, headphone EQ is absent and the engine logs
+> `HP_EQ_WARN … headphone EQ disabled` and renders without it until you supply a
+> config (put one under `<install>/hp_eq/` or `%APPDATA%\WLBS\hp_eq\`, or point
+> `--hp-eq-dir` / `WLBS_HP_EQ_DIR` at it). See the headphone-compensation guide for
+> how to obtain and load a profile.
 
 ### What each asset is for (one line each)
 
@@ -54,7 +65,7 @@ with it. There is nothing to place.
 | `assets/facemesh.onnx` | Estimates head orientation (the world-lock cue) from that face. |
 | `assets/canonical_face_model.obj` | The reference 3-D head the pose solve is measured against. |
 | `packs/default/` | The baked 7.1 → binaural impulse responses the renderer convolves. |
-| `hp_eq/` | Corrects your headphone's own frequency response so the render sounds neutral. |
+| `hp_eq/` (not bundled — see note above) | Corrects your headphone's own frequency response so the render sounds neutral. |
 
 ### Where the engine looks for each asset (resolution order)
 
@@ -71,7 +82,7 @@ For every asset the engine takes the **first** location that resolves (from
 | Head-detect / mesh ONNX nets | `--onnx-dir <dir>` | `WLBS_ONNX_DIR` | `assets/` | `%APPDATA%\WLBS\assets\` |
 | Canonical face model | `--canonical <file>` | `WLBS_CANONICAL` | `assets/canonical_face_model.obj` | `%APPDATA%\WLBS\assets\canonical_face_model.obj` |
 | BRIR pack | `--pack <name>` or `--brir-dir <dir>` | — | `packs/default/` | `%APPDATA%\WLBS\packs\<name>\` |
-| Headphone-comp config | `--hp-eq-dir <dir>` | `WLBS_HP_EQ_DIR` | `hp_eq/` | `%APPDATA%\WLBS\hp_eq\` |
+| Headphone-comp config | `--hp-eq-dir <dir>` | `WLBS_HP_EQ_DIR` | `hp_eq/` (looked for, but not placed by the bundle script) | `%APPDATA%\WLBS\hp_eq\` |
 | Cockpit UI | `--web-dir <dir>` | `WLBS_WEB_DIR` | `web_cockpit/` | `%APPDATA%\WLBS\web_cockpit\` |
 
 So you only ever place a file when you want to **override** a bundled asset or
@@ -79,9 +90,11 @@ So you only ever place a file when you want to **override** a bundled asset or
 additions is **`%APPDATA%\WLBS\`**, which never gets overwritten when you replace
 the bundle.
 
-If an asset is missing the engine does not crash — it prints an `ASSET_WARN` line
-(e.g. head tracking unavailable, or the cockpit page will 404) and carries on with
-what it has.
+If one of the *optional* assets is missing the engine does not crash — it prints an
+`ASSET_WARN` line (e.g. head tracking unavailable, or the cockpit page will 404),
+or the `HP_EQ_WARN` above, and carries on with what it has. The **BRIR pack is the
+one hard requirement**, though: with no loadable pack the engine exits with an
+error rather than warning.
 
 ### Adding your own BRIR pack
 
@@ -107,9 +120,10 @@ See [`baked-brir-setup.md`](baked-brir-setup.md) for the pack layout.
 
 ## 2. The developer / owner launcher (`host/run.cmd`)
 
-`host/run.cmd` runs the WSL checkout's **Python** engine natively on Windows (it
-uses MediaPipe, which needs a different head-tracking model from the standalone
-engine). It expects its assets in the **same folder as `run.cmd`** — on the
+`host/run.cmd` runs the WSL checkout's app natively on Windows. Its head tracking
+uses **MediaPipe (Python)**, which needs a different head-tracking model from the
+standalone engine (rendering itself still runs on the Rust backend via `--rust`).
+It expects its assets in the **same folder as `run.cmd`** — on the
 owner's host that folder is `C:\Users\ibarz\BinauralHeadtracker\` (see
 [`../host/README.md`](../host/README.md)). The `set` lines at the top of `run.cmd`
 point at them:
@@ -170,9 +184,10 @@ how that config relates to the baked bake.
 
 ## Summary — the shortest path
 
-- **Using the standalone bundle?** The model, the default pack, the cockpit, and
-  the headphone-EQ config are already inside it — nothing to download. Optionally
-  import your own BRIR pack (`--import-pack`) or headphone-comp profile.
+- **Using the standalone bundle?** The model, the default pack, and the cockpit are
+  already inside it — nothing to download. The headphone-comp config is **not**
+  placed by the bundle script, so supply one if you want EQ (or leave it disabled).
+  Optionally import your own BRIR pack (`--import-pack`).
 - **Using the Python launcher?** Download `face_landmarker.task` to a local `C:`
   path next to `run.cmd`, provide a baked BRIR directory, and (optionally) a dry
   source WAV and `hrir_sets\` for the test mode.
