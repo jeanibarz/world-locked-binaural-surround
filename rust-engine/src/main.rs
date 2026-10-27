@@ -376,8 +376,12 @@ mod engine {
         .into_owned();
         let camera_mjpeg = arg(&a, "--camera-mjpeg");
         let face_image = arg(&a, "--face-image");
-        // Clamp stride to ≥1: 0 would make `is_multiple_of(0)` disable all pose updates (BUG-31).
-        let pose_stride: usize = arg_num(&a, "--pose-stride")?.unwrap_or(2).max(1);
+        // Solve every camera frame by default (stride 1): with the DirectML GPU provider a solve is
+        // ~10 ms, so sub-sampling only throws away pose rate and doubles the head-tracking latency.
+        // The old default was 2 (a CPU-era hedge against ~100 ms CPU solves starving the pose thread);
+        // `--pose-stride N` still sub-samples for a CPU-only machine. Clamp to ≥1: 0 would make
+        // `is_multiple_of(0)` disable all pose updates (BUG-31).
+        let pose_stride: usize = arg_num(&a, "--pose-stride")?.unwrap_or(1).max(1);
         // Camera id string (decimal index or an opaque nokhwa string index), not parsed to u32, so a
         // string-indexed camera can be selected too (BUG-34).
         let camera_id: Option<String> = arg(&a, "--camera");
@@ -1006,7 +1010,15 @@ mod engine {
                     let f = lock_fifo(&fifo);
                     (f.cushion(), f.len(), f.stats())
                 };
-                let total_ms = telemetry::estimate_total_ms(block, pack.samplerate, cushion_now, render_ema);
+                // Head-tracking (camera) latency stage: the measured inter-pose interval, but only
+                // for a live camera/MJPEG tracker — a demo/held yaw has no camera stage. Folded into
+                // the end-to-end estimate so the cockpit reports head→ear, not just the audio path.
+                let pose_interval_ms = match pose_source {
+                    "camera" | "mjpeg" => pose.pose_interval_ms().unwrap_or(0.0),
+                    _ => 0.0,
+                };
+                let total_ms = telemetry::estimate_total_ms(
+                    block, pack.samplerate, cushion_now, render_ema, pose_interval_ms);
                 lat.axis_hi = telemetry::hist_axis_hi(total_ms);
                 lat.push(total_ms);
                 // "Dropouts, last 60 s": windowed delta of the FIFO's lifetime counters.
@@ -1059,6 +1071,7 @@ mod engine {
                     pose_source,
                     tracking: pose.is_tracking(),
                     pose_stale,
+                    pose_interval_ms,
                     cam_res: pose.cam_res(),
                     cam_error: cam_error.as_deref(),
                     mmcss,
@@ -1133,6 +1146,7 @@ mod engine {
                 pose_source,
                 tracking: pose.is_tracking(),
                 pose_stale,
+                pose_interval_ms: 0.0, // teardown: no live tracker, report the audio path only
                 cam_res: pose.cam_res(),
                 cam_error: cam_error.as_deref(),
                 mmcss,

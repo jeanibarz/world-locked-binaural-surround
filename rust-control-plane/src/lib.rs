@@ -50,15 +50,27 @@ fn content_type(path: &str) -> &'static str {
     }
 }
 
+/// A camera preview frame paired with the FaceMesh overlay computed from that SAME captured frame.
+/// Serving them together over `/preview` lets the cockpit draw the picture and the landmark dots
+/// from one frame, so the dots can't run ahead of the picture (the two used to ride separate paths:
+/// dots over SSE+canvas, picture over the slower MJPEG `<img>`).
+pub struct PreviewFrame {
+    /// Baseline JPEG of the (un-mirrored) frame.
+    pub jpeg: Vec<u8>,
+    /// Overlay JSON fragment for this frame — `{"lm":[…],"box":[…]}` when a face was found this
+    /// frame, or `{}` when not. Emitted verbatim inside the `/preview` event.
+    pub overlay: String,
+}
+
 /// Shared engine-facing state + client fan-out. Clone-free via `Arc`.
 pub struct Cockpit {
     web_dir: PathBuf,
     config: Mutex<serde_json::Value>,
     state_tx: broadcast::Sender<String>,
-    frame_tx: watch::Sender<Option<Arc<Vec<u8>>>>,
-    // Keep one receiver alive so `watch::send` retains the latest frame even when no `/camera`
-    // client is connected (a watch send is dropped if there are zero receivers).
-    _frame_keep: watch::Receiver<Option<Arc<Vec<u8>>>>,
+    frame_tx: watch::Sender<Option<Arc<PreviewFrame>>>,
+    // Keep one receiver alive so `watch::send` retains the latest frame even when no `/camera` or
+    // `/preview` client is connected (a watch send is dropped if there are zero receivers).
+    _frame_keep: watch::Receiver<Option<Arc<PreviewFrame>>>,
     dispatched: Mutex<VecDeque<(String, serde_json::Value)>>,
 }
 
@@ -82,9 +94,14 @@ impl Cockpit {
     pub fn push_state(&self, json_line: impl Into<String>) {
         let _ = self.state_tx.send(json_line.into());
     }
-    /// Replace the latest camera JPEG served over `/camera`.
+    /// Replace the latest preview frame (JPEG + the overlay from the same frame), served over
+    /// `/preview` (picture + dots, paired) and `/camera` (the JPEG alone, MJPEG).
+    pub fn set_preview(&self, jpeg: Vec<u8>, overlay: String) {
+        let _ = self.frame_tx.send(Some(Arc::new(PreviewFrame { jpeg, overlay })));
+    }
+    /// Replace the latest camera JPEG with no overlay (back-compat / preview with no face data).
     pub fn set_frame(&self, jpeg: Vec<u8>) {
-        let _ = self.frame_tx.send(Some(Arc::new(jpeg)));
+        self.set_preview(jpeg, "{}".into());
     }
     /// Replace the `/api/get_config` payload.
     pub fn set_config(&self, config: serde_json::Value) {
@@ -127,6 +144,7 @@ pub fn router(cockpit: Arc<Cockpit>) -> Router {
     Router::new()
         .route("/events", get(sse))
         .route("/camera", get(mjpeg))
+        .route("/preview", get(preview))
         .route("/api/get_config", get(get_config))
         .route("/api/*name", post(api_post).layer(DefaultBodyLimit::max(MAX_API_BODY)))
         .fallback(get(static_file))
@@ -252,7 +270,7 @@ async fn mjpeg(State(c): State<Arc<Cockpit>>) -> Response {
         // Poll the latest frame every 20 ms and emit it when it changes — matching the Python
         // server's `sleep(0.02)` poll loop. (A simple, backpressure-free fan-out; the newest frame
         // always wins, dropping skipped ones, which is correct for a live preview.)
-        let mut last: Option<Arc<Vec<u8>>> = None;
+        let mut last: Option<Arc<PreviewFrame>> = None;
         let mut tick = tokio::time::interval(Duration::from_millis(20));
         loop {
             tick.tick().await;
@@ -261,11 +279,11 @@ async fn mjpeg(State(c): State<Arc<Cockpit>>) -> Response {
                 let is_new = match &last { Some(l) => !Arc::ptr_eq(l, &f), None => true };
                 if is_new {
                     last = Some(f.clone());
-                    let mut buf = Vec::with_capacity(f.len() + 64);
+                    let mut buf = Vec::with_capacity(f.jpeg.len() + 64);
                     buf.extend_from_slice(b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ");
-                    buf.extend_from_slice(f.len().to_string().as_bytes());
+                    buf.extend_from_slice(f.jpeg.len().to_string().as_bytes());
                     buf.extend_from_slice(b"\r\n\r\n");
-                    buf.extend_from_slice(&f);
+                    buf.extend_from_slice(&f.jpeg);
                     buf.extend_from_slice(b"\r\n");
                     yield Ok::<Bytes, std::io::Error>(Bytes::from(buf));
                 }
@@ -276,6 +294,72 @@ async fn mjpeg(State(c): State<Arc<Cockpit>>) -> Response {
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "multipart/x-mixed-replace; boundary=frame")
         .header(header::CACHE_CONTROL, NO_STORE)
+        .body(Body::from_stream(stream))
+        .unwrap()
+}
+
+/// Standard-base64-encode `bytes`, appending to `out` (no padding omitted — RFC 4648). Used to carry
+/// the preview JPEG inside a text SSE event; avoids a base64 crate dependency for this one use.
+fn base64_append(out: &mut String, bytes: &[u8]) {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut i = 0;
+    while i + 3 <= bytes.len() {
+        let n = ((bytes[i] as u32) << 16) | ((bytes[i + 1] as u32) << 8) | bytes[i + 2] as u32;
+        out.push(T[(n >> 18 & 63) as usize] as char);
+        out.push(T[(n >> 12 & 63) as usize] as char);
+        out.push(T[(n >> 6 & 63) as usize] as char);
+        out.push(T[(n & 63) as usize] as char);
+        i += 3;
+    }
+    let rem = bytes.len() - i;
+    if rem == 1 {
+        let n = (bytes[i] as u32) << 16;
+        out.push(T[(n >> 18 & 63) as usize] as char);
+        out.push(T[(n >> 12 & 63) as usize] as char);
+        out.push('=');
+        out.push('=');
+    } else if rem == 2 {
+        let n = ((bytes[i] as u32) << 16) | ((bytes[i + 1] as u32) << 8);
+        out.push(T[(n >> 18 & 63) as usize] as char);
+        out.push(T[(n >> 12 & 63) as usize] as char);
+        out.push(T[(n >> 6 & 63) as usize] as char);
+        out.push('=');
+    }
+}
+
+/// `GET /preview` — SSE carrying the newest camera frame AND its FaceMesh overlay together, so the
+/// cockpit draws the picture and the landmark dots from one frame. Each event is
+/// `data: {"img":"<base64 jpeg>","ov":<overlay json>}`. Polls the latest frame every 20 ms and
+/// emits only on change (newest-wins, like `/camera`), so a slow client drops skipped frames rather
+/// than queueing them.
+async fn preview(State(c): State<Arc<Cockpit>>) -> Response {
+    let rx = c.frame_tx.subscribe();
+    let stream = async_stream::stream! {
+        let mut last: Option<Arc<PreviewFrame>> = None;
+        let mut tick = tokio::time::interval(Duration::from_millis(20));
+        loop {
+            tick.tick().await;
+            let frame = rx.borrow().clone();
+            if let Some(f) = frame {
+                let is_new = match &last { Some(l) => !Arc::ptr_eq(l, &f), None => true };
+                if is_new {
+                    last = Some(f.clone());
+                    let mut data = String::with_capacity(f.jpeg.len() * 4 / 3 + f.overlay.len() + 32);
+                    data.push_str("data: {\"img\":\"");
+                    base64_append(&mut data, &f.jpeg);
+                    data.push_str("\",\"ov\":");
+                    data.push_str(&f.overlay);
+                    data.push_str("}\n\n");
+                    yield Ok::<Bytes, std::io::Error>(Bytes::from(data));
+                }
+            }
+        }
+    };
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/event-stream")
+        .header(header::CACHE_CONTROL, NO_STORE)
+        .header(header::CONNECTION, "keep-alive")
         .body(Body::from_stream(stream))
         .unwrap()
 }
@@ -330,6 +414,28 @@ mod tests {
         assert_eq!(c.take_dispatched(), vec![("set_block".to_string(), serde_json::json!([256]))]);
         let big = format!("[\"{}\"]", "a".repeat(MAX_API_BODY + 1));
         assert_eq!(status(port, "POST", "/api/set_block", &own, json, &big), 413);
+    }
+
+    #[test]
+    fn base64_matches_rfc4648_vectors() {
+        let enc = |s: &str| {
+            let mut out = String::new();
+            base64_append(&mut out, s.as_bytes());
+            out
+        };
+        assert_eq!(enc(""), "");
+        assert_eq!(enc("f"), "Zg==");
+        assert_eq!(enc("fo"), "Zm8=");
+        assert_eq!(enc("foo"), "Zm9v");
+        assert_eq!(enc("foob"), "Zm9vYg==");
+        assert_eq!(enc("fooba"), "Zm9vYmE=");
+        assert_eq!(enc("foobar"), "Zm9vYmFy");
+        // round-trips every byte value (padding + all 6-bit groups exercised)
+        let all: Vec<u8> = (0..=255u8).collect();
+        let mut out = String::new();
+        base64_append(&mut out, &all);
+        assert_eq!(out.len(), (256 + 2) / 3 * 4); // 4 chars per 3 bytes, rounded up
+        assert!(out.chars().all(|ch| ch.is_ascii_alphanumeric() || "+/=".contains(ch)));
     }
 
     #[test]

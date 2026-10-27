@@ -54,10 +54,12 @@ impl Pipeline {
     pub fn new(onnx_dir: &str, canonical_obj: &str) -> Result<Self, String> {
         let intra = onnx_intra_threads();
         let detector = Session::builder()
+            .and_then(configure_providers)
             .and_then(|b| b.with_intra_threads(intra))
             .and_then(|b| b.commit_from_file(format!("{onnx_dir}/facedet.onnx")))
             .map_err(|e| format!("load facedet.onnx: {e}"))?;
         let mesh = Session::builder()
+            .and_then(configure_providers)
             .and_then(|b| b.with_intra_threads(intra))
             .and_then(|b| b.commit_from_file(format!("{onnx_dir}/facemesh.onnx")))
             .map_err(|e| format!("load facemesh.onnx: {e}"))?;
@@ -141,6 +143,31 @@ fn check_landmark_len(len: usize) -> Result<(), String> {
 /// the real-time audio render thread (BUG-12). ~1/4 of the machine's cores, clamped to 1..=2.
 fn onnx_intra_threads() -> usize {
     (std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4) / 4).clamp(1, 2)
+}
+
+/// Attach the GPU execution provider to a session builder when compiled with `gpu-directml`.
+///
+/// Face detection + mesh are the dominant head-tracking latency: on the CPU default provider (with
+/// the capped 1-2 intra-op threads above) each solve is ~100 ms, so the pose rate is inference-bound
+/// at ~9 Hz regardless of camera fps. DirectML offloads both nets to a DirectX 12 GPU, cutting that
+/// to ~10-20 ms and freeing the CPU for the real-time audio thread.
+///
+/// Registration is best-effort: `ort`'s `error_on_failure` defaults off, so on a machine without a
+/// usable DX12 GPU it logs and keeps the CPU path — never failing session creation. DirectML needs
+/// the ORT memory planner disabled, which we do here. Without the feature this is a no-op (the
+/// `DirectMLExecutionProvider` type isn't even linked), so non-Windows / CPU builds are unchanged.
+fn configure_providers(builder: ort::session::builder::SessionBuilder) -> ort::Result<ort::session::builder::SessionBuilder> {
+    #[cfg(feature = "gpu-directml")]
+    {
+        use ort::execution_providers::directml::DirectMLExecutionProvider;
+        return builder
+            .with_execution_providers([DirectMLExecutionProvider::default().build()])?
+            .with_memory_pattern(false);
+    }
+    #[cfg(not(feature = "gpu-directml"))]
+    {
+        Ok(builder)
+    }
 }
 
 /// Parse `canonical_face_model.obj`, flip Y/Z (OpenGL→OpenCV), and take the `RIGID_IDX` subset.

@@ -153,6 +153,11 @@ pub struct TeleInput<'a> {
     pub pose_source: &'a str,
     pub tracking: bool,
     pub pose_stale: bool,
+    /// Smoothed inter-pose interval (ms) of the live camera tracker, or 0 when pose comes from a
+    /// non-camera source (demo/held) or no two poses exist yet. Drives the head-tracking latency
+    /// stage (`1.5 ×` it — see [`tracking_stage_ms`]), the camera half of the end-to-end estimate
+    /// that the legacy Python cockpit showed and this engine previously omitted.
+    pub pose_interval_ms: f64,
     pub cam_res: Option<(u32, u32)>,
     /// A camera/pipeline open failure, shown as "camera unavailable" (BUG-10).
     pub cam_error: Option<&'a str>,
@@ -179,13 +184,42 @@ fn block_ms(block: usize, sr: u32) -> f64 {
     block as f64 / sr as f64 * 1000.0
 }
 
-/// End-to-end latency estimate (ms): capture-accrue block + render + buffer cushion + device-out
-/// block. Shared by the loop (which feeds the histogram) and [`build_state`] so both agree.
-pub fn estimate_total_ms(block: usize, sr: u32, cushion_blocks: usize, render_load_pct: f64) -> f64 {
+/// Head-tracking (camera) stage of the end-to-end "I turn my head → I hear it move" delay, in ms.
+///
+/// The camera only reports a *new* pose every `pose_interval_ms`, and a frame is already ~one
+/// interval old by the time it is decoded and solved, so the pose carried into the render is
+/// ~1.5 intervals old on average. This reproduces the legacy Python model exactly
+/// (`binaural_headtracker.diagnostics.classify`: `tracking_ms = 1.5 * pose_interval_ms`), where the
+/// unmeasurable sensor exposure/transport is folded into the same estimate. `pose_interval_ms <= 0`
+/// (no live camera tracker — a demo/held yaw, or before the first two poses) ⇒ 0.
+///
+/// This is the single largest and most world-lock-relevant component of the head→ear delay, and it
+/// was previously **absent** from the Rust estimate (which summed only the audio path), so the
+/// cockpit under-reported the true latency by a whole tracking stage (~100 ms at the default
+/// stride-2 / 30 fps ≈ 15 Hz pose rate).
+pub fn tracking_stage_ms(pose_interval_ms: f64) -> f64 {
+    if pose_interval_ms > 0.0 {
+        1.5 * pose_interval_ms
+    } else {
+        0.0
+    }
+}
+
+/// End-to-end latency estimate (ms): head-tracking (camera) stage + capture-accrue block + render +
+/// buffer cushion + device-out block. Shared by the loop (which feeds the histogram) and
+/// [`build_state`] so both agree. `pose_interval_ms` is the measured inter-pose interval (0 when
+/// there is no live camera tracker — then the tracking stage is 0 and this is the pure audio path).
+pub fn estimate_total_ms(
+    block: usize,
+    sr: u32,
+    cushion_blocks: usize,
+    render_load_pct: f64,
+    pose_interval_ms: f64,
+) -> f64 {
     let bms = block_ms(block, sr);
     let render_ms = render_load_pct / 100.0 * bms;
     let cushion_ms = cushion_blocks as f64 * bms;
-    bms + render_ms + cushion_ms + bms
+    tracking_stage_ms(pose_interval_ms) + bms + render_ms + cushion_ms + bms
 }
 
 /// A short compass-ish label for the current head yaw (+ = turned left, per `geometry`).
@@ -205,23 +239,37 @@ fn facing_label(yaw_deg: f64) -> String {
 pub fn build_state(t: &TeleInput) -> Value {
     let bms = block_ms(t.block, t.sample_rate);
 
-    // --- latency breakdown: capture accrue + render + output buffer cushion + device out block ---
+    // --- latency breakdown: head-tracking (camera) + capture accrue + render + output buffer
+    // cushion + device out block. The tracking stage is an estimate (1.5 × the measured pose
+    // interval), shown with the same muted/hatched "estimated" treatment as the capture block. ---
     let cushion_ms = t.cushion_blocks as f64 * bms;
     let render_ms = t.render_load_pct / 100.0 * bms;
-    let total_ms = estimate_total_ms(t.block, t.sample_rate, t.cushion_blocks, t.render_load_pct);
-    let (verdict, vlevel) = if total_ms < 40.0 {
+    let track_ms = tracking_stage_ms(t.pose_interval_ms);
+    let total_ms =
+        estimate_total_ms(t.block, t.sample_rate, t.cushion_blocks, t.render_load_pct, t.pose_interval_ms);
+    // Thresholds are for the whole head→ear delay, so they account for the tracking floor: a brisk
+    // tracker + tight audio lands GOOD, the default ~15 Hz tracker (~100 ms tracking alone) lands
+    // OK, and a slow tracker or a big cushion lands HIGH. (Before the tracking stage was included
+    // the total was audio-only and these read 40/80; raised so the verdict still means something.)
+    let (verdict, vlevel) = if total_ms < 90.0 {
         ("GOOD", "good")
-    } else if total_ms < 80.0 {
+    } else if total_ms < 150.0 {
         ("OK", "warn")
     } else {
         ("HIGH", "bad")
     };
-    let segments = json!([
-        {"label": "cap", "ms": bms, "capture": true},
-        {"label": "render", "ms": render_ms.max(0.1), "bg": "#35d0d0", "fg": "#06222a"},
-        {"label": "buffer", "ms": cushion_ms.max(0.1), "bg": "#2b6f78", "fg": "#cdefff"},
-        {"label": "out", "ms": bms, "bg": "#4cd98a", "fg": "#06222a"},
-    ]);
+    let mut segments = vec![
+        json!({"label": "cap", "ms": bms, "capture": true}),
+        json!({"label": "render", "ms": render_ms.max(0.1), "bg": "#35d0d0", "fg": "#06222a"}),
+        json!({"label": "buffer", "ms": cushion_ms.max(0.1), "bg": "#2b6f78", "fg": "#cdefff"}),
+        json!({"label": "out", "ms": bms, "bg": "#4cd98a", "fg": "#06222a"}),
+    ];
+    // Prepend the head-tracking stage only when a live camera tracker is driving the pose (so a
+    // demo/held-yaw run keeps the pure audio breakdown instead of an empty "track" box).
+    if track_ms > 0.0 {
+        segments.insert(0, json!({"label": "track", "ms": track_ms, "capture": true}));
+    }
+    let segments = Value::Array(segments);
     let bins = t.lat.heights_pct();
     let p50 = t.lat.p50_pct();
 
@@ -356,7 +404,11 @@ pub fn build_state(t: &TeleInput) -> Value {
         "facing": facing_label(t.yaw_deg),
         "latency": {
             "ms": format!("{:.0}", total_ms),
-            "detail": format!("block {:.1} ms · cushion {} blk", bms, t.cushion_blocks),
+            "detail": if track_ms > 0.0 {
+                format!("track {:.0} ms · block {:.1} ms · cushion {} blk", track_ms, bms, t.cushion_blocks)
+            } else {
+                format!("block {:.1} ms · cushion {} blk", bms, t.cushion_blocks)
+            },
             "verdict": verdict,
             "verdict_level": vlevel,
             "segments": segments,
@@ -364,7 +416,12 @@ pub fn build_state(t: &TeleInput) -> Value {
             "p50_pct": p50,
             "axis_lo": t.lat.axis_lo,
             "axis_hi": t.lat.axis_hi,
-            "note": format!("end-to-end estimate at block {} @ {} Hz", t.block, t.sample_rate),
+            "note": if track_ms > 0.0 {
+                format!("head→ear estimate: {:.0} ms tracking (1.5 × {:.0} ms pose interval) + audio, block {} @ {} Hz",
+                        track_ms, t.pose_interval_ms, t.block, t.sample_rate)
+            } else {
+                format!("end-to-end estimate at block {} @ {} Hz", t.block, t.sample_rate)
+            },
         },
     });
 
@@ -426,6 +483,7 @@ mod tests {
             pose_source: "camera",
             tracking: true,
             pose_stale: false,
+            pose_interval_ms: 66.0,
             cam_res: Some((640, 480)),
             cam_error: None,
             mmcss: true,
@@ -458,7 +516,37 @@ mod tests {
         assert_eq!(s["buffer"]["cushion_blocks"], 4);
         assert_eq!(s["buffer"]["capacity"], 8);
         assert!(s["buffer"]["resample_ppm"].is_number());
-        assert!(s["latency"]["segments"].as_array().unwrap().len() == 4);
+        // camera sample ⇒ 5 segments, the head-tracking stage prepended to the 4 audio stages.
+        assert_eq!(s["latency"]["segments"].as_array().unwrap().len(), 5);
+        assert_eq!(s["latency"]["segments"][0]["label"], "track");
+        assert_eq!(s["latency"]["segments"][0]["capture"], true);
+    }
+
+    #[test]
+    fn tracking_stage_is_one_and_a_half_pose_intervals() {
+        // Matches the legacy Python model (diagnostics.classify: tracking_ms = 1.5 * pose_interval).
+        assert_eq!(tracking_stage_ms(66.0), 99.0);
+        assert_eq!(tracking_stage_ms(0.0), 0.0); // no tracker yet ⇒ no stage
+        assert_eq!(tracking_stage_ms(-5.0), 0.0); // guarded
+
+        // The tracking stage must land in the end-to-end total, not just the breakdown.
+        let audio_only = estimate_total_ms(256, 48_000, 4, 22.0, 0.0);
+        let with_track = estimate_total_ms(256, 48_000, 4, 22.0, 66.0);
+        assert!((with_track - audio_only - 99.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn non_camera_source_shows_audio_only_breakdown() {
+        // A demo/held yaw has no pose interval ⇒ no "track" segment, the original 4-stage bar, and
+        // a total with no tracking stage (so the fix never inflates latency when there's no camera).
+        let lat = LatencyHistogram::new(64, 20, 0.0, 120.0);
+        let mut input = sample_input(&lat);
+        input.pose_source = "demo";
+        input.pose_interval_ms = 0.0;
+        let s = build_state(&input);
+        let segs = s["latency"]["segments"].as_array().unwrap();
+        assert_eq!(segs.len(), 4);
+        assert!(segs.iter().all(|g| g["label"] != "track"));
     }
 
     #[test]

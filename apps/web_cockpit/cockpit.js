@@ -157,48 +157,44 @@
     bins: [0, 1, 1, 2, 4, 9, 18, 34, 56, 70, 48, 24, 10, 4, 2, 1, 0, 0, 0, 0],
   };
 
-  // ---- FaceMesh overlay (#185) ----------------------------------------------
-  // Draw the landmark cloud + face box over the camera preview so the operator can SEE the tracking.
-  // The preview <img> uses object-fit:cover, so we replicate that crop here (from the img's natural
-  // frame size) to keep the dots glued to the face. Coordinates arrive per-mille (0..1000) of the
-  // (un-mirrored) frame; the engine omits them when there's no face or the toggle is off, and we
-  // then clear. lastOverlay lets a resize redraw between engine ticks.
-  let lastOverlay = null;
-  function drawOverlay(s) {
-    const cv = $("cam-overlay"), img = $("cam-img");
-    if (!cv || !img) return;
-    if (s) lastOverlay = { show: s.show_landmarks !== false, pts: s.landmarks, box: s.face_box };
-    const o = lastOverlay || {};
-
+  // ---- camera preview + FaceMesh overlay (#185) -----------------------------
+  // The picture AND the landmark cloud are drawn onto one canvas from the SAME /preview frame, so the
+  // dots can never run ahead of the picture (they used to ride separate paths — dots over the fast
+  // SSE/canvas, picture over the slower MJPEG <img> — which made the landmarks look "more reactive"
+  // than the video). previewBmp/previewLm/previewBox are set together when each frame's JPEG decodes.
+  // Coordinates are per-mille (0..1000) of the (un-mirrored) frame; the engine sends an empty overlay
+  // when there's no face. object-fit:cover is replicated here so the dots stay glued to the face.
+  let previewBmp = null, previewLm = null, previewBox = null, showLandmarks = true;
+  function drawPreview() {
+    const cv = $("cam-overlay");
+    if (!cv) return;
     const ctx = cv.getContext("2d");
     const bw = cv.clientWidth, bh = cv.clientHeight;
     const dpr = window.devicePixelRatio || 1;
     const W = Math.round(bw * dpr), H = Math.round(bh * dpr);
     if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, bw, bh);
+    ctx.clearRect(0, 0, bw, bh);  // transparent when no frame → the SVG placeholder shows through
 
-    const pts = o.pts;
-    if (!o.show || !Array.isArray(pts) || pts.length < 2) return;
-    const fw = img.naturalWidth, fh = img.naturalHeight;
-    if (!fw || !fh || img.style.display === "none") return;  // no live frame yet to crop against
-
-    // object-fit:cover: scale to fill the box, center-crop the overflow.
+    if (!previewBmp) return;
+    // object-fit:cover: scale the frame to fill the box, center-crop the overflow.
+    const fw = previewBmp.width, fh = previewBmp.height;
     const scale = Math.max(bw / fw, bh / fh);
     const dw = fw * scale, dh = fh * scale, ox = (bw - dw) / 2, oy = (bh - dh) / 2;
+    ctx.drawImage(previewBmp, ox, oy, dw, dh);
+
+    const pts = previewLm;
+    if (!showLandmarks || !Array.isArray(pts) || pts.length < 2) return;
     const X = (p) => ox + (p / 1000) * dw;
     const Y = (p) => oy + (p / 1000) * dh;
-
-    const box = o.box;
+    const box = previewBox;
     if (Array.isArray(box) && box.length === 4) {
       const bx = X(box[0]), by = Y(box[1]), bbw = (box[2] / 1000) * dw, bbh = (box[3] / 1000) * dh;
       ctx.strokeStyle = "rgba(53,208,208,.9)"; ctx.lineWidth = 1.5;
       if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(bx, by, bbw, bbh, 6); ctx.stroke(); }
       else ctx.strokeRect(bx, by, bbw, bbh);
     }
-
-    // landmark cloud — tiny squares (cheaper than arcs at ~478 points × 20 Hz), size scaled to the
-    // preview width.
+    // landmark cloud — tiny squares (cheaper than arcs at ~478 points), size scaled to preview width.
     ctx.fillStyle = "rgba(53,208,208,.72)";
     const r = Math.max(0.6, 1.1 * (bw / 352));
     for (let i = 0; i + 1 < pts.length; i += 2) ctx.fillRect(X(pts[i]) - r, Y(pts[i + 1]) - r, r * 2, r * 2);
@@ -237,7 +233,9 @@
       const b = $("cam-badge"); if (b) b.classList.toggle("searching", !s.face_locked);
       setText("cam-badge-txt", s.face_badge);
     }
-    drawOverlay(s);  // FaceMesh landmark overlay (#185)
+    // The "show landmarks" toggle gates whether the dots are drawn; the picture + dots themselves
+    // arrive on /preview (#185). Redraw so toggling takes effect between preview frames.
+    if (s.show_landmarks !== undefined) { showLandmarks = s.show_landmarks !== false; drawPreview(); }
 
     // system health rows
     if (Array.isArray(s.health)) {
@@ -352,8 +350,8 @@
       document.querySelectorAll(".tab").forEach((x) => x.classList.remove("tab-active"));
       t.classList.add("tab-active"); call("set_drawer_tab", t.dataset.tab);
     }));
-    // Keep the FaceMesh overlay aligned when the preview resizes (the box is % of the window).
-    window.addEventListener("resize", () => drawOverlay(null));
+    // Keep the preview + overlay aligned when the window (and the preview box) resizes.
+    window.addEventListener("resize", () => drawPreview());
     const abA = $("ab-a"), abB = $("ab-b");
     if (abA && abB) {
       abA.addEventListener("click", () => { abA.classList.add("ab-active"); abB.classList.remove("ab-active"); call("blind_play", "A"); });
@@ -377,7 +375,9 @@
       outputGain = null; gainEditing = false; gainPending = null; clearTimeout(gainTimer); drawGain();
       setText("output-gain-value", "Disconnected");
       setText("output-level-text", "Waiting for audio levels…");
-      lastOverlay = null; drawOverlay();  // clear stale landmark dots if the feed drops (#185)
+      // Clear the preview so the placeholder shows through if the feed drops (#185).
+      if (previewBmp && previewBmp.close) previewBmp.close();
+      previewBmp = null; previewLm = null; previewBox = null; drawPreview();
       if (gone) return;
       // grace long enough that a reset-to-defaults relaunch (exit 97 -> re-open on the same port,
       // ~8 s to re-load) reconnects before we give up and close the window.
@@ -395,7 +395,7 @@
       const es = new EventSource("/events");
       es.onopen = () => {
         alive();
-        if (dropped) { dropped = false; armCamera(); }  // engine came back: restart the preview stream
+        dropped = false;  // engine came back; the /preview EventSource reconnects on its own
       };
       es.onmessage = (e) => {
         alive();
@@ -407,27 +407,33 @@
       es.onerror = lost;   // dropped; close if it doesn't recover within the grace
     } catch (_) { /* no live feed */ }
   }
-  // (Re)point the preview at the MJPEG stream. A cache-busting query forces a fresh connection.
-  let camRetry = null;
-  function armCamera() {
-    const img = $("cam-img");
-    if (!img) return;
-    if (camRetry) { clearTimeout(camRetry); camRetry = null; }
-    img.src = "/camera?" + Date.now();
-  }
-  function startCamera() {
-    const img = $("cam-img"), ph = $("cam-placeholder");
-    if (!img) return;
-    img.onload = () => {
-      img.style.display = "block"; if (ph) ph.style.display = "none";
-      drawOverlay(null);  // the overlay early-returns while the img is hidden; redraw now it's live
+  // Stream the camera preview over /preview: each SSE event carries the JPEG (base64) AND the
+  // landmark overlay from the SAME frame, so the picture and the dots are drawn together — the dots
+  // can't get ahead of the picture. EventSource reconnects on its own if the engine restarts.
+  function startPreview() {
+    const decode = (b64) => {
+      const bin = atob(b64), bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return new Blob([bytes], { type: "image/jpeg" });
     };
-    img.onerror = () => {
-      img.style.display = "none"; if (ph) ph.style.display = "block";
-      drawOverlay(null);  // clear stale dots while there is no frame
-      if (!camRetry) camRetry = setTimeout(armCamera, 1000);  // stream died: retry until it is back
-    };
-    img.src = "/camera";
+    try {
+      const es = new EventSource("/preview");
+      es.onmessage = (e) => {
+        let m; try { m = JSON.parse(e.data); } catch (_) { return; }
+        const ov = m.ov || {};
+        // Capture this frame's overlay in the closure so it is applied together with THIS frame's
+        // decoded bitmap (below), never paired with a newer frame while the JPEG is still decoding.
+        const lm = Array.isArray(ov.lm) ? ov.lm : null;
+        const box = Array.isArray(ov.box) ? ov.box : null;
+        if (!m.img) { previewLm = lm; previewBox = box; drawPreview(); return; }
+        createImageBitmap(decode(m.img)).then((bmp) => {
+          if (previewBmp && previewBmp.close) previewBmp.close();
+          previewBmp = bmp; previewLm = lm; previewBox = box;
+          drawPreview();
+        }).catch(() => { /* a bad frame: keep the last one */ });
+      };
+      // es.onerror: EventSource auto-reconnects; the last frame stays until a new one arrives.
+    } catch (_) { /* no live feed */ }
   }
 
   document.addEventListener("DOMContentLoaded", () => {
@@ -435,7 +441,7 @@
     buildHistogram(SAMPLE.bins, null);  // sample histogram so the page matches the design before data
     renderBufferCells({ fill_blocks: 7, cushion_blocks: 6, capacity: 12 });  // sample buffer meter
     if (location.protocol.indexOf("http") === 0) {
-      connect(); startCamera();
+      connect(); startPreview();
       // Size the window reliably from the page: Chrome ignores --window-size for an --app window when
       // Chrome is already running (and our port changes each launch, so it can't remember either), so
       // resize ourselves to the saved size. window.resizeTo works on a standalone --app window.
