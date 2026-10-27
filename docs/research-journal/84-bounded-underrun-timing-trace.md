@@ -6,9 +6,9 @@ PR #218 covered small-cushion recovery and demonstrated a timing boundary, but a
 live telemetry still could not identify the stage behind rare remaining underruns.
 Issue #217 asks for capture, render, output, and FIFO timing on one monotonic timeline.
 
-Hypothesis: retaining a bounded pre/post window around actual FIFO underruns will reveal
+Hypothesis: retaining a bounded pre/post window around actual FIFO underruns may show
 whether a capture gap, render-service delay, output wake gap, demand burst, or graph rebuild
-coincides with the event. Correlation can narrow the investigation; it is not proof of a
+coincided with the event. Correlation can narrow the investigation; it is not proof of a
 single cause, and multiple signals may overlap.
 
 ## Implementation
@@ -70,10 +70,31 @@ be substituted for the successful-submission Windows distribution above.
 - Engine suite: 70 passed, three ignored (two existing reference tests and the manual
   producer microbenchmark). Audio-I/O suite: 21 passed. Report parser: eight tests passed.
 - Windows engine/probe release builds and raw-report interoperability are checked locally.
-- Deploy the reviewed executable, restart once preserving current live device/block/cushion
-  settings, and collect a bounded live observation. Record the real result below, including
-  an inconclusive outcome if no representative event occurs. No source or output routing,
-  drift gains, buffer policy, or kernel driver changes are part of this block.
+- The reviewed engine was deployed and restarted gracefully on the Windows host, preserving
+  the live block 512, 32 ms cushion, timealign method, headphone EQ, and camera settings.
+  Source/output remained VoiceMeeter Input/K11 at 48 kHz. No routing or device defaults changed.
+
+### Live Windows observation
+
+A 60-second SSE observation collected 1,055 state samples. The last-60-second dropout meter
+reported zero underruns throughout. The lifetime discontinuity count stayed at two; it did
+not increase during this observation. Sampled FIFO fill ranged from
+one to four blocks (median three); sampling can miss shorter excursions. Render load ranged
+from 15.6% to 28.3% (median 21.0%), with the reported peak reaching 45.6%. Drift correction
+ranged from −1,933 to +2,717 ppm during this post-startup observation; this is not a settled
+clock-mismatch estimate.
+
+The live trace contained its header and no admitted incidents. This observation is
+**inconclusive about rare remaining underruns**: there was no event to classify. The engine
+remains running with tracing enabled. Its live file has no shutdown footer, so final queue
+loss counters are unknown. The separate completed Windows synthetic probe had zero losses;
+that does not establish the live engine's loss rate or full tracing overhead. A controlled
+full-engine on/off overhead comparison remains unmeasured.
+
+Host artifacts, outside git: `C:\Users\ibarz\WLBS-Engine\traces\live-20261027-011355.jsonl`,
+`live-telemetry.jsonl`, and `live-session.json` in the same directory. Deployed executable
+SHA-256: `740fcdcc115f1a7b16dc58ab86b1824dee6374913fe2e06242c3e565bb0a5e7d`.
+The artifact was built from code commit `04784d1`; later delivery edits update documentation only.
 
 ## Decision
 

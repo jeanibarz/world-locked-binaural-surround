@@ -21,7 +21,8 @@ Use your current block/cushion values when reproducing a real event. The recorde
 does not change devices, routing, rendering method, drift gains, or buffer settings. An
 invalid output path fails startup before audio devices are opened.
 
-Leave playback running through an event. Each admitted incident retains up to 250 ms
+Leave playback running through an event. Nearby underruns form one incident; the recorder
+admits up to 32 incidents. Each admitted incident retains up to 250 ms
 before its first underrun and 1,000 ms afterward. Multiple underruns inside that window
 share one incident. Completed incidents are flushed by a worker thread. Close the engine
 normally to flush a pending window and the final loss counters; forcibly killing it may
@@ -29,7 +30,8 @@ leave an incomplete recording.
 
 ## Read the evidence
 
-The portable report tool accepts completed recordings and live files:
+The portable report tool accepts completed recordings and live files. A live file contains
+incident data only after a window has been flushed; it may still contain just its header:
 
 ```sh
 python3 spikes/audio_trace_report.py /path/to/session-01.jsonl
