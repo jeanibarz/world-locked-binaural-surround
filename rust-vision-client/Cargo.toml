@@ -10,6 +10,11 @@ publish = false
 default = []
 # The real vision body: ONNX inference (ort), image decode/warp. Pulls onnxruntime.
 inference = ["dep:ort", "dep:image"]
+# GPU-accelerate inference via the DirectML execution provider (Windows / DirectX 12). Offloads
+# BlazeFace + FaceMesh to the GPU, cutting per-frame inference from ~100 ms (the CPU default EP on
+# the capped 1-2 intra-op threads) to ~10-20 ms — the dominant head-tracking latency. Superset of
+# `inference`; `ort`'s EP registration is best-effort, so without a DX12 GPU it falls back to CPU.
+gpu-directml = ["inference", "ort/directml"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
