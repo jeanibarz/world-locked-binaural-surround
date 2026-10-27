@@ -78,6 +78,8 @@ New here? Start with the onboarding guides:
   routing the virtual Windows audio device the renderer captures from.
 - [`docs/head-tracker-setup.md`](docs/head-tracker-setup.md) — the webcam head
   tracker and its model.
+- [`docs/choosing-an-hrir-set.md`](docs/choosing-an-hrir-set.md) — what an HRIR is,
+  which set to use, and how to load one in the app.
 
 ## Intended distribution
 

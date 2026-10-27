@@ -107,7 +107,8 @@ wlbs_engine.exe --import-pack <path-to-pack-dir> [--name my-pack]
 
 This copies it into `%APPDATA%\WLBS\packs\<name>\`, after which it appears in the
 cockpit's HRIR picker. List what is installed with `wlbs_engine.exe --list-packs`.
-See [`baked-brir-setup.md`](baked-brir-setup.md) for the pack layout.
+See [`baked-brir-setup.md`](baked-brir-setup.md) for the pack layout, and
+[`choosing-an-hrir-set.md`](choosing-an-hrir-set.md) for which set to pick.
 
 > **TODO (needs a shipped installer to verify).** Whether an installer
 > pre-populates `%APPDATA%\WLBS\` on first run, and how the ONNX nets
