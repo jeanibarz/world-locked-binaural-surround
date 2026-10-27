@@ -524,24 +524,6 @@ pub fn spawn_camera_pose(
                 } else {
                     raw
                 };
-                // Refresh the preview at up to 25 fps (40 ms), fast enough that the camera picture is
-                // never staler than the landmark overlay, which the cockpit redraws at the 50 ms
-                // telemetry cadence. The previous 80 ms (≈12 fps) throttle refreshed the image slower
-                // than the overlay — at the default stride 2 / 30 fps it skipped every other pose
-                // frame (≈7 fps) — so during a fast head turn the landmark cloud, carried on the
-                // low-latency SSE/canvas path, reached the new position a frame or two before the
-                // MJPEG `<img>` picture caught up ("landmarks more reactive than the camera"). 40 ms
-                // pushes every pose frame at the defaults while still bounding the JPEG-encode cost
-                // on high-resolution / low-stride configs; the MJPEG fan-out already drops frames a
-                // slow client can't take.
-                if let Some(cp) = &cockpit {
-                    if last_preview.elapsed() >= std::time::Duration::from_millis(40) {
-                        if let Some(jpeg) = encode_jpeg(rgb, w as u32, h as u32) {
-                            cp.set_frame(jpeg);
-                        }
-                        last_preview = std::time::Instant::now();
-                    }
-                }
                 img.w = w;
                 img.h = h;
                 img.px.clear();
@@ -550,6 +532,10 @@ pub fn spawn_camera_pose(
                 let est_result = pipe.estimate(&img);
                 let infer_ms = infer_t0.elapsed().as_secs_f64() * 1000.0;
                 infer_ema_ms = if infer_ema_ms <= 0.0 { infer_ms } else { 0.8 * infer_ema_ms + 0.2 * infer_ms };
+                // Overlay JSON for THIS frame, sent to the cockpit paired with this frame's JPEG below
+                // (see the `/preview` push): `{}` = no face, so the picture and the dots can never
+                // disagree. Set to the landmark cloud when a face is published.
+                let mut overlay = String::from("{}");
                 match est_result {
                     Ok(Some(est)) => {
                         consec_est_err = 0;
@@ -565,10 +551,14 @@ pub fn spawn_camera_pose(
                         }
                         ok += 1;
                         // Capture the FaceMesh overlay for the cockpit preview (#185). The landmarks
-                        // are already in the un-mirrored frame's normalized space (same frame as the
-                        // `/camera` JPEG above), so the overlay aligns with the preview. Purely
-                        // cosmetic; it never touches the audio render thread.
-                        pose.set_landmarks(pack_landmarks(&est.landmarks));
+                        // are in the un-mirrored frame's normalized space — the same frame as the
+                        // JPEG pushed below — so the overlay aligns with the preview to the pixel.
+                        // Purely cosmetic; it never touches the audio render thread.
+                        let lf = pack_landmarks(&est.landmarks);
+                        if let Some(f) = &lf {
+                            overlay = serde_json::json!({ "lm": f.pts, "box": f.box_xywh }).to_string();
+                        }
+                        pose.set_landmarks(lf);
                     }
                     Ok(None) => {
                         consec_est_err = 0;
@@ -588,6 +578,20 @@ pub fn spawn_camera_pose(
                             pose.set_cam_error(format!("pose pipeline error: {e}"));
                             est_err_flagged = true;
                         }
+                    }
+                }
+                // Push the preview for this frame — JPEG + the overlay computed from the SAME frame —
+                // at up to 25 fps (40 ms). Pairing them means the cockpit draws the picture and the
+                // landmark dots from one frame, so the dots can't run ahead of the picture (the
+                // original "landmarks more reactive than the camera"). The JPEG encodes from the same
+                // `rgb` the pose used; the `/preview` fan-out drops frames a slow client can't take,
+                // and 40 ms bounds the encode cost on high-resolution / low-stride configs.
+                if let Some(cp) = &cockpit {
+                    if last_preview.elapsed() >= std::time::Duration::from_millis(40) {
+                        if let Some(jpeg) = encode_jpeg(rgb, w as u32, h as u32) {
+                            cp.set_preview(jpeg, std::mem::take(&mut overlay));
+                        }
+                        last_preview = std::time::Instant::now();
                     }
                 }
                 if (ok + miss + est_err).is_multiple_of(30) {
