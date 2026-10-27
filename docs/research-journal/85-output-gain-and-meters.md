@@ -67,6 +67,23 @@ The gain meter cannot guarantee a clipping-free Windows mixer/DAC path. Source c
 head pose, summation and EQ all affect usable gain. No automatic level increase is part of
 deployment. User-facing instructions and API details are in `docs/output-gain.md`.
 
+## Delivery and live postcondition
+
+[PR #222](https://github.com/jeanibarz/world-locked-binaural-surround/pull/222).
+The reviewed executable and cockpit assets were deployed with backups. A graceful restart
+preserved block 512, cushion 32 ms, VoiceMeeter Input/K11, method, EQ and camera settings.
+Additional output gain was confirmed at 0 dB in the startup config. During the first live
+readback, gain changed from 0 to +6 dB; a subsequent five-second observation returned
+87 states at +24 dB. The observer did not send these gain requests or revert them.
+The latter sample's maximum peak was -16.19 dBFS, with zero cumulative clipped
+or non-finite samples. This verifies active rendered telemetry and control changes, not
+representative program loudness or guaranteed headroom for other material.
+
+Deployed executable SHA-256: `1ca93bc07d7134695a637ca1c7db3d44cf7e6e400af953b2c141162ec9d41d6b` (code commit `2f4ffb7`).
+Subsequent delivery changes update documentation only. The recorder remains enabled with a
+new live file in the install's `traces` directory. Browser screenshots/DOM checks above are
+local Chromium evidence, not a native host-DPI assertion.
+
 ## Decision
 
 Deliver adjustable gain with measured headroom and explicit clipping visibility. Leave the
