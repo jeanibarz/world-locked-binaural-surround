@@ -133,6 +133,39 @@ def test_load_sofa_roundtrip(tmp_path):
     assert np.argmax(li) == 1 and np.argmax(ri) == 2
 
 
+def test_load_sofa_cartesian_with_bytes_type_attr(tmp_path):
+    """A Cartesian SourcePosition whose ``Type`` attr is stored as *bytes* (how MATLAB-written
+    SOFA files encode it) must be converted to spherical, not read verbatim. Regression for
+    #223: ``str(b"cartesian")`` is ``"b'cartesian'"``, which fails the ``startswith("cart")``
+    detection, so the Cartesian coordinates were silently returned as if they were (az, el)."""
+    import h5py
+
+    p = tmp_path / "cartesian.sofa"
+    n_taps = 16
+    # Known points in the (x=front, y=left, z=up) world frame → expected (az, el).
+    source = np.array(
+        [
+            [1.0, 0.0, 0.0],   # front → az 0,   el 0
+            [0.0, 1.0, 0.0],   # left  → az 90,  el 0
+            [-1.0, 0.0, 0.0],  # back  → az 180, el 0
+            [0.0, 0.0, 1.0],   # up    → az 0,   el 90
+        ]
+    )
+    m = source.shape[0]
+    ir = np.zeros((m, 2, n_taps), dtype=np.float64)
+    ir[:, 0, 0] = 1.0
+    with h5py.File(p, "w") as f:
+        f.create_dataset("Data.IR", data=ir)
+        f.create_dataset("Data.SamplingRate", data=np.array([48000.0], dtype=np.float64))
+        sp = f.create_dataset("SourcePosition", data=source)
+        sp.attrs["Type"] = np.bytes_(b"cartesian")  # bytes, NOT a Python str
+        sp.attrs["Units"] = np.bytes_(b"metre, metre, metre")
+
+    hs = load_sofa(p)
+    assert np.allclose(hs.directions[:, 0], [0.0, 90.0, 180.0, 0.0], atol=1e-6)  # azimuth
+    assert np.allclose(hs.directions[:, 1], [0.0, 0.0, 0.0, 90.0], atol=1e-6)    # elevation
+
+
 def test_load_sofa_resamples_to_target(tmp_path):
     p = tmp_path / "synthetic.sofa"
     _write_synthetic_sofa(p, sr=44100, n_taps=147)
