@@ -76,7 +76,10 @@ def test_extracts_post_downmix_chain(tmp_path: Path) -> None:
     imp = np.zeros((32, 2))
     imp[0] = 1.0
     out = eq.process_block(imp)
-    assert np.abs(out).max() < 10.0  # not ~10^5 from a live +99 dB filter
+    # With the +99 dB pre-downmix filter correctly dropped the impulse response peaks
+    # at ~0.07; a live +99 dB peaking filter would push this to ~10^4. A tight bound is
+    # what makes the test discriminating (a loose `< 10` passed even with the filter live).
+    assert np.abs(out).max() < 0.5
 
 
 def test_gains_firs_and_specs(tmp_path: Path) -> None:
@@ -88,7 +91,14 @@ def test_gains_firs_and_specs(tmp_path: Path) -> None:
     # L: comp -6 + subjective -4.5 ; R also the per-ear -1
     assert left.gain == pytest.approx(10 ** ((-6 - 4.5) / 20))
     assert right.gain == pytest.approx(10 ** ((-6 - 1 - 4.5) / 20))
-    assert left.fir is not None and right.fir is not None
+    # The comp FIR must be the per-ear IR from the matching WAV (not the other ear's, not
+    # None): a loader that swapped L/R or dropped the IR passed when only `is not None` was
+    # checked. Compare against the source WAVs read back (same samplerate ⇒ no resample).
+    left_ir = wavfile.read(str(cfg.parent / "left.wav"))[1].astype(np.float64)
+    right_ir = wavfile.read(str(cfg.parent / "right.wav"))[1].astype(np.float64)
+    assert left.fir is not None and np.array_equal(left.fir, left_ir)
+    assert right.fir is not None and np.array_equal(right.fir, right_ir)
+    assert not np.array_equal(left.fir, right.fir)  # the two ears are distinct IRs
     # comp filter (per ear) + 2 subjective filters, and the +99 dB one excluded.
     assert [s.fc for s in left.specs] == [3000, 1000, 100]
     assert [s.fc for s in right.specs] == [5000, 1000, 100]

@@ -45,6 +45,7 @@ def test_negative_skew_is_signed() -> None:
     r = analyze_fill(t, fill, SR)
     assert r.dominant == "skew"
     assert r.skew_ppm < 0
+    assert r.skew_ppm == pytest.approx(-1000.0, rel=1e-6)  # exact magnitude, not just sign
 
 
 def test_pure_jitter_is_jitter() -> None:
@@ -125,7 +126,10 @@ def test_uneven_sampling_ok() -> None:
     fill = 1024.0 + 48.0 * t
     r = analyze_fill(t, fill, SR)
     assert r.dominant == "skew"
-    assert r.skew_ppm == pytest.approx(1000.0, rel=5e-2)
+    # Data is noise-free, so least squares recovers the slope to ~1e-12. Uneven spacing is
+    # the only reason this test exists; a tight bound catches a spacing-biased slope estimate
+    # that a loose rel=5e-2 (±50 ppm) would wave through.
+    assert r.skew_ppm == pytest.approx(1000.0, rel=1e-6)
 
 
 def test_mismatched_lengths_raise() -> None:

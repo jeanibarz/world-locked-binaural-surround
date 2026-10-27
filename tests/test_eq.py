@@ -206,17 +206,22 @@ def test_crossfade_is_click_free_and_converges():
     assert np.allclose(before[:, 0], tone[:1000, 0], atol=1e-9)  # flat = identity
 
     cf = 2048
-    eq.set_specs([[BiquadSpec("PK", 440, 12, q=1)]], crossfade=cf)
+    spec = [BiquadSpec("PK", 440, 12, q=1)]
+    eq.set_specs([spec], crossfade=cf)
     faded = eq.process_block(tone[1000:5000])
     after = eq.process_block(tone[5000:])
 
-    # (a) No click: the first faded sample starts from the OLD (flat) output, i.e.
-    # equals the input tone there — g_new=0 at the fade start.
-    assert faded[0, 0] == pytest.approx(tone[1000, 0], abs=1e-9)
-    # (b) Bounded everywhere (the +12 dB peak can at most ~4x the tone amplitude).
-    assert np.max(np.abs(np.concatenate([faded[:, 0], after[:, 0]]))) < 6.0
-    # (c) Converged: well past the crossfade the output matches the NEW filter
-    # driven by the same ongoing tone (compare steady-state RMS, boosted ~12 dB).
+    # Pin the exact blend: outgoing is the flat (identity) path = the input itself; incoming is
+    # the new cascade from a cleared state; the two mix under a LINEAR gain ramp g = clip(n/cf).
+    # Reconstructing the whole curve (BiquadCascade is coefficient-tested independently) catches
+    # a non-linear ramp (e.g. g**0.2) and a wrong blend weight — the old first-sample + "< 6.0"
+    # + steady-RMS trio passed both of those mutations.
+    x = tone[1000:5000, 0]
+    y_new = BiquadCascade.from_specs(spec, fs).process_block(x)
+    g = np.clip(np.arange(x.size) / cf, 0.0, 1.0)
+    assert np.allclose(faded[:, 0], (1.0 - g) * x + g * y_new, atol=1e-9)
+
+    # Converged: well past the crossfade the output is the steady NEW filter, ~+12 dB.
     steady = after[-1000:, 0]
     rms_out = np.sqrt(np.mean(steady**2))
     rms_in = np.sqrt(np.mean(tone[-1000:, 0] ** 2))
@@ -230,14 +235,34 @@ def test_second_swap_mid_crossfade_is_click_free():
     tone = np.sin(2 * np.pi * 300 * np.arange(6000) / fs).reshape(-1, 1)
     eq = ParametricEQ([[]], fs)
     eq.process_block(tone[:500])
-    eq.set_specs([[BiquadSpec("LS", 120, 12, None)]], crossfade=2048)
+    spec1 = [BiquadSpec("LS", 120, 12, None)]
+    eq.set_specs([spec1], crossfade=2048)
     mid = eq.process_block(tone[500:1200])  # 700 samples into a 2048 fade
-    eq.set_specs([[BiquadSpec("HS", 6000, -9, None)]], crossfade=2048)  # overlap!
+    spec2 = [BiquadSpec("HS", 6000, -9, None)]
+    eq.set_specs([spec2], crossfade=2048)  # overlap: 2nd swap lands inside the 1st fade
     after = eq.process_block(tone[1200:])
-    # Continuity across the second swap: last sample before vs first sample after
-    # differ by no more than a normal one-sample step of the signal around there.
+
+    # Reconstruct `after` exactly. When the 2nd swap fires 700 samples into the 1st fade, the
+    # current blend is frozen as the outgoing source with weights [(flat, 1-gf), (LS, gf)],
+    # gf = 700/2048, and the HS cascade fades in over 2048 samples on top of it. Dropping the
+    # (1-gf) on the frozen flat weight — the regression this test exists to catch — shifts
+    # every sample of `after`; the old median-seam-step bound let that mutation through.
+    x1 = tone[500:1200, 0]
+    x2 = tone[1200:, 0]
+    ls = BiquadCascade.from_specs(spec1, fs)
+    ls.process_block(x1)                      # advance LS state exactly as the live cascade did
+    ls_out2 = ls.process_block(x2)
+    hs_out2 = BiquadCascade.from_specs(spec2, fs).process_block(x2)  # incoming, cleared state
+    gf = 700 / 2048                           # frozen gain of the 1st fade at the 2nd swap
+    y_out2 = (1.0 - gf) * x2 + gf * ls_out2   # frozen outgoing blend (flat is identity ⇒ x2)
+    g2 = np.clip(np.arange(x2.size) / 2048, 0.0, 1.0)
+    expected_after = (1.0 - g2) * y_out2 + g2 * hs_out2
+    assert np.allclose(after[:, 0], expected_after, atol=1e-9)
+
+    # And the seam is still click-free and the whole signal bounded.
     joined = np.concatenate([mid[:, 0], after[:, 0]])
     steps = np.abs(np.diff(joined))
     boundary_step = abs(after[0, 0] - mid[-1, 0])
     assert boundary_step <= 5 * np.median(steps) + 1e-9  # no click spike at the seam
+    assert np.max(np.abs(joined)) < 6.0
     assert np.max(np.abs(joined)) < 6.0  # bounded

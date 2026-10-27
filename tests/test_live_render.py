@@ -406,11 +406,20 @@ def test_interp_world_locked_matches_voice_pool_over_grid() -> None:
 
 def test_interp_world_locked_shape_and_methods() -> None:
     brir = _synthetic_brir(n=400)
+    rng = np.random.default_rng(7)  # seeded: the old unseeded randn made failures irreproducible
+    pcm = rng.standard_normal((64, brir.n_channels)) * 0.1
+    pose = np.zeros(brir.n_channels)
+    outs = {}
     for method in ("nearest", "timealign", "minphase", "notchwarp"):
         r = InterpWorldLocked7p1(brir, method, block_size=64, grid_step=45.0, lfe_mode="flat")
-        out = r.process_block(np.random.randn(64, brir.n_channels) * 0.1,
-                              np.zeros(brir.n_channels))
+        out = r.process_block(pcm, pose)
         assert out.shape == (64, 2) and np.isfinite(out).all()
+        assert np.any(np.abs(out) > 1e-6)  # real output, not a silently all-zero render
+        outs[method] = out
+    # (Grid interpolation that discriminates the methods is proven independently by
+    # test_interp_world_locked_matches_voice_pool_over_grid; here the guard is that every
+    # method produces finite, non-silent output of the right shape — which the old
+    # shape-and-isfinite-only check did not, since an all-zero render passed it.)
 
 
 def test_interp_world_locked_gpu_falls_back_without_cupy() -> None:
@@ -419,10 +428,19 @@ def test_interp_world_locked_gpu_falls_back_without_cupy() -> None:
     # pure-Python CPU, since use_rust is off) without crashing — engine reflects what built, and
     # the render stays finite and correctly shaped either way.
     brir = _synthetic_brir(n=400)
+    rng = np.random.default_rng(8)  # seeded so the fallback comparison below is reproducible
+    pcm = rng.standard_normal((64, brir.n_channels)) * 0.1
+    pose = np.zeros(brir.n_channels)
     r = InterpWorldLocked7p1(brir, "timealign", block_size=64, grid_step=45.0, use_gpu=True)
     assert r.engine in ("gpu", "cpu")  # 'gpu' only where CuPy is installed (the host)
-    out = r.process_block(np.random.randn(64, brir.n_channels) * 0.1, np.zeros(brir.n_channels))
+    out = r.process_block(pcm, pose)
     assert out.shape == (64, 2) and np.isfinite(out).all()
+    assert np.any(np.abs(out) > 1e-6)  # real output, not a silently all-zero render
+    # Where CuPy is absent (CI/WSL) the fallback must be numerically identical to an explicit
+    # CPU render; a fallback that silently dropped the interpolation correction would be caught.
+    if r.engine == "cpu":
+        ref = InterpWorldLocked7p1(brir, "timealign", block_size=64, grid_step=45.0, use_gpu=False)
+        assert np.allclose(out, ref.process_block(pcm, pose), atol=1e-12)
 
 
 def test_tail_cap_bounds_voices_during_a_sweep() -> None:
@@ -444,7 +462,7 @@ def test_tail_cap_bounds_voices_during_a_sweep() -> None:
         peak_un = max(peak_un, len(uncapped._voices))
         peak_cap = max(peak_cap, len(capped._voices))
     assert peak_cap < peak_un  # the cap actually reduces concurrency
-    # with a 40 ms cap the live voices stay a small handful, not the whole swept arc
+    # with a 20 ms cap the live voices stay a small handful, not the whole swept arc
     assert peak_cap <= 6
 
 
@@ -470,24 +488,32 @@ def test_tail_cap_sweep_is_click_free() -> None:
     assert np.max(np.abs(np.diff(out_cap[:, 0]))) < np.max(np.abs(np.diff(out_hard[:, 0])))
 
 
-def test_tail_cap_none_rings_full_tail_unchanged() -> None:
-    """``max_tail_ms=None`` (the default) is bit-identical to the original full-tail path —
-    a stationary source is unaffected by the feature."""
+def test_tail_cap_leaves_a_stationary_source_bit_identical() -> None:
+    """The tail cap only ever trims *retired* voices. A stationary source keeps a single
+    active voice (it never retires one), so a capped source must be bit-identical to an
+    uncapped one — the feature touches only moving sources.
+
+    (The previous version compared the default against an explicit ``max_tail_ms=None``: the
+    same code path, so it could only fail if the default itself changed, and never verified
+    that the cap leaves a stationary source alone.)"""
     brir = _synthetic_brir()
     rng = np.random.default_rng(4)
     x = rng.normal(0, 0.3, 4000)
     block = 256
     n_blocks = int(np.ceil(x.size / block))
-    track = np.full(n_blocks, 30.0)  # stationary at L
-    default = WorldLockedSource(brir, block_size=block, fade_ms=20.0)
-    explicit = WorldLockedSource(brir, block_size=block, fade_ms=20.0, max_tail_ms=None)
+    track = np.full(n_blocks, 30.0)  # stationary at L → one voice, never retired
+    uncapped = WorldLockedSource(brir, block_size=block, fade_ms=20.0, max_tail_ms=None)
+    capped = WorldLockedSource(brir, block_size=block, fade_ms=20.0, max_tail_ms=20.0)
+    sawsound = False
     for i in range(n_blocks):
         blk = x[i * block:(i + 1) * block]
         if blk.size < block:
             blk = np.concatenate([blk, np.zeros(block - blk.size)])
-        a = default.process_block(blk, float(track[i]))
-        b = explicit.process_block(blk, float(track[i]))
+        a = uncapped.process_block(blk, float(track[i]))
+        b = capped.process_block(blk, float(track[i]))
         assert np.array_equal(a, b)
+        sawsound = sawsound or bool(np.any(a))
+    assert sawsound  # guard: the equality was checked on real output, not silence
 
 
 def test_interpolated_ring_loudness_match_default_on_and_toggle() -> None:
