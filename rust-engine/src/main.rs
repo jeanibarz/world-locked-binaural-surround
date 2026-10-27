@@ -353,8 +353,12 @@ mod engine {
         .into_owned();
         let camera_mjpeg = arg(&a, "--camera-mjpeg");
         let face_image = arg(&a, "--face-image");
-        // Clamp stride to ≥1: 0 would make `is_multiple_of(0)` disable all pose updates (BUG-31).
-        let pose_stride: usize = arg_num(&a, "--pose-stride")?.unwrap_or(2).max(1);
+        // Solve every camera frame by default (stride 1): with the DirectML GPU provider a solve is
+        // ~10 ms, so sub-sampling only throws away pose rate and doubles the head-tracking latency.
+        // The old default was 2 (a CPU-era hedge against ~100 ms CPU solves starving the pose thread);
+        // `--pose-stride N` still sub-samples for a CPU-only machine. Clamp to ≥1: 0 would make
+        // `is_multiple_of(0)` disable all pose updates (BUG-31).
+        let pose_stride: usize = arg_num(&a, "--pose-stride")?.unwrap_or(1).max(1);
         // Camera id string (decimal index or an opaque nokhwa string index), not parsed to u32, so a
         // string-indexed camera can be selected too (BUG-34).
         let camera_id: Option<String> = arg(&a, "--camera");
