@@ -10,6 +10,10 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
 
 ## Active native-engine reliability follow-ups
 
+- [x] **Adjustable output gain and meters (#221):** shared stereo gain after EQ,
+  pre-clamp peak/RMS/clipping measurements, persisted control, and browser/Windows verification.
+  See journal 85.
+
 - [x] **Small-cushion recovery coverage:** test real pipeline stages at three/four-block targets,
   mixed endpoint rates, fragmented packets, repeated configuration changes, and explicit timing
   limits. Extend the Windows capture probe with gap measurements. See journal 83.

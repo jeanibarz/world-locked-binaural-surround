@@ -24,3 +24,10 @@ webview (pywebview / Edge WebView2) driven by the existing engine.
 - Controls call `window.pywebview.api.<name>(...)`: `set_predict`, `recenter`,
   `open_settings`, `set_drawer_tab`, `blind_play`, `blind_shuffle_start`,
   `window_min/max/close`, `ready` (+ the settings controls, wired with settings.js).
+
+## Native engine output controls
+
+The Rust engine serves this cockpit over HTTP with SSE state updates. The output-gain
+slider and peak/RMS/clipping meters use that live connection, and stay unavailable until
+the engine confirms the setting. See [Output gain](../../docs/output-gain.md) for levels,
+persistence, limits, and verification.

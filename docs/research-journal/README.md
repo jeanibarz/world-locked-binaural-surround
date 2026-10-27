@@ -99,6 +99,8 @@ The ordered work blocks live in [`../backlog.md`](../backlog.md).
 
 | 84 | [Bounded underrun timing trace](84-bounded-underrun-timing-trace.md) | Opt-in capture/render/output/FIFO incident windows with bounded recording, loss reporting, and separate pretrigger/overlapping evidence. |
 
+| 85 | [Output gain and meters](85-output-gain-and-meters.md) | Shared stereo trim after EQ, pre-clamp peak/RMS and cumulative clipping, persisted cockpit control, and portable/browser/Windows verification. |
+
 See also [`LEARNINGS.md`](LEARNINGS.md) — the cumulative, numbered lessons.
 
 ## Maintenance protocol (the contract)

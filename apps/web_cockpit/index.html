@@ -141,6 +141,19 @@
       </div>
     </div>
 
+    <section class="panel output-panel" aria-label="Output level and gain">
+      <div class="output-gain-control">
+        <div class="meter-top"><label for="output-gain" class="meter-label">Output gain</label><output id="output-gain-value" for="output-gain" class="mono meter-val">Waiting…</output></div>
+        <div class="output-gain-row"><input id="output-gain" type="range" min="-24" max="24" step="0.5" value="0" disabled aria-describedby="output-gain-help"><button id="output-gain-reset" class="btn btn-ghost" type="button" disabled>0 dB</button></div>
+        <div id="output-gain-help" class="output-hint">Raise gradually; reduce gain if clipping increases.</div>
+      </div>
+      <div class="output-level-control">
+        <div class="meter-top"><span class="meter-label">Output level</span><span id="output-level-text" class="mono meter-val">Waiting for audio levels…</span></div>
+        <div class="bar output-level-bar" role="img" aria-label="Output level: waiting" id="output-level-bar"><div id="output-level-fill" class="bar-fill good" style="width:0%"></div><div id="output-level-peak" class="bar-peak" style="left:0%"></div></div>
+        <div id="output-clipping" class="output-hint" role="status">Clipping: waiting…</div>
+      </div>
+    </section>
+
     <!-- Row 3: experiments drawer -->
     <div class="panel drawer">
       <div class="drawer-tabs">
