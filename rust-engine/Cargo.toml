@@ -43,3 +43,9 @@ ctrlc = "3.4"
 
 [profile.release]
 opt-level = 3
+
+# Manual target-OS overhead probe; reuses the recorder without duplicating its unit-test suite.
+[[bin]]
+name = "audio_trace_probe"
+path = "src/bin/audio_trace_probe.rs"
+test = false
