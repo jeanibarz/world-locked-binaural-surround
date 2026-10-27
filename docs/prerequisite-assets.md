@@ -54,8 +54,9 @@ with it. There is nothing to place.
 > a script-built bundle, headphone EQ is absent and the engine logs
 > `HP_EQ_WARN … headphone EQ disabled` and renders without it until you supply a
 > config (put one under `<install>/hp_eq/` or `%APPDATA%\WLBS\hp_eq\`, or point
-> `--hp-eq-dir` / `WLBS_HP_EQ_DIR` at it). See the headphone-compensation guide for
-> how to obtain and load a profile.
+> `--hp-eq-dir` / `WLBS_HP_EQ_DIR` at it). See
+> [`headphone-compensation.md`](headphone-compensation.md) for how to obtain and
+> load a profile.
 
 ### What each asset is for (one line each)
 
@@ -178,8 +179,10 @@ The impulse-response audio is **not** committed (`.gitignore`: `*.wav`, `*.sofa`
 
 `run.cmd` passes `--output-eq <config.txt>` pointing at the owner's EqualizerAPO
 config — an EqualizerAPO-format file that downmixes to L/R and carries the per-ear
-compensation + subjective EQ. See [`baked-brir-setup.md`](baked-brir-setup.md) for
-how that config relates to the baked bake.
+compensation + subjective EQ. See
+[`headphone-compensation.md`](headphone-compensation.md) for how to obtain and load
+your own, and [`baked-brir-setup.md`](baked-brir-setup.md) for how that config
+relates to the baked bake.
 
 ---
 
