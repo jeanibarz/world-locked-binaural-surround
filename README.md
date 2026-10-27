@@ -67,6 +67,18 @@ accurate milestone status table) and [`docs/backlog.md`](docs/backlog.md) for th
 work blocks. Requirements and architecture live in
 [`docs/requirements.md`](docs/requirements.md).
 
+## Setup & onboarding
+
+New here? Start with the onboarding guides:
+
+- [`docs/prerequisite-assets.md`](docs/prerequisite-assets.md) — which files to
+  obtain (head-tracking model, BRIR pack, headphone-comp config) and where to put
+  them for each way of running the engine.
+- [`docs/virtual-device-setup.md`](docs/virtual-device-setup.md) — installing and
+  routing the virtual Windows audio device the renderer captures from.
+- [`docs/head-tracker-setup.md`](docs/head-tracker-setup.md) — the webcam head
+  tracker and its model.
+
 ## Intended distribution
 
 Donationware, with a possible paid service around **AI-assisted HRIR/filter
