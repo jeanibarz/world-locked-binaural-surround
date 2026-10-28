@@ -6,6 +6,23 @@ of the rendered sequences. Deduplicated, prioritized. Lens tags: [PED] [VIZ] [MO
 > This is a "good basis" — these are **next-iteration** improvements, not blockers. Respect the
 > locked accuracy caveats in `DECISIONS.md` throughout.
 
+## ✅ Applied in iteration 2 (commit "apply review feedback to crash-course clips")
+Visual/data/science fixes done on the four crash-course data clips (seq2b, seq3, seq4, seq5):
+- **P0#1, #3, #11** — cone rewritten: "same timing AND loudness" + ILD named + head-motion as the
+  front/back tie-breaker (= the payoff bridge); "fragile spectral" wording (not "weaker than timing").
+- **P0#4** — shared house chrome (`vizchrome.py`): section tag + lower-third caption bar on every clip.
+- **P1#6** — amber reserved (no longer a data series); sequential ramp helper added.
+- **P1#7** — individuality = median + 10–90 band + "you" line + pinna tags (was spaghetti).
+- **P1#8** — ITD: sign flipped (right = up), semantic axis, plain readout by marker, zero markers.
+- **P1#9** — spectra de-jargoned (pitch / tone colour / 0 dB "unchanged" / kHz ticks / octave-smoothed).
+- **P2#15** — cone: fixed ¾ camera (never edge-on), filled translucent cone, faint sphere.
+- **Factual** — beat 2 "can be placed" + dropped premature HRTF label. (Count now reads 30, the real loaded N.)
+
+**Still open (next iterations):** P0#2 & #5 and most pedagogy items are VO/structure (go into the script at
+assembly, draft in STORYBOARD.md); P2 motion polish (#14 mug-slide redo, #16 easing, #17 transitions/match-cuts,
+#18 depth/typography, #19 webcam chrome, #20 end-card motion); P1#10 concrete→general spectral; P1#12 the ~10 µs
+wow-number; P1#13 define-HRTF-once placement.
+
 ## P0 — highest leverage (do first)
 
 1. **Cone tie-breaker: fix the science AND bridge to the payoff.** [SCI][PED]
