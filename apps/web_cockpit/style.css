@@ -12,8 +12,9 @@ html,body{margin:0;background:var(--bg)}
 .mono{font-family:'JetBrains Mono',monospace}
 
 /* Fill the browser window (Chrome --app frame is the only chrome now; no in-page titlebar).
-   The row-1 panels keep their size; the experiments drawer (flex:1) absorbs any extra height,
-   and the ring column (minmax(0,1fr)) absorbs extra width — so no empty gap, no right-truncation. */
+   The row-1 panels keep their size and the ring column (minmax(0,1fr)) absorbs extra width (no
+   right-truncation). With the experiments drawer removed (#212), any extra height now sits below
+   the output panel rather than being absorbed by the drawer. */
 .app{width:100vw;height:100vh;min-width:900px;display:flex;flex-direction:column;background:var(--bg);
   font-family:Inter,system-ui,sans-serif;color:var(--text);overflow:hidden}
 
@@ -107,7 +108,9 @@ html,body{margin:0;background:var(--bg)}
 .pill-amber{color:var(--amber);background:rgba(255,179,64,.12)}
 .ring-canvas{flex:1;display:flex;align-items:center;justify-content:center;min-height:0}
 .radar{width:400px;height:400px;max-width:100%;max-height:100%}
-.pose-tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+/* auto-fit (not a fixed 3 cols) so the row still looks right when PITCH/ROLL are hidden (#212): the
+   surviving tiles expand to fill, and all three sit in a row again when the backend supplies them. */
+.pose-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px}
 .tile{background:var(--inset);border:1px solid var(--border);border-radius:8px;padding:8px 12px;display:flex;justify-content:space-between;align-items:baseline}
 .tile-label{font-size:12px;color:var(--muted);letter-spacing:.06em}
 .tile-val{font:600 18px 'JetBrains Mono',monospace;color:var(--text)}
@@ -138,22 +141,8 @@ html,body{margin:0;background:var(--bg)}
 .lat-axis{display:flex;justify-content:space-between;font:400 11px 'JetBrains Mono',monospace;color:var(--muted);margin-top:5px}
 .lat-note{margin-top:12px;font-size:12px;line-height:1.45;color:var(--muted)}
 
-/* Drawer */
-.drawer{flex:1;min-height:0;padding:0 16px 12px;display:flex;flex-direction:column}
-.drawer-tabs{display:flex;gap:4px;border-bottom:1px solid var(--border);margin:0 -16px;padding:0 16px}
-.tab{border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);font:500 13px Inter,sans-serif;height:38px;padding:0 12px;cursor:pointer}
-.tab-active{border-bottom:2px solid var(--cyan);color:var(--cyan);font-weight:600}
-.drawer-status{margin-left:auto;align-self:center;font-size:12px;color:var(--muted)}
-.drawer-body{flex:1;display:flex;align-items:center;gap:22px}
-.steps{display:flex;align-items:center;gap:8px;font-size:13px}
-.step{color:var(--muted);border:1px solid var(--border2);border-radius:999px;padding:5px 13px}
-.step-active{display:flex;align-items:center;gap:8px;color:#06222a;background:var(--cyan);border-radius:999px;padding:6px 14px;font-weight:700;border:0}
-.step-num{width:18px;height:18px;border-radius:50%;background:#06222a;color:var(--cyan);font-size:11px;display:flex;align-items:center;justify-content:center}
-.step-sep{color:var(--muted)}
-.drawer-actions{margin-left:auto;display:flex;align-items:center;gap:10px}
-.ab-toggle{display:flex;background:var(--inset);border:1px solid var(--border2);border-radius:10px;padding:3px;gap:3px}
-.ab{width:76px;height:44px;border:0;border-radius:8px;background:transparent;color:var(--text2);font:700 16px Inter,sans-serif;cursor:pointer}
-.ab-active{background:#1b2432;color:var(--text)}
+/* The experiments drawer (Blind A/B + tabs) is hidden until the engine implements it (#212); its
+   styles were removed with the markup. Restore them from git history when the drawer is wired. */
 
 /* Output controls use a separate compact row so system telemetry keeps its space. */
 .output-panel{flex:none;display:grid;grid-template-columns:minmax(260px,1fr) minmax(320px,1.5fr);gap:24px;padding:10px 16px}

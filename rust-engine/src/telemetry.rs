@@ -395,10 +395,10 @@ pub fn build_state(t: &TeleInput) -> Value {
         "invert_tracking": t.invert_tracking,
         "flip_h": t.flip_h,
         "flip_v": t.flip_v,
+        // Only yaw is estimated from the tracker; pitch/roll are not solved, so they are omitted
+        // rather than reported as a hard-coded "0°" (the cockpit hides the PITCH/ROLL tiles — #212).
         "pose": {
             "yaw": format!("{:+.0}°", t.yaw_deg),
-            "pitch": "0°",
-            "roll": "0°",
             "yaw_deg": t.yaw_deg,
         },
         "facing": facing_label(t.yaw_deg),
@@ -520,6 +520,18 @@ mod tests {
         assert_eq!(s["latency"]["segments"].as_array().unwrap().len(), 5);
         assert_eq!(s["latency"]["segments"][0]["label"], "track");
         assert_eq!(s["latency"]["segments"][0]["capture"], true);
+    }
+
+    #[test]
+    fn pose_reports_only_yaw_not_hardcoded_pitch_roll() {
+        // #212: pitch/roll are not estimated, so the cockpit hides those tiles and build_state must
+        // not emit placeholder "0°" values that imply tracking that does not exist.
+        let lat = LatencyHistogram::new(64, 20, 0.0, 120.0);
+        let s = build_state(&sample_input(&lat));
+        assert_eq!(s["pose"]["yaw"], "+12°");
+        assert_eq!(s["pose"]["yaw_deg"], 12.0);
+        assert!(s["pose"].get("pitch").is_none(), "pitch must be omitted, not hard-coded");
+        assert!(s["pose"].get("roll").is_none(), "roll must be omitted, not hard-coded");
     }
 
     #[test]
