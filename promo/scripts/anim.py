@@ -177,8 +177,8 @@ def render_beat2(outdir, nframes):
             glow_dot(base,sx,sy,15,(140,240,255))
             d.text((sx-44,sy-46),"a sound",font=f_sm,fill=MUTED+(200,))
         tag_a=int(smooth((t-6)/0.8)*255) if t>6 else 0
-        if tag_a: d.text((cx-150,cy+R+70),"your two ears, recreated = H R T F",font=f_sm,fill=CYAN+(tag_a,))
-        text_center(d,cx,196,"Now it can come from anywhere around you.",f_big,MUTED,int(smooth((t-0.4)/0.7)*255))
+        if tag_a: d.text((cx-170,cy+R+70),"two ears, two different signals - recreated",font=f_sm,fill=CYAN+(tag_a,))
+        text_center(d,cx,196,"Now it can be placed anywhere around you.",f_big,MUTED,int(smooth((t-0.4)/0.7)*255))
         lower_third(base,"Binaural recreates what each ear would really hear",f_cap,(t-1.0)/0.6)
         base.convert("RGB").save(os.path.join(outdir,f"{i:05d}.png"))
     print(f"beat2: {nframes} frames")
