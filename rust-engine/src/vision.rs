@@ -3,7 +3,9 @@
 //!
 //! Three frame sources (the product default is the first):
 //!   * **camera** — direct webcam capture (nokhwa, OS-native backend). The product's default pose
-//!     source; it also feeds the cockpit `/camera` preview.
+//!     source; it also feeds the cockpit `/camera` preview. Its device and format are live-switchable
+//!     from the cockpit's settings dialog without an engine restart, and a camera id is either a numeric
+//!     index or an opaque platform string — both are enumerated and selectable (BUG-34).
 //!   * **MJPEG** — pull JPEG frames from an MJPEG URL (e.g. a phone/IP camera), the passive tap the
 //!     R-S1 spike used.
 //!   * **image** — a single face image looped (an in-process smoke of the vision→pose wire).
