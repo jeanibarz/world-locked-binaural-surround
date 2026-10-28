@@ -67,7 +67,8 @@ impl Pipeline {
         Ok(Self { detector, mesh, anchors: short_range_anchors(), canonical_rigid })
     }
 
-    /// Run the full pipeline on one image. `None` if no face clears the detector threshold.
+    /// Run the full pipeline on one image. `Ok(None)` when no face is found: either no detector box
+    /// clears the threshold, or FaceMesh's face-presence score rejects the crop (issue #211).
     ///
     /// Returns `Err(String)` (never a panic) for an ONNX runtime error, a missing output tensor, or
     /// an output of the wrong length — so a mismatched model surfaces as a diagnosable error.
@@ -87,6 +88,24 @@ impl Pipeline {
         let crop = rect.crop_256(img);
         let mesh_in = Tensor::from_array(([1_i64, 256, 256, 3], crop)).map_err(ort_err)?;
         let mesh_out = self.mesh.run(ort::inputs! { "input_12" => mesh_in }).map_err(ort_err)?;
+
+        // Gate on FaceMesh's face-presence output before trusting the landmarks (issue #211).
+        // BlazeFace false-positives on posters and partly-occluded or turned heads; feeding such a
+        // crop to FaceMesh still yields 478 landmarks, so the old code always returned
+        // `Some(Estimate)` and the garbage landmarks solved to a random yaw that jumped the
+        // world-lock onto a non-face. FaceMesh emits a separate face-presence score; `Identity_1`
+        // is that score. The output names were verified for the bundled facemesh.onnx via the
+        // source face_landmarks_detector.tflite metadata (order preserved by tf2onnx) and live
+        // inference: Identity=face_landmarks (1434), Identity_1=presence (a RAW logit),
+        // Identity_2=tongue_out (already sigmoided in-graph — gating on it could never reject).
+        // So sigmoid-activate `Identity_1` and drop detections below the threshold. Read before the
+        // landmark projection/Kabsch so a rejected frame costs nothing extra.
+        let presence = named_f32(&mesh_out, "Identity_1")?; // 1×1×1×1 presence logit
+        let presence_logit = *presence.first().ok_or("facemesh presence tensor is empty")?;
+        if !face_present(presence_logit) {
+            return Ok(None);
+        }
+
         let lm = named_f32(&mesh_out, "Identity")?; // 1×1×1×1434
         check_landmark_len(lm.len())?;
 
@@ -137,6 +156,22 @@ fn check_landmark_len(len: usize) -> Result<(), String> {
     } else {
         Err(format!("facemesh landmark tensor length {len} != {want} ({NUM_LANDMARKS}x3)"))
     }
+}
+
+/// Minimum face-presence probability for a detection to be trusted. FaceMesh's `Identity_1`
+/// ("presence") output is a raw logit; a crop whose `sigmoid(logit)` is below this is treated as a
+/// BlazeFace false positive and dropped (`estimate` returns `Ok(None)`) instead of published as a
+/// garbage-yaw pose (issue #211). 0.5 is the natural logit-sign boundary (`sigmoid(0) == 0.5`).
+const FACE_PRESENCE_THRESHOLD: f32 = 0.5;
+
+/// Logistic sigmoid — maps FaceMesh's raw presence logit to a probability in `[0, 1]`.
+fn sigmoid(x: f32) -> f32 {
+    1.0 / (1.0 + (-x).exp())
+}
+
+/// Whether a FaceMesh presence logit clears [`FACE_PRESENCE_THRESHOLD`] once sigmoid-activated.
+fn face_present(presence_logit: f32) -> bool {
+    sigmoid(presence_logit) >= FACE_PRESENCE_THRESHOLD
 }
 
 /// Number of ONNX intra-op threads: a small cap so the two nets don't grab every core and starve
@@ -220,5 +255,26 @@ mod tests {
         assert!(check_landmark_len(1434).is_ok());
         assert!(check_landmark_len(1404).is_err()); // 468-point mesh
         assert!(check_landmark_len(0).is_err());
+    }
+
+    #[test]
+    fn sigmoid_centered_and_saturates() {
+        assert!((sigmoid(0.0) - 0.5).abs() < 1e-6);
+        assert!(sigmoid(20.0) > 0.99); // large positive logit -> ~1
+        assert!(sigmoid(-20.0) < 0.01); // large negative logit -> ~0
+    }
+
+    #[test]
+    fn presence_gate_rejects_false_positives() {
+        // A real FaceMesh crop yields a large positive presence logit (measured on the bundled
+        // facemesh.onnx: a face crop scores tens-to-hundreds) -> accepted.
+        assert!(face_present(57.5));
+        assert!(face_present(10.0));
+        // Logit 0 is the boundary; sigmoid(0) == 0.5 >= threshold -> accepted.
+        assert!(face_present(0.0));
+        // A BlazeFace false positive (poster / occluded / turned head) scores a negative presence
+        // logit (measured: a non-face crop ~-14) -> rejected, so no garbage yaw is published.
+        assert!(!face_present(-0.1));
+        assert!(!face_present(-14.0));
     }
 }
