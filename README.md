@@ -8,6 +8,11 @@ learns to externalise the sound into real space.**
 
 *The cockpit, live. Turn your head and the **world-locked ring** holds its speakers in place while the head, pose read-outs, load meters, and latency update in real time — the on-screen half of what the renderer is doing to the sound.*
 
+> **New here and just want to run it on Windows?** Start with
+> **[Getting started — install & first run](docs/getting-started.md)**: download →
+> install → prerequisites → launch → "did it work?", written for a first-time user
+> with no developer setup.
+
 ## The idea in one paragraph
 
 Headphone surround normally rotates with your head: turn left, and the whole
