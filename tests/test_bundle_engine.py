@@ -129,10 +129,11 @@ def test_source_hp_eq_is_a_resolvable_default_profile():
     """The copied ``hp_eq/`` must be a loadable 'default' profile, not a dangling config.
 
     Mirrors the engine: a profile dir is loadable iff it holds a config under a canonical name, and
-    every ``Include:``/``Convolution:`` path that resolves *inside* the profile dir must exist (the
-    FIRs the output-bus comp chain convolves). Pre-downmix ``baked_7p1_test\\*.wav`` convolutions
-    resolve *outside* ``hp_eq/`` — they're the engine's own per-speaker bake, not shipped here and
-    skipped by the loader — so they're deliberately not required.
+    every ``Include:``/``Convolution:`` FIR the engine actually *loads* must exist. The engine only
+    reconstructs the final L/R output buses, so it loads a FIR only when the command is selected on
+    bus L or R; the pre-downmix ``baked_7p1_test\\*.wav`` convolutions are selected on per-speaker
+    buses (``L_L``, ``R_L``, …) the loader skips, so — although they resolve *inside* ``hp_eq/`` —
+    they're never opened and are deliberately not required here (see ``loads_on_output_bus`` below).
     """
     assert HP_EQ_SRC.is_dir(), f"missing source profile dir: {HP_EQ_SRC}"
 
