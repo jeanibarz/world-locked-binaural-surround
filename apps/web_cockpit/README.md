@@ -22,8 +22,9 @@ webview (pywebview / Edge WebView2) driven by the existing engine.
 - `window.cockpit.applyState(state)` — one engine tick's view-model (JSON).
 - `window.cockpit.setCameraFrame(dataURL)` — a JPEG data URL for the camera panel.
 - Controls call `window.pywebview.api.<name>(...)`: `set_predict`, `recenter`,
-  `open_settings`, `set_drawer_tab`, `blind_play`, `blind_shuffle_start`,
-  `window_min/max/close`, `ready` (+ the settings controls, wired with settings.js).
+  `open_settings`, `window_min/max/close`, `ready` (+ the settings controls, wired
+  with settings.js). The experiments drawer (`set_drawer_tab`, `blind_play`,
+  `blind_shuffle_start`) is hidden until the engine implements it (#212).
 
 ## Native engine output controls
 

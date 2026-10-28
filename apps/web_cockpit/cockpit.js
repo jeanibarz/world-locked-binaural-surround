@@ -203,6 +203,13 @@
   // ---- live state -> DOM -----------------------------------------------------
   function setText(id, v) { const e = $(id); if (e != null && v != null) e.textContent = v; }
 
+  // Show a pose tile only when the backend supplies its value; hide it otherwise so the UI never
+  // displays a pose axis the connected engine doesn't actually estimate (#212).
+  function gatePoseTile(tileId, valId, v) {
+    const tile = $(tileId); if (tile) tile.style.display = v != null ? "" : "none";
+    if (v != null) setText(valId, v);
+  }
+
   // Legend built from the same segments as the bar, so colors/labels always match. Only rebuilt
   // when the (label, color) signature changes, not on every ~20 Hz tick.
   let legendSig = null;
@@ -272,7 +279,12 @@
 
     // ring / pose
     if (s.pose) {
-      setText("pose-yaw", s.pose.yaw); setText("pose-pitch", s.pose.pitch); setText("pose-roll", s.pose.roll);
+      setText("pose-yaw", s.pose.yaw);
+      // Show PITCH/ROLL only when the connected backend estimates them (#212): the Rust engine omits
+      // them so the tiles hide; the Python backend sends real values so they stay. Guards against a
+      // backend ever showing a pose axis it doesn't actually track.
+      gatePoseTile("tile-pitch", "pose-pitch", s.pose.pitch);
+      gatePoseTile("tile-roll", "pose-roll", s.pose.roll);
       if (s.pose.yaw_deg != null) {
         const r = `rotate(${-s.pose.yaw_deg} 160 160)`;
         const cone = $("radar-cone"); if (cone) cone.setAttribute("transform", r);
@@ -313,7 +325,6 @@
       }
       if (s.latency.note) setText("lat-note", s.latency.note);
     }
-    if (s.drawer_status) setText("drawer-status", s.drawer_status);
   }
 
   function setCameraFrame(dataURL) {
@@ -344,19 +355,9 @@
     });
     const sb = $("settings-btn"); if (sb) sb.addEventListener("click", () => window.open("/settings.html", "cockpit-settings", "width=576,height=1012"));
     const rc = $("recenter-btn"); if (rc) rc.addEventListener("click", () => call("recenter"));
-    const ss = $("shuffle-start"); if (ss) ss.addEventListener("click", () => call("blind_shuffle_start"));
-
-    document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => {
-      document.querySelectorAll(".tab").forEach((x) => x.classList.remove("tab-active"));
-      t.classList.add("tab-active"); call("set_drawer_tab", t.dataset.tab);
-    }));
+    // The experiments drawer is hidden (#212), so its tab/A-B/shuffle controls are not wired here.
     // Keep the preview + overlay aligned when the window (and the preview box) resizes.
     window.addEventListener("resize", () => drawPreview());
-    const abA = $("ab-a"), abB = $("ab-b");
-    if (abA && abB) {
-      abA.addEventListener("click", () => { abA.classList.add("ab-active"); abB.classList.remove("ab-active"); call("blind_play", "A"); });
-      abB.addEventListener("click", () => { abB.classList.add("ab-active"); abA.classList.remove("ab-active"); call("blind_play", "B"); });
-    }
   }
 
   // expose (for tests / manual injection)
@@ -402,7 +403,9 @@
         let m; try { m = JSON.parse(e.data); } catch (_) { return; }
         if (m.type === "state") applyState(m.state);
         else if (m.type === "toast") toast(m.message, m.kind);
-        else if (m.type === "drawer_status") { const d = $("drawer-status"); if (d) d.textContent = "Status: " + m.text; }
+        // The experiments drawer is hidden (#212), but the Python backend still pushes localization-
+        // test progress via drawer_status; surface it as a toast so that status isn't lost.
+        else if (m.type === "drawer_status" && m.text) toast(m.text, "info");
       };
       es.onerror = lost;   // dropped; close if it doesn't recover within the grace
     } catch (_) { /* no live feed */ }

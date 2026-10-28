@@ -106,10 +106,14 @@
             </g>
           </svg>
         </div>
+        <!-- PITCH/ROLL are shown only when the connected backend actually estimates them (#212):
+             cockpit.js hides #tile-pitch/#tile-roll when the live pose omits pitch/roll. The Rust
+             engine omits them (it tracks yaw only); the Python backend sends calibration-relative
+             values, so its tiles stay. The ring stage ships all three for the standalone preview. -->
         <div class="pose-tiles">
           <div class="tile"><span class="tile-label">YAW</span><span id="pose-yaw" class="tile-val">+4°</span></div>
-          <div class="tile"><span class="tile-label">PITCH</span><span id="pose-pitch" class="tile-val">−19°</span></div>
-          <div class="tile"><span class="tile-label">ROLL</span><span id="pose-roll" class="tile-val">+3°</span></div>
+          <div class="tile" id="tile-pitch"><span class="tile-label">PITCH</span><span id="pose-pitch" class="tile-val">−19°</span></div>
+          <div class="tile" id="tile-roll"><span class="tile-label">ROLL</span><span id="pose-roll" class="tile-val">+3°</span></div>
         </div>
       </div>
 
@@ -154,30 +158,10 @@
       </div>
     </section>
 
-    <!-- Row 3: experiments drawer -->
-    <div class="panel drawer">
-      <div class="drawer-tabs">
-        <button type="button" class="tab tab-active" data-tab="blind">Blind A/B</button>
-        <button type="button" class="tab" data-tab="loc">Localization test</button>
-        <button type="button" class="tab" data-tab="test">Test sources</button>
-        <span id="drawer-status" class="drawer-status">Status: idle</span>
-      </div>
-      <div class="drawer-body">
-        <div class="steps">
-          <span class="step step-active"><span class="step-num">1</span>Shuffle</span>
-          <span class="step-sep">›</span>
-          <span class="step">2 Compare</span>
-          <span class="step-sep">›</span>
-          <span class="step">3 Prefer</span>
-          <span class="step-sep">›</span>
-          <span class="step">4 Reveal</span>
-        </div>
-        <div class="drawer-actions">
-          <div class="ab-toggle"><button id="ab-a" type="button" class="ab ab-active">A</button><button id="ab-b" type="button" class="ab">B</button></div>
-          <button id="shuffle-start" type="button" class="btn btn-cyan btn-lg">Shuffle and start</button>
-        </div>
-      </div>
-    </div>
+    <!-- Row 3: experiments drawer (Blind A/B, Localization test, Test sources) is hidden until the
+         engine implements it (#212). The buttons toggled an active state the engine ignored
+         (`blind_*` were no-ops) and the tabs swapped no content, so the whole panel is removed rather
+         than left misleading. Re-add it here and wire the engine when the A/B feature lands. -->
   </div>
 </div>
 <script src="./cockpit.js"></script>
