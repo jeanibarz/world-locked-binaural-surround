@@ -1,0 +1,517 @@
+<title>World-Locked Promo Plan</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chivo:ital,wght@0,400;0,600;0,800;1,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  /* Layout concept: single-scroll review brief with a sticky section nav; cockpit-derived identity
+     (near-black navy, cyan signal accent, amber mode-badge warnings), mono for timecodes & data. */
+  :root{
+    --bg:#f5f7f8; --panel:#ffffff; --panel-2:#eef2f3; --ink:#11181c; --ink-2:#47555c;
+    --line:#d8e0e2; --accent:#0c8f82; --accent-ink:#06645b; --amber:#b5741a; --amber-bg:#fbf0dd;
+    --cyan-glow:rgba(12,143,130,.10); --good:#2e7d57; --crit:#b23a48;
+    --mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+    --sans:'IBM Plex Sans',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    --disp:'Chivo','IBM Plex Sans',system-ui,sans-serif;
+    --maxw:940px;
+  }
+  @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+    --bg:#070b10; --panel:#0e141c; --panel-2:#121b24; --ink:#e8eef0; --ink-2:#92a3ab;
+    --line:#1e2a33; --accent:#35e0d0; --accent-ink:#8ff3ea; --amber:#f5b556; --amber-bg:#24190a;
+    --cyan-glow:rgba(53,224,208,.08); --good:#4fd392; --crit:#ff7a86; color-scheme:dark;
+  }}
+  :root[data-theme="dark"]{
+    --bg:#070b10; --panel:#0e141c; --panel-2:#121b24; --ink:#e8eef0; --ink-2:#92a3ab;
+    --line:#1e2a33; --accent:#35e0d0; --accent-ink:#8ff3ea; --amber:#f5b556; --amber-bg:#24190a;
+    --cyan-glow:rgba(53,224,208,.08); --good:#4fd392; --crit:#ff7a86; color-scheme:dark;
+  }
+  *{box-sizing:border-box}
+  body{background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.6;
+    font-size:16px;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:var(--maxw);margin:0 auto;
+    padding-left:max(18px,env(safe-area-inset-left,0px));padding-right:max(18px,env(safe-area-inset-right,0px))}
+  h1,h2,h3{font-family:var(--disp);text-wrap:balance;line-height:1.15;margin:0}
+  h2{font-size:1.5rem;font-weight:800;letter-spacing:-.01em}
+  h3{font-size:1.08rem;font-weight:600}
+  p{margin:.5em 0}
+  a{color:var(--accent-ink);text-underline-offset:2px}
+  code,.mono{font-family:var(--mono)}
+  .eyebrow{font-family:var(--mono);font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;color:var(--accent-ink)}
+
+  /* sticky header band */
+  body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);
+    background:var(--panel);z-index:30}
+  header.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;background:var(--panel);
+    border-bottom:1px solid var(--line)}
+  .top .wrap{display:flex;align-items:center;gap:12px;padding-block:10px;flex-wrap:wrap}
+  .mark{width:11px;height:11px;border-radius:50%;background:var(--accent);
+    box-shadow:0 0 0 4px var(--cyan-glow);flex:none}
+  .top b{font-family:var(--disp);font-weight:800;font-size:.98rem}
+  .top .sub{color:var(--ink-2);font-size:.8rem}
+  nav.secs{margin-left:auto;display:flex;gap:4px;flex-wrap:wrap}
+  nav.secs a{font-family:var(--mono);font-size:.74rem;color:var(--ink-2);text-decoration:none;
+    padding:4px 8px;border-radius:7px;border:1px solid transparent}
+  nav.secs a:hover{color:var(--ink);border-color:var(--line);background:var(--panel-2)}
+
+  /* hero */
+  .hero{padding-block:34px 18px}
+  .hero h1{font-size:clamp(1.9rem,6vw,3rem);font-weight:800;letter-spacing:-.02em}
+  .hero h1 .lo{color:var(--accent-ink)}
+  .hero .lede{font-size:1.1rem;color:var(--ink-2);max-width:62ch;margin-top:12px}
+  .chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:18px}
+  .chip{font-family:var(--mono);font-size:.76rem;border:1px solid var(--line);background:var(--panel);
+    border-radius:999px;padding:5px 11px;display:inline-flex;gap:6px;align-items:center}
+  .chip b{color:var(--accent-ink);font-weight:600}
+  .draftflag{margin-top:18px;border:1px dashed var(--accent);background:var(--cyan-glow);
+    border-radius:12px;padding:12px 15px;font-size:.92rem}
+
+  section{padding-block:26px;border-top:1px solid var(--line);scroll-margin-top:72px}
+  .sec-h{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:4px}
+  .sec-h .n{font-family:var(--mono);color:var(--accent-ink);font-size:.8rem;font-weight:600}
+  .sec-note{color:var(--ink-2);font-size:.95rem;max-width:68ch;margin:6px 0 18px}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 18px}
+  .grid{display:grid;gap:12px}
+  @media(min-width:620px){.g2{grid-template-columns:1fr 1fr}.g3{grid-template-columns:1fr 1fr 1fr}}
+  .mini b{font-family:var(--disp)}
+  .mini .lbl{font-family:var(--mono);font-size:.7rem;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-2)}
+
+  /* beat list */
+  .beat{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden;margin-bottom:12px}
+  .beat>summary{list-style:none;cursor:pointer;display:grid;grid-template-columns:auto 1fr auto;gap:12px;
+    align-items:center;padding:13px 16px}
+  .beat>summary::-webkit-details-marker{display:none}
+  .beat .bi{font-family:var(--mono);font-weight:600;color:var(--accent-ink);background:var(--cyan-glow);
+    border:1px solid var(--line);border-radius:8px;min-width:34px;text-align:center;padding:4px 2px;font-size:.82rem}
+  .beat .bt{font-family:var(--disp);font-weight:600;font-size:1rem;min-width:0}
+  .beat .bt small{display:block;font-family:var(--mono);color:var(--ink-2);font-weight:400;font-size:.72rem;text-transform:uppercase;letter-spacing:.08em}
+  .beat .tc{font-family:var(--mono);font-size:.78rem;color:var(--ink-2);white-space:nowrap}
+  .beat .body{padding:0 16px 16px;display:grid;gap:12px}
+  @media(min-width:680px){.beat .body{grid-template-columns:1.3fr 1fr}}
+  .vo{background:var(--panel-2);border-left:3px solid var(--accent);border-radius:0 10px 10px 0;padding:11px 14px}
+  .vo .tag,.vis .tag{font-family:var(--mono);font-size:.68rem;letter-spacing:.12em;text-transform:uppercase;color:var(--accent-ink);display:block;margin-bottom:5px}
+  .vo p{margin:0;font-size:1.02rem;line-height:1.55}
+  .vis{display:grid;gap:10px;align-content:start}
+  .vis .os{font-size:.9rem}
+  .vis .os b{font-family:var(--mono);font-weight:500;background:#0000000f;padding:1px 5px;border-radius:4px}
+  :root[data-theme="dark"] .vis .os b,:root:not([data-theme="light"]) .vis .os b{background:#ffffff14}
+  @media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .vis .os b{background:#ffffff14}}
+  .vis .br{font-size:.86rem;color:var(--ink-2)}
+  .vis .br .srctc{font-family:var(--mono);color:var(--amber);font-size:.8rem}
+
+  /* tables */
+  .tscroll{overflow-x:auto;border:1px solid var(--line);border-radius:12px}
+  table{border-collapse:collapse;width:100%;font-size:.9rem;min-width:520px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-family:var(--mono);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2);background:var(--panel-2)}
+  tr:last-child td{border-bottom:none}
+  td .was{color:var(--crit);text-decoration:line-through;text-decoration-thickness:1px}
+  td .now{color:var(--good)}
+  .verdict{font-family:var(--mono);font-size:.68rem;font-weight:600;padding:2px 7px;border-radius:999px;white-space:nowrap}
+  .v-wrong{color:var(--crit);border:1px solid var(--crit)}
+  .v-soft{color:var(--amber);border:1px solid var(--amber)}
+
+  /* timeline strip */
+  .tl{display:flex;flex-direction:column;gap:3px;margin-top:4px}
+  .tl .lane{display:grid;grid-template-columns:70px 1fr;gap:8px;align-items:center}
+  .tl .lane .nm{font-family:var(--mono);font-size:.66rem;color:var(--ink-2);text-align:right}
+  .tl .track{position:relative;height:26px;background:var(--panel-2);border:1px solid var(--line);border-radius:6px;overflow:hidden;min-width:0}
+  .tl .blk{position:absolute;top:2px;bottom:2px;border-radius:4px;font-family:var(--mono);font-size:.6rem;
+    display:flex;align-items:center;justify-content:center;color:#02110f;overflow:hidden;white-space:nowrap;padding:0 3px}
+  .tl .b-vo{background:linear-gradient(var(--accent),var(--accent-ink));opacity:.9}
+  .tl .b-src{background:repeating-linear-gradient(45deg,var(--amber),var(--amber) 5px,#0000 5px,#0000 10px);border:1px solid var(--amber)}
+  .tl .b-asset{background:var(--cyan-glow);border:1px dashed var(--accent);color:var(--accent-ink)}
+  .axis{display:grid;grid-template-columns:70px 1fr;gap:8px;margin-top:2px}
+  .axis .ticks{display:flex;justify-content:space-between;font-family:var(--mono);font-size:.6rem;color:var(--ink-2)}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-family:var(--mono);font-size:.72rem;color:var(--ink-2);margin-top:12px}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .sw{width:14px;height:10px;border-radius:3px;display:inline-block}
+
+  ul.clean{margin:.3em 0;padding-left:1.15em}
+  ul.clean li{margin:.3em 0}
+  .todo{border:1px solid var(--amber);background:var(--amber-bg);border-radius:12px;padding:13px 16px}
+  .todo .tag{font-family:var(--mono);font-size:.7rem;letter-spacing:.1em;text-transform:uppercase;color:var(--amber);font-weight:600}
+
+  /* linkedin article */
+  .article{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:22px 20px;max-width:none}
+  .article .ah{font-family:var(--disp);font-weight:800;font-size:1.4rem;letter-spacing:-.01em;line-height:1.2}
+  .article .embed{margin:14px 0;border:1px dashed var(--line);border-radius:10px;padding:20px;
+    color:var(--ink-2);font-family:var(--mono);font-size:.8rem;background:var(--panel-2)}
+  .article .embed b{color:var(--accent-ink)}
+  .article h4{font-family:var(--disp);font-size:1.05rem;margin:18px 0 2px}
+  .article p{max-width:68ch}
+  .tags{font-family:var(--mono);font-size:.82rem;color:var(--accent-ink);margin-top:10px}
+  .copybar{display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
+  button.copy{font-family:var(--mono);font-size:.76rem;cursor:pointer;border:1px solid var(--line);
+    background:var(--panel-2);color:var(--ink);border-radius:8px;padding:6px 12px}
+  button.copy:hover{border-color:var(--accent)}
+  .altline{font-size:.85rem;color:var(--ink-2)}
+
+  .ask{display:grid;gap:10px}
+  .ask .q{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--amber);
+    border-radius:0 10px 10px 0;padding:11px 14px;font-size:.94rem}
+  .ask .q b{font-family:var(--disp)}
+
+  footer{border-top:1px solid var(--line);padding-block:24px 10px;color:var(--ink-2);font-size:.82rem}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<header class="top">
+  <div class="wrap">
+    <span class="mark" aria-hidden="true"></span>
+    <b>World-Locked Binaural Surround</b>
+    <span class="sub">Promo video — script &amp; montage plan</span>
+    <nav class="secs" aria-label="Sections">
+      <a href="#decisions">Brief</a>
+      <a href="#review">Review</a>
+      <a href="#accuracy">Fixes</a>
+      <a href="#script">Script</a>
+      <a href="#montage">Montage</a>
+      <a href="#article">LinkedIn</a>
+      <a href="#pipeline">Production</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="hero">
+    <span class="eyebrow">Draft for your feedback · v5 — concise, latency section removed</span>
+    <h1>Headphone surround that <span class="lo">stays put</span> when you turn your head.</h1>
+    <p class="lede">A ~2½-minute explainer for LinkedIn, plus the companion article it embeds. Tight, no filler, and no latency deep-dive. It ladders through the real story: plain stereo → binaural → why head-tracking is the missing piece.</p>
+    <div class="chips">
+      <span class="chip">Language <b>English</b></span>
+      <span class="chip">Length <b>Tight cut ≈ 2:40</b></span>
+      <span class="chip">Voice <b>Neural TTS (edge-tts)</b></span>
+      <span class="chip">+ <b>LinkedIn article</b> (video embedded)</span>
+    </div>
+    <div class="draftflag">
+      <strong>This is a plan, not the finished video.</strong> Read the script and montage below and tell me what to change.
+      On your go, I assemble a rough cut automatically (ffmpeg + TTS) from your existing <span class="mono">8:47</span> cockpit capture.
+      Everything here is reversible — nothing is rendered or posted yet.
+    </div>
+  </div>
+
+  <!-- DECISIONS -->
+  <section id="decisions">
+    <div class="sec-h"><span class="n">01</span><h2>The brief</h2></div>
+    <p class="sec-note">What we're making and the raw material we start from. Your three choices (English, deep-dive length, TTS) are locked in; everything downstream follows them.</p>
+    <div class="grid g3">
+      <div class="card mini"><div class="lbl">Source footage</div><b>8:47 · 3740×2160 · 30fps</b><p style="margin:.3em 0 0;color:var(--ink-2);font-size:.85rem">One continuous cockpit screen-capture. Mic audio is your live commentary — dropped entirely; replaced by scripted VO.</p></div>
+      <div class="card mini"><div class="lbl">The one idea</div><b>World-locked stage</b><p style="margin:.3em 0 0;color:var(--ink-2);font-size:.85rem">Virtual speakers stay fixed to the room; your head moves. A webcam tracks the head so only the render changes.</p></div>
+      <div class="card mini"><div class="lbl">Audience</div><b>LinkedIn engineers</b><p style="margin:.3em 0 0;color:var(--ink-2);font-size:.85rem">Technically literate, <em>not</em> audio experts. Every term gets a plain-language gloss; jargon lives on-screen, not in the voice.</p></div>
+    </div>
+  </section>
+
+  <!-- REVIEW -->
+  <section id="review">
+    <div class="sec-h"><span class="n">02</span><h2>How this script was pressure-tested</h2></div>
+    <p class="sec-note">You asked for many sub-agents to brainstorm, criticise, and simulate feedback — then a dedicated communication review. Ten reviewers across two waves, plus your own notes.</p>
+    <div class="grid g2" style="margin-bottom:14px">
+      <div class="card"><h3>Wave 1 · Draft &amp; fact-check (4 reviewers)</h3><p style="font-size:.9rem;color:var(--ink-2);margin:.4em 0 0">First-time-viewer simulation, clarity/TTS read-aloud, a <b>DSP accuracy audit</b> against the repo, and a narrative/LinkedIn angle. Produced the accuracy fixes below.</p></div>
+      <div class="card"><h3>Wave 2 · Communication review (6 lenses)</h3><p style="font-size:.9rem;color:var(--ink-2);margin:.4em 0 0">Jargon · concision · hard-ideas intuition · narrative arc · first-contact &amp; high-leverage parts · <b>rigor↔accessibility + tone</b>. Prime directive: clarity may relocate a caveat, never drop or strengthen it.</p></div>
+    </div>
+    <div class="card" style="margin-bottom:12px;border-color:var(--accent)">
+      <h3 style="margin-bottom:6px;color:var(--accent-ink)">★ Your notes, applied</h3>
+      <p style="font-size:.92rem;margin:0">The opening climbs the honest ladder (not a jump to "surround swings with your head," which only bites once you already have binaural):</p>
+      <ul class="clean" style="font-size:.92rem">
+        <li><b>1 · Plain stereo</b> — sound collapses to a left-right line inside your head. No externalisation. The baseline most people live with.</li>
+        <li><b>2 · Binaural</b> — recreate what each ear would really hear (the HRTF), and sound gains direction and lifts out of your head.</li>
+        <li><b>3 · The catch</b> — binaural is static; turn your head and the scene rotates with you, which real rooms never do, so it snaps back inside.</li>
+        <li><b>4 · Head-tracking</b> — a webcam follows your head, and <em>because</em> the app knows where you're facing, it keeps the speakers world-locked while you move. That's the gap this project closes.</li>
+      </ul>
+      <p style="font-size:.92rem;margin:.4em 0 0">Also applied: the VO was tightened (the beat-3/beat-4 webcam overlap and the "in-head / out-in-the-room" phrase stacking) with no fact or caveat lost; the mug/parallax analogy stays. And the <b>whole latency section is cut</b> — it added complexity without a clear payoff, and the real setup changed (see note under the script).</p>
+    </div>
+  </section>
+
+  <!-- ACCURACY -->
+  <section id="accuracy">
+    <div class="sec-h"><span class="n">03</span><h2>Accuracy corrections (carried through every version)</h2></div>
+    <p class="sec-note">These are the things you'd have been (rightly) called out for in the comments. The audit cites your journal; the script and article below already use the corrected wording. Worth a careful read — this is where credibility is won or lost.</p>
+    <div class="tscroll">
+      <table>
+        <thead><tr><th>Claim in the first draft</th><th>Verdict</th><th>What the script now says (and why)</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>"World-locking <span class="was">trains your brain</span> / you externalise, with better front-back and up-down."</td>
+            <td><span class="verdict v-soft">HYPOTHESIS</span></td>
+            <td><span class="now">Framed as the bet the project is built to test — in the video too.</span> Your own <code>requirements §1</code> calls this "the perceptual hypothesis"; no human A/B test exists yet (M7 not started). Stating it as a result was the single most attackable line.</td>
+          </tr>
+          <tr>
+            <td>"HRTF" named as a <span class="was">third cue</span> beside ITD and ILD.</td>
+            <td><span class="verdict v-soft">PHYSICS</span></td>
+            <td><span class="now">HRTF = the one filter that bundles the time, level and spectral cues; it gives direction, not distance.</span> Avoids a category error an expert would flag.</td>
+          </tr>
+          <tr>
+            <td>"Built <span class="was">in the open</span>." · webcam as <span class="was">6-DoF</span> tracker.</td>
+            <td><span class="verdict v-soft">MISLEADING</span></td>
+            <td><span class="now">"Built in public." Webcam = head-<em>orientation</em> (3-DoF) tracker.</span> Repo is all-rights-reserved (not open-source); yaw/pitch/roll is three DoF, so "6-DoF" contradicted the text.</td>
+          </tr>
+          <tr>
+            <td>Tracker reliable "<span class="was">across the range you move while seated</span>."</td>
+            <td><span class="verdict v-soft">IMPRECISE</span></td>
+            <td><span class="now">"About 45° to either side."</span> MediaPipe loses the face past ~±50°; product range is ±45° (journal 05).</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="sec-note" style="margin-top:10px">The earlier latency corrections (MME→WASAPI, pose-age, prediction) are gone with the latency section — the real setup now is VB-Audio Cable in, the normal Windows device out, no custom driver and no prediction.</p>
+  </section>
+
+  <!-- SCRIPT -->
+  <section id="script">
+    <div class="sec-h"><span class="n">04</span><h2>The script — timed, 6 beats</h2></div>
+    <p class="sec-note">The ladder: <strong>stereo-in-head → binaural lifts it out → the catch (you turn your head) → the fix (webcam enables world-lock) → how → under the hood → status &amp; CTA</strong>. <span class="mono">VO</span> is exactly what the TTS voice says (no em-dashes, numbers as words, acronyms spelled). <span class="mono" style="color:var(--amber)">SRC</span> timecodes point at real moments in your capture. Total ≈ 2:40 — latency section cut per your note; every remaining fact and caveat kept.</p>
+
+    <details class="beat" open>
+      <summary><span class="bi">1</span><span class="bt">The hook — sound stuck in your head <small>The universal problem</small></span><span class="tc">0:00–0:16</span></summary>
+      <div class="body">
+        <div class="vo"><span class="tag">Voiceover</span><p>Put on headphones and play anything. The sound sits in a line between your ears, stuck inside your head. Even "surround" modes just smear that line a little wider. Real speakers feel like they're out in the room. Can headphones do the same? With nothing but your webcam?</p></div>
+        <div class="vis">
+          <div class="os"><span class="tag">On screen (frame 1, muted-safe)</span>A dot slides along a line between two ears inside a head. Caption: <b>On headphones, sound is stuck inside your head.</b></div>
+          <div class="br"><span class="tag">B-roll</span>Stereo-in-head graphic, then cockpit wide with the head turning and the radar cone swinging. <span class="srctc">ASSET + SRC 03:05</span></div>
+        </div>
+      </div>
+    </details>
+
+    <details class="beat" open>
+      <summary><span class="bi">2</span><span class="bt">Binaural — lifting sound out of your head <small>The improvement</small></span><span class="tc">0:16–0:45</span></summary>
+      <div class="body">
+        <div class="vo"><span class="tag">Voiceover</span><p>Here's why. Plain stereo only controls what's louder in each ear, so sound moves left and right, never in front or behind. In a real room, each ear also hears a sound slightly sooner, and your head and ears add a tonal fingerprint for direction. Capture all of that in one filter, the H R T F, and headphones can place a sound anywhere around you. That's binaural, and it's what lifts sound out of your head.</p></div>
+        <div class="vis">
+          <div class="os"><span class="tag">On screen</span>Captions: <b>Stereo = left/right only</b> → <b>Binaural = what each ear really hears (HRTF)</b></div>
+          <div class="br"><span class="tag">B-roll</span>Binaural diagram: head + two ears + a source moving around; the two-ear clues. <span class="srctc">ASSET + SRC 05:45</span></div>
+        </div>
+      </div>
+    </details>
+
+    <details class="beat" open>
+      <summary><span class="bi">3</span><span class="bt">The catch, and the fix <small>Why head-tracking + the honest bet</small></span><span class="tc">0:45–1:26</span></summary>
+      <div class="body">
+        <div class="vo"><span class="tag">Voiceover</span><p>But binaural is computed for a fixed head. Turn your head and the whole scene turns with you, which real rooms never do, so your brain stops believing it and the sound snaps back inside. Movement is the giveaway. Look at a mug on your desk and move your head. It holds its place, because it's really out there. A sound stuck to your head doesn't. The fix: a webcam tracks your head, and because the app knows where you're facing, it keeps the speakers locked to the room instead. Turn your head now, and only the render changes, the speakers stay put. Does that finally pull the sound out of your head for good? That's the bet I'm testing.</p></div>
+        <div class="vis">
+          <div class="os"><span class="tag">On screen</span>Captions: <b>Binaural is static — turn your head, the scene turns too</b> · <b>World-locked: the room stays still, you move</b> · honesty caption <b>Hypothesis — now testing with real listeners</b></div>
+          <div class="br"><span class="tag">B-roll</span>Parallax graphic (mug stays / smudge moves), then the <em>WORLD-LOCKED RING</em> money shot: head turns, cone sweeps, dots stay fixed. <span class="srctc">ASSET + SRC 02:00–02:15 · 03:05 · 03:35–03:50 · 07:45</span></div>
+        </div>
+      </div>
+    </details>
+
+    <details class="beat" open>
+      <summary><span class="bi">4</span><span class="bt">The webcam head-tracker <small>The clever bit</small></span><span class="tc">1:26–1:43</span></summary>
+      <div class="body">
+        <div class="vo"><span class="tag">Voiceover</span><p>The tracker is just a face model on your webcam, no special hardware, accurate across about forty-five degrees to either side. Many times a second, it finds where each speaker sits relative to your head, and re-renders to match.</p></div>
+        <div class="vis">
+          <div class="os"><span class="tag">On screen</span><b>Your webcam → head pose → re-render, many times a second</b></div>
+          <div class="br"><span class="tag">B-roll</span>Zoom the webcam preview with the face mesh; head-pose numbers (yaw/pitch/roll) updating; radar reacting in lockstep. <span class="srctc">SRC 05:35–05:50 · 06:05–06:15</span></div>
+        </div>
+      </div>
+    </details>
+
+    <details class="beat" open>
+      <summary><span class="bi">5</span><span class="bt">Under the hood <small>How it hooks into your PC</small></span><span class="tc">1:43–2:09</span></summary>
+      <div class="body">
+        <div class="vo"><span class="tag">Voiceover</span><p>Under the hood, the heavy lifting is a Rust engine running the audio on a normal processor, about five times faster than real time, no graphics card needed. Any app plays into a virtual audio cable, the engine renders it head-tracked, and sends it to your headphones through Windows. Along the way, it applies your headphone correction and a live equalizer.</p></div>
+        <div class="vis">
+          <div class="os"><span class="tag">On screen</span><b>Rust engine · VB-Audio Cable in · your normal headphones out · live EQ</b></div>
+          <div class="br"><span class="tag">B-roll</span>Pan across the SYSTEM panel, the EQ, the output meter, the mode badges. Calm, steady UI shots. <span class="srctc">SRC 00:10–01:05 · 06:05</span></div>
+        </div>
+      </div>
+    </details>
+
+    <details class="beat" open>
+      <summary><span class="bi">6</span><span class="bt">Status, vision &amp; CTA <small>The ask</small></span><span class="tc">2:09–2:40</span></summary>
+      <div class="body">
+        <div class="vo"><span class="tag">Voiceover</span><p>Today it runs end to end on Windows, all in one cockpit. Next: tuning the ear filters to your own ears, presets, and an AI judge that scores your setup the same way every time. The goal is the feel of a multi-thousand-dollar rig, in software, on headphones you already own. It's being built in public. If you game or mix on headphones, comment EARS and I'll send you the build.</p></div>
+        <div class="vis">
+          <div class="os"><span class="tag">On screen (hold ~8 s)</span>Persistent CTA: <b>Comment "EARS" → I'll send you the build</b> · <b>built in public</b></div>
+          <div class="br"><span class="tag">B-roll</span>Wide calm cockpit, then end card: app name + icon + link. <span class="srctc">SRC 00:45 + ASSET end card</span></div>
+        </div>
+      </div>
+    </details>
+
+    <div class="todo" style="margin-top:6px">
+      <span class="tag">⚠ One thing I can't fake — the audio A/B demo</span>
+      <p style="margin:.4em 0 0;font-size:.92rem">Every reviewer flagged the same credibility gap: it's an <em>audio</em> product shown only as a silent screen capture. The strongest proof is an <strong>A/B</strong> you can ladder three ways: plain stereo (in-head) → static binaural (out-of-head but rotates) → world-locked (stays put). Your capture's audio is your mic, not the rendered output, so I can't extract it. <strong>Best fix:</strong> record those short clips on Windows; I slot them into beats 1–3. I've reserved the spots.</p>
+    </div>
+  </section>
+
+  <!-- MONTAGE -->
+  <section id="montage">
+    <div class="sec-h"><span class="n">05</span><h2>The montage plan</h2></div>
+    <p class="sec-note">How the ~2:40 timeline is assembled. The voice track is continuous; picture is cut from your capture at the real timecodes above, with a few built graphics on top. Captions are burned in throughout (most LinkedIn views are muted). Nothing needs re-shooting except the optional audio A/B.</p>
+
+    <div class="card">
+      <div class="tl" role="img" aria-label="Timeline: six voiceover beats across about two minutes forty, with source-footage clips and built graphic assets layered on top">
+        <div class="lane"><span class="nm">VO</span><div class="track">
+          <span class="blk b-vo" style="left:0%;width:10%">1 hook</span>
+          <span class="blk b-vo" style="left:10%;width:18%">2 binaural</span>
+          <span class="blk b-vo" style="left:28%;width:26%">3 catch + fix</span>
+          <span class="blk b-vo" style="left:54%;width:10%">4 cam</span>
+          <span class="blk b-vo" style="left:64%;width:17%">5 engine</span>
+          <span class="blk b-vo" style="left:81%;width:19%">6 CTA</span>
+        </div></div>
+        <div class="lane"><span class="nm">Source</span><div class="track">
+          <span class="blk b-src" style="left:2%;width:8%">03:05</span>
+          <span class="blk b-src" style="left:12%;width:14%">05:45</span>
+          <span class="blk b-src" style="left:30%;width:22%">02:00·03:40</span>
+          <span class="blk b-src" style="left:54%;width:10%">05:35</span>
+          <span class="blk b-src" style="left:64%;width:17%">00:10–01:05</span>
+          <span class="blk b-src" style="left:83%;width:12%">00:45</span>
+        </div></div>
+        <div class="lane"><span class="nm">Graphics</span><div class="track">
+          <span class="blk b-asset" style="left:0%;width:10%">stereo/title</span>
+          <span class="blk b-asset" style="left:10%;width:18%">binaural</span>
+          <span class="blk b-asset" style="left:28%;width:26%">parallax + hyp.</span>
+          <span class="blk b-asset" style="left:92%;width:8%">end/CTA</span>
+        </div></div>
+      </div>
+      <div class="axis"><span></span><div class="ticks"><span>0:00</span><span>1:00</span><span>2:00</span><span>2:40</span></div></div>
+      <div class="legend">
+        <span><span class="sw" style="background:linear-gradient(90deg,var(--accent),var(--accent-ink))"></span>Voiceover beat</span>
+        <span><span class="sw b-src" style="background:repeating-linear-gradient(45deg,var(--amber),var(--amber) 4px,#0000 4px,#0000 8px);border:1px solid var(--amber)"></span>Source clip (real TC)</span>
+        <span><span class="sw" style="background:var(--cyan-glow);border:1px dashed var(--accent)"></span>Built graphic</span>
+      </div>
+    </div>
+
+    <div class="grid g2" style="margin-top:14px">
+      <div class="card">
+        <h3>Graphics to build</h3>
+        <ul class="clean">
+          <li><b>Stereo-in-head diagram</b> (beat 1) — a dot sliding on a line between two ears; the universal problem, muted-safe.</li>
+          <li><b>Binaural diagram</b> (beat 2) — head + two ears + a source moving around; the richer clues → HRTF.</li>
+          <li><b>Parallax diagram</b> (beat 3) — a mug holds its place while the view sways; a smudge travels with you. Carries the "why motion" aha.</li>
+          <li><b>Honesty caption</b> (beat 3) — "Hypothesis — now testing with real listeners," so the muted viewer sees the caveat too.</li>
+          <li><b>Lower-third captions</b> — one per beat, from the On-screen column.</li>
+          <li><b>End card + persistent CTA</b> — app name + <code>app-icon-1024.png</code> (in repo) + "Comment EARS" + link.</li>
+          <li><b>Burned-in subtitles / .srt</b> — exact VO text, for silent autoplay + accessibility.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>Treatment &amp; specs</h3>
+        <ul class="clean">
+          <li><b>Framing:</b> source is 3740×2160 (≈16:9). Master at <b>1920×1080</b>; gentle punch-ins/pans to the relevant panel instead of showing the whole UI at once.</li>
+          <li><b>Pace:</b> cut on the voice; hold longer on the radar money shot; subtle 2–4% slow push on calm panels.</li>
+          <li><b>Audio:</b> VO at the front; a low ambient/music bed (royalty-free) about −22 LUFS under it; duck for the A/B demo.</li>
+          <li><b>Captions:</b> always on — most LinkedIn views are muted, so the hook and CTA must be readable silent.</li>
+          <li><b>Two exports:</b> 16:9 for the article embed; an optional 1:1 or 4:5 cut for the feed.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- LINKEDIN -->
+  <section id="article">
+    <div class="sec-h"><span class="n">06</span><h2>The LinkedIn article</h2></div>
+    <p class="sec-note">The long-form complement — it embeds the video but stands on its own for people who don't press play. It climbs the same ladder in plain words. ~800 words. Draft; edit freely.</p>
+
+    <div class="copybar">
+      <button class="copy" id="copyArticle">Copy article text</button>
+      <span class="altline" id="copyState"></span>
+    </div>
+
+    <article class="article" id="articleBody">
+      <div class="ah">I'm Chasing a $4,000 Surround Rig's Feel in Software — With Just a Webcam</div>
+      <p>Put on headphones and play anything — a film, a game, a track. The sound sits in a line between your ears, stuck inside your head. Even "surround" and "spatial audio" modes mostly just smear that line a little wider. Real speakers feel nothing like that: they feel like they're out in the room. The paid way to get that feel on headphones is a multi-thousand-dollar hardware rig like the Smyth Realiser. I've been building a renderer to chase the same out-in-the-room feel in software, with no special hardware — just your webcam.</p>
+
+      <div class="embed">▶ <b>[ Embedded video — ~2½-minute explainer ]</b><br><b>Short version:</b> the engine runs on Windows today; whether world-locking actually gets sound out of your head is the hypothesis I'm now testing with real listeners. Below, I go a little deeper than the video does.</div>
+
+      <h4>First, why headphones trap sound in your head</h4>
+      <p>Plain stereo controls exactly one thing: how loud each ear is. That's enough to slide a sound left or right, but it can't place it in front of you, behind you, or above — so everything collapses onto a line running ear to ear, inside your skull. That's the baseline most people live with, and it's why "surround" on stock headphones underwhelms: panning a sound wider isn't the same as putting it out in the room.</p>
+
+      <h4>Binaural: give each ear what it would really hear</h4>
+      <p>In a real room your ears get far more than loudness. A source reaches one ear slightly earlier and slightly louder, and the shape of your head and outer ears stamps a direction-dependent "tonal fingerprint" onto it. Audio engineers bundle all of that into one filter — your Head-Related Transfer Function (HRTF). Recreate what each ear would actually receive, and you get binaural audio: now a sound can sit to your left, in front, or overhead, and it starts to feel like it's out of your head rather than pasted between your ears. This is the step "spatial audio" is built on.</p>
+
+      <h4>The catch binaural can't fix on its own: you turn your head</h4>
+      <p>Here's the problem. A binaural scene is computed for one fixed head position. Turn your head and the whole scene turns with you — the voice that was dead ahead is suddenly off to your left. Real rooms never behave that way: the speakers stay where they are while you move, and your brain leans hard on that steadiness. Look at a mug on your desk and sway your head — it holds its place because it's really out there; a smudge on your glasses travels with you because it isn't. Your ears run the same test. A sound that stays put as you move reads as real; a sound that rotates with your head gets filed back under "inside my head." That missing cue — stability under your own motion — is exactly where head-tracking comes in.</p>
+
+      <h4>The fix: lock the speakers to the world</h4>
+      <p>Head-tracking is the enabler. Because a webcam follows where your head is pointing in real time, the renderer can keep a full virtual 7.1 set (seven speakers around you plus a subwoofer) world-locked — fixed to your room, not your head. When you turn, the speakers don't move; only the calculation that renders them to your two ears changes. The gunfire stays where it happened, and your ears are what moved, not the room. The bet is that restoring that stability-under-motion cue is what finally keeps the sound out in the room — the hypothesis this whole project is built to test, not yet a measured result.</p>
+
+      <h4>No special hardware — just your webcam</h4>
+      <p>The tracker is a face-landmark model reading yaw, pitch and roll — how far you turn, tilt and nod — straight from the webcam, reliably across about 45° to either side, the range you actually use glancing between screens. Many times a second, the engine computes each virtual speaker's direction relative to your current pose and runs it through the matching ear filter (its impulse response) for that angle. Turn your head; the render follows, block by block. Using a commodity webcam as a head-orientation (3-DoF) tracker — instead of a $200 motion-sensor (IMU) headset — is the part I'm most happy with.</p>
+
+      <h4>What works today — and the one thing I haven't proven yet</h4>
+      <p>Running end-to-end on Windows right now: a world-locked 7.1 stage, webcam head-tracking, a native Rust DSP (digital signal processing) core that runs ~5× faster than real time on an ordinary CPU with no graphics card, a live parametric equalizer (per-band tone correction) and a personal headphone correction, all driven from one cockpit. On the plumbing: any app plays into VB-Audio Cable (the virtual audio device that ships with VoiceMeeter), and the engine outputs through your normal Windows sound device — no custom driver. Next: fine-tuning those ear filters toward your own ears, presets, and an AI "judge" — a synthetic listener — that scores a calibration consistently instead of leaning on an unreliable ear. The aspiration is the out-in-the-room feel of a multi-thousand-dollar hardware rig like the Smyth Realiser, in software, on the headphones you already own. To be straight: that out-of-head benefit is the hypothesis I'm testing, not a shipped result.</p>
+
+      <h4>Built in public — and I want your ears</h4>
+      <p>It's being built in public, block by block, with a living research journal that records every dead end and negative result. It'll be donationware — free to use, pay what you like. If you game or mix on headphones, I'd love your ears on it before the next release: comment "EARS" and I'll send you the build (and the quick setup) plus a two-minute calibration. Your feedback picks the next block I build. And tell me honestly: does surround sound living "inside your head" bother you as much as it bothers me?</p>
+
+      <p class="tags">#SpatialAudio #AudioDSP #Rust #GameAudio #BuildInPublic</p>
+    </article>
+
+    <div class="grid g2" style="margin-top:12px">
+      <div class="card"><h3>Headline options</h3><ul class="clean" style="font-size:.9rem">
+        <li><b>In use:</b> "I'm Chasing a $4,000 Surround Rig's Feel in Software — With Just a Webcam" <span class="altline">(keeps the money hook; "chasing…feel" = honest about aspiration)</span></li>
+        <li>"Making Headphone Surround Stay Put When You Turn Your Head — With Just a Webcam" <span class="altline">(best for search/findability; no overclaim)</span></li>
+        <li>"Your Headphones Glue Surround to Your Skull. I'm Using Your Webcam to Unstick It." <span class="altline">(punchiest; weakest on keywords)</span></li>
+      </ul></div>
+      <div class="card"><h3>Notes</h3><ul class="clean" style="font-size:.9rem">
+        <li>Video embedded high (after the hook) so scrollers can play, readers can skip.</li>
+        <li>Latency is deliberately left out of both the video and the article.</li>
+        <li>Soft donationware mention only; no donation ask in the video itself.</li>
+        <li>5 hashtags max (LinkedIn penalises stuffing).</li>
+        <li>"Comment EARS" can be throttled by LinkedIn as engagement-bait; a softer "tell me in the comments if you want the build" is the fallback if reach dips.</li>
+      </ul></div>
+    </div>
+  </section>
+
+  <!-- PIPELINE -->
+  <section id="pipeline">
+    <div class="sec-h"><span class="n">07</span><h2>Production pipeline &amp; next step</h2></div>
+    <p class="sec-note">On your approval I can produce a rough cut automatically — no external editor needed — then we iterate on the real thing.</p>
+    <div class="grid g2">
+      <div class="card">
+        <h3>How I'd build it</h3>
+        <ul class="clean">
+          <li><b>Voice:</b> <code>edge-tts</code>, one WAV per beat. Recommended voice <b>en-US-AndrewNeural</b> (warm, conversational); alt <b>en-US-BrianNeural</b> or <b>en-GB-RyanNeural</b>. Slight rate −4% for clarity. I'll send a 15-s sample of two voices to pick from.</li>
+          <li><b>Picture:</b> ffmpeg trims your capture at the timecodes above, punch-ins + crossfades, built graphics as overlays.</li>
+          <li><b>Captions:</b> generated <code>.srt</code> from the VO text, burned in for muted autoplay.</li>
+          <li><b>Mix:</b> VO + ducked music bed; normalise to −14 LUFS (LinkedIn).</li>
+          <li><b>Runs locally</b> on your RTX 3090 box; no cloud, no upload.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>What I need from you</h3>
+        <ul class="clean">
+          <li>✅ Approve / redline the <b>script</b> and <b>montage</b> (this ~2:40 cut without latency).</li>
+          <li>🎙 Pick the <b>TTS voice</b> (I'll send samples), or say you'll record it yourself.</li>
+          <li>🔊 Decide on the <b>audio A/B demo</b>: record the stereo / static-binaural / world-locked clips, or ship v1 without them.</li>
+          <li>📏 Length feels right at <b>~2:40</b>? I can trim further or add a beat back.</li>
+          <li>🧩 Confirm the <b>plumbing wording</b>: "VB-Audio Cable in, normal Windows device out, no custom driver, no prediction." Correct as stated?</li>
+        </ul>
+      </div>
+    </div>
+
+    <h3 style="margin:20px 0 6px;font-family:var(--disp)">Open questions worth your call</h3>
+    <div class="ask">
+      <div class="q"><b>Licensing wording.</b> I've written "built in public," not "open source," because the repo is all-rights-reserved. If you're planning to open-source before posting, I'll say so instead.</div>
+      <div class="q"><b>The "trains your brain" claim.</b> Kept strictly as a hypothesis, in the video too. If you have <em>any</em> listening-test data (even informal, n=1), I can upgrade one line from "the bet is…" to "early listening suggests…". Otherwise it stays a hypothesis.</div>
+      <div class="q"><b>Webcam degrees of freedom.</b> I wrote "3-DoF (orientation)" — yaw, pitch, roll. If the tracker also recovers head <em>position</em> (translation), tell me and I'll say "6-DoF" and add it to the list.</div>
+      <div class="q"><b>Accessibility angle.</b> The "for people who can't set up a speaker room" line sits in the article, not the VO (for time). Want it in the video too?</div>
+    </div>
+  </section>
+
+  <footer>
+    <p>Draft v5 (concise · latency removed) · English · ~2:40 · neural TTS · + LinkedIn article. Built from your <span class="mono">2026-10-28 18-53-47.mkv</span> capture (8:47). Script fact-checked against README, requirements.md and the research journal, rewritten after a six-lens communication review, then tightened and cut on your notes. Nothing rendered or posted yet — your move.</p>
+  </footer>
+</div>
+
+<script>
+  (function(){
+    var btn=document.getElementById('copyArticle'),
+        state=document.getElementById('copyState'),
+        body=document.getElementById('articleBody');
+    if(!btn)return;
+    btn.addEventListener('click',function(){
+      var txt=body.innerText.replace(/\n{3,}/g,'\n\n').trim();
+      function ok(){state.textContent='Copied ✓';setTimeout(function(){state.textContent='';},2200);}
+      function fail(){
+        try{var r=document.createRange();r.selectNodeContents(body);
+          var s=window.getSelection();s.removeAllRanges();s.addRange(r);
+          state.textContent='Selected — press ⌘/Ctrl-C';}catch(e){state.textContent='Select the text manually';}
+      }
+      if(navigator.clipboard&&navigator.clipboard.writeText){
+        navigator.clipboard.writeText(txt).then(ok).catch(fail);
+      }else{fail();}
+    });
+  })();
+</script>

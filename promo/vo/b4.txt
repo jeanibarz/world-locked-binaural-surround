@@ -1,0 +1,1 @@
+The tracker is just a face model on your webcam, no special hardware, accurate across about forty-five degrees to either side. Many times a second, it finds where each speaker sits relative to your head, and re-renders to match.
