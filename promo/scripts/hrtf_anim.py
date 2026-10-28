@@ -53,35 +53,34 @@ for i in range(Nb):
     fig.savefig(os.path.join(d,f"{i:05d}.png")); [a2.remove() for a2 in fig.axes if a2 not in (ax,ins)]
 plt.close(fig); print("fb_spec done")
 
-# ===== clip 4: individuality -> median + 10-90 band, one "you" line =====
+# ===== clip 4: individuality -> many real people, drawn one by one =====
 curves=[]
 for f_ in SOFA[:30]:
     try:
         ir2,sp2=load(f_); idx2,az2=horiz(sp2); j=idx2[np.argmin(np.abs(az2-45))]
-        curves.append(octave_smooth(magdb(ir2[j,1])))
+        curves.append(octave_smooth(magdb(ir2[j,1]),frac=6))   # light smoothing keeps the pinna notches
     except Exception: pass
-C=np.stack(curves,axis=0); nppl=C.shape[0]
-med=np.median(C,axis=0); p10=np.percentile(C,10,axis=0); p90=np.percentile(C,90,axis=0)
-you=C[7]  # one representative person
-d=mkd("fc_indiv"); fig,ax=vc.new_fig(); Nc=260
+nppl=len(curves); YOU=7
+d=mkd("fc_indiv"); fig,ax=vc.new_fig(); Nc=275; REV=180
 for i in range(Nc):
-    pb=min(1.0,i/55)          # band/median in
-    ax.cla()
-    ax.axhline(0,color=MUTED,lw=1.0,ls='--')
-    ax.fill_between(FREQ,p10,p90,color=CYAN,alpha=0.16*pb)
-    ax.semilogx(FREQ,med,color=CYAN,lw=3,alpha=pb)
-    ax.text(210,6.3,f"{nppl} real people, same direction",color=MUTED,fontsize=18,va='top',alpha=pb)
-    if i>95:
-        ya=min(1.0,(i-95)/25.); ax.semilogx(FREQ,you,color=AMBER,lw=2.6,alpha=ya)
-        ax.text(260,8.2,"one person (you)",color=AMBER,fontsize=17,va='top',alpha=ya)
-    if i>150:
-        pa=min(1.0,(i-150)/25.)
-        ax.axvspan(6000,20000,color=AMBER,alpha=0.07*pa); ax.axvline(6000,color=AMBER,lw=1.2,alpha=0.6*pa)
-        ax.text(2400,-36,"below 6 kHz:\neveryone agrees",color=MUTED,fontsize=15,va='bottom',alpha=pa,ha='center')
-        ax.text(11000,-36,"above: your ears\nare unique",color=AMBER,fontsize=15,va='bottom',alpha=pa,ha='center')
-    ax.set_xlim(200,20000); ax.set_ylim(-40,10); vc.khz(ax); ax.grid(alpha=0.35,which='major')
+    show=min(nppl, max(1,int(np.ceil((i/REV)*nppl)))) if i<REV else nppl
+    ax.cla(); ax.axhline(0,color=MUTED,lw=1.0,ls='--')
+    for k,c in enumerate(curves[:show]):
+        if k==YOU: continue
+        ax.semilogx(FREQ,c,color=CYAN,lw=1.3,alpha=0.42)
+    ax.text(210,8.6,f"{show} real people  -  same direction, same sound",color=MUTED,fontsize=18,va='top')
+    if show>YOU:
+        ya=min(1.0,max(0.0,(i-120)/20.))
+        ax.semilogx(FREQ,curves[YOU],color=AMBER,lw=3.4,alpha=ya)
+        ax.text(240,6.4,"amber = one of these people (you)",color=AMBER,fontsize=16,va='top',alpha=ya)
+    if i>REV:                                   # honest: differences grow with frequency (no 'identical below')
+        pa=min(1.0,(i-REV)/28.)
+        ax.annotate("",xy=(18000,5.6),xytext=(6500,5.6),arrowprops=dict(color=AMBER,arrowstyle="-|>",lw=2.2,alpha=0.85*pa))
+        ax.text(240,5.0,"spread grows toward the highs - the folds of your ear",
+                color=AMBER,fontsize=15,va='top',ha='left',alpha=pa)
+    ax.set_xlim(200,20000); ax.set_ylim(-42,11); vc.khz(ax); ax.grid(alpha=0.35,which='major')
     ax.set_xlabel("pitch  (frequency)",fontsize=20,color=INK); ax.set_ylabel("tone colour  (dB)",fontsize=20,color=INK)
-    vc.chrome(fig,"04d","INDIVIDUALITY","Everyone's ears are shaped differently - so is their hearing")
+    vc.chrome(fig,"04d","INDIVIDUALITY","No two people's ears colour sound the same")
     fig.savefig(os.path.join(d,f"{i:05d}.png")); [a2.remove() for a2 in fig.axes if a2 is not ax]
 plt.close(fig); print("fc_indiv done",nppl,"subjects")
 print("ALL DONE")
