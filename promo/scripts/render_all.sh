@@ -7,6 +7,7 @@ set -euo pipefail
 BUILD="${1:-$PWD}"; cd "$BUILD"; export PROMO_OUT="$BUILD"
 SRC="/mnt/c/Users/ibarz/Videos/2026-10-28 18-53-47.mkv"
 FONT=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf
+FONTM=/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf
 SYSPY=python3; BLPY=/home/jean/git/binaural-localization/.venv/bin/python
 V="-an -c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p -r 30"
 ENC="-c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p -r 30 -c:a aac -b:a 160k -ar 48000 -ac 2"
@@ -37,13 +38,17 @@ ffmpeg -nostdin -v error -y -ss 335 -t 15 -i "$SRC" -loop 1 -t 15 -i mask_face.p
 "[0:v]crop=1150:647:0:300,setsar=1,zoompan=z='min(1.5+1.0*on/449,2.5)':x='366-iw/zoom/2':y='186-ih/zoom/2':d=1:s=1920x1080:fps=30,split[s][b];\
 [b]gblur=sigma=22,eq=brightness=-0.05:saturation=0.9[bb];[s]format=yuva420p[sf];[1:v]format=gray,scale=1920:1080[mk];\
 [sf][mk]alphamerge[sa];[bb][sa]overlay=0:0,vignette=PI/4.5,\
-drawtext=fontfile=${FONT}:text='Your webcam tracks your head, the sound follows':x=(w-text_w)/2:y=h-128:fontsize=44:fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=20[v]" \
+drawtext=fontfile=${FONT}:text='Your webcam tracks your head, the sound follows':x=(w-text_w)/2:y=h-150:fontsize=48:fontcolor=0xe8eef0:box=1:boxcolor=black@0.62:boxborderw=24[v]" \
 -map "[v]" $V webcamv.mp4
 # cold: source money-shot crop
 ffmpeg -nostdin -v error -y -ss 118 -t 16 -i "$SRC" -vf "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,setsar=1" $V coldv.mp4
-# pivot card
+# pivot card: branded chapter divider — eyebrow + alpha reveal + slow centre push (VO-safe: length fixed by -t)
 ffmpeg -nostdin -v error -y -f lavfi -t 8 -i color=c=0x0a0e14:s=1920x1080:r=30 \
- -vf "drawtext=fontfile=$FONT:text='First, how do you actually hear in 3D?':x=(w-text_w)/2:y=(h-text_h)/2-40:fontsize=60:fontcolor=0xe8eef0,drawtext=fontfile=$FONT:text='3 minutes. Do not move.':x=(w-text_w)/2:y=(h/2)+60:fontsize=38:fontcolor=0x8a9aa3" $V pivotv.mp4
+ -vf "drawbox=x=120:y=96:w=15:h=15:color=0x35e0d0:t=fill,\
+drawtext=fontfile=$FONTM:text='FIRST PRINCIPLES':x=156:y=88:fontsize=30:fontcolor=0xaabac2:alpha='if(lt(t,0.4)\,t/0.4\,1)',\
+drawtext=fontfile=$FONT:text='First, how do you actually hear in 3D?':x=(w-text_w)/2:y=(h-text_h)/2-40:fontsize=72:fontcolor=0xe8eef0:alpha='if(lt(t,0.6)\,t/0.6\,1)',\
+drawtext=fontfile=$FONT:text='3 minutes. Do not move.':x=(w-text_w)/2:y=(h/2)+74:fontsize=34:fontcolor=0x8a9aa3:alpha='if(lt(t,1.0)\,0\,min(1\,(t-1.0)/0.6))',\
+zoompan=z='min(1.0+0.000208*on,1.05)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=1920x1080:fps=30,setsar=1" $V pivotv.mp4
 # timing = wavefront + ITD sweep
 printf "file 'beatv_itd.mp4'\nfile 'seq2b.mp4'\n" > tcat.txt
 ffmpeg -nostdin -v error -y -f concat -safe 0 -i tcat.txt $V timingv.mp4
@@ -65,12 +70,18 @@ map=(
 "12 beatv_b6.mp4   vo_12_cta"
 )
 : > acat.txt
+# dip-to-bg transitions between every beat (VO-safe: fade never trims a frame, so each segment
+# stays exactly its VO length; audio is untouched). First beat opens FROM black, last fades TO black.
 for row in "${map[@]}"; do
   set -- $row; idx=$1; vis=$2; voseg=$3
   vd=$(dur "$VF/$voseg.mp3"); cd_=$(dur "$vis")
   fac=$($SYSPY -c "print(max(0.2,$vd/$cd_))")
+  fid=0.3; fic=0x0a0e14; fod=0.3; foc=0x0a0e14
+  [ "$idx" = "01" ] && { fid=0.6; fic=black; }
+  [ "$idx" = "12" ] && { fod=0.8; foc=black; }
+  fost=$($SYSPY -c "print(max(0,$vd-$fod))")
   ffmpeg -nostdin -v error -y -i "$vis" -i "$VF/$voseg.mp3" \
-    -filter_complex "[0:v]setpts=${fac}*PTS,fps=30,scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:-1:-1:color=0x0a0e14,setsar=1[v]" \
+    -filter_complex "[0:v]setpts=${fac}*PTS,fps=30,scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:-1:-1:color=0x0a0e14,setsar=1,fade=t=in:st=0:d=${fid}:c=${fic},fade=t=out:st=${fost}:d=${fod}:c=${foc}[v]" \
     -map "[v]" -map 1:a -shortest $ENC "a_$idx.mp4"
   echo "file 'a_$idx.mp4'" >> acat.txt
 done

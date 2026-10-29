@@ -1,8 +1,15 @@
 {
-  "iteration": 0,
+  "iteration": 1,
   "max_iterations": 50,
   "schedule_id": "ece924ee-7cce-4dca-9158-8f5304df8697",
   "current_video": "/home/jean/promo-loop/build/explainer.mp4",
   "vo_locked": true,
-  "history": []
+  "history": [
+    {
+      "n": 1,
+      "when": "2026-10-29T03:27:14",
+      "summary": "typography hierarchy fix (headlines to ink), unified caption scale + stable lower-third geometry, branded animated pivot card, dip-to-bg transitions between all 12 beats with black top/tail, restyled webcam caption",
+      "video": "world-locked-explainer-v01.mp4"
+    }
+  ]
 }

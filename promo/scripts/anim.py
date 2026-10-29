@@ -66,28 +66,34 @@ def draw_headphone(d, cx, cy, a):
 
 LABEL = (170, 186, 194)          # brighter than MUTED, for small labels/eyebrow
 FOCAL = (111, 240, 228)          # value step above CYAN for the one live element
+def draw_tracked(d, x, y, s, fnt, fill, spacing=2):   # letter-spaced caps = deliberate technical label
+    for ch in s:
+        d.text((x, y), ch, font=fnt, fill=fill)
+        x += d.textlength(ch, font=fnt) + spacing
+    return x
 def eyebrow(d, title, a):        # title-only section eyebrow, consistent across every slide
     if a <= 0: return
     d.rectangle([120, 96, 135, 111], fill=CYAN + (a,))
-    d.text((150, 91), title, font=font(FM, 30), fill=LABEL + (a,))
+    draw_tracked(d, 150, 91, title, font(FM, 30), LABEL + (a,), 2)
 
 def lower_third(base, s, fnt, appear):
     if appear <= 0: return
     layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
-    bb = d.textbbox((0, 0), s, font=fnt); tw = bb[2]-bb[0]; th = bb[3]-bb[1]
+    bb = d.textbbox((0, 0), s, font=fnt); tw = bb[2]-bb[0]
+    asc, desc = fnt.getmetrics(); box_h = asc + desc      # fixed height from font metrics, not glyphs
     pad = 26; bx0 = W/2 - tw/2 - pad; bx1 = W/2 + tw/2 + pad
-    by0 = H - 150; by1 = by0 + th + pad*1.4
+    by0 = H - 150; by1 = by0 + box_h + pad*1.2            # panel height now constant across every caption
     a = int(smooth(appear) * 255)
     d.rounded_rectangle([bx0, by0, bx1, by1], radius=10, fill=(0, 0, 0, int(a*0.62)))
     d.rectangle([bx0, by0, bx0+4, by1], fill=CYAN + (a,))
-    d.text((W/2 - tw/2, by0 + pad*0.55), s, font=fnt, fill=INK + (a,))
+    d.text((W/2 - tw/2, by0 + pad*0.6), s, font=fnt, fill=INK + (a,))   # fixed baseline, no per-caption wobble
     base.alpha_composite(layer)
 
 # --- beat 1: stereo, sound only moves between the two ears (stays in head) --
 def render_beat1(outdir, nframes):
     os.makedirs(outdir, exist_ok=True)
-    f_eye = font(FM, 30); f_lab = font(FB, 30); f_cap = font(FB, 52); f_big = font(FB, 40); f_sm = font(FM, 24)
+    f_eye = font(FM, 30); f_lab = font(FB, 30); f_cap = font(FB, 48); f_big = font(FB, 44); f_sm = font(FM, 24)
     cx, cy, R = 960, 492, 152
     amp = R * 0.80                                   # dot stays between the ears
     trail = []
@@ -130,7 +136,7 @@ def render_beat1(outdir, nframes):
                 d.ellipse([txp-rr, cy-rr, txp+rr, cy+rr], fill=CYAN + (aa,))
             glow_dot(base, px, cy, 14, CYAN)
 
-        text_center(d, cx, 212, "It only moves between your two ears.", f_big, MUTED,
+        text_center(d, cx, 212, "It only moves between your two ears.", f_big, INK,
                     int(smooth((t-0.4)/0.7) * 255))
         lower_third(base, "On headphones, sound is stuck inside your head", f_cap, (t-1.0)/0.6)
         base.convert("RGB").save(os.path.join(outdir, f"{i:05d}.png"))
@@ -156,7 +162,7 @@ def head_group(d, cx, cy, r, ha, nose=0.0):
 # --- beat 2: binaural, a source orbits the head ----------------------------
 def render_beat2(outdir, nframes):
     os.makedirs(outdir, exist_ok=True)
-    f_eye=font(FM,30); f_cap=font(FB,52); f_big=font(FB,40); f_sm=font(FM,24)
+    f_eye=font(FM,30); f_cap=font(FB,48); f_big=font(FB,44); f_sm=font(FM,24)
     cx, cy, R = 960, 500, 128
     Rx, Ry = 340, 250
     for i in range(nframes):
@@ -183,7 +189,7 @@ def render_beat2(outdir, nframes):
             d.text((sx-44,sy-46),"a sound",font=f_sm,fill=MUTED+(200,))
         tag_a=int(smooth((t-6)/0.8)*255) if t>6 else 0
         if tag_a: d.text((cx-170,cy+R+70),"two ears, two different signals - recreated",font=f_sm,fill=CYAN+(tag_a,))
-        text_center(d,cx,196,"Now it can be placed anywhere around you.",f_big,MUTED,int(smooth((t-0.4)/0.7)*255))
+        text_center(d,cx,196,"Now it can be placed anywhere around you.",f_big,INK,int(smooth((t-0.4)/0.7)*255))
         lower_third(base,"Binaural recreates what each ear would really hear",f_cap,(t-1.0)/0.6)
         base.convert("RGB").save(os.path.join(outdir,f"{i:05d}.png"))
     print(f"beat2: {nframes} frames")
@@ -200,7 +206,7 @@ def _ring(d, cx, cy, Rr, gamma, ha, good):
 Ry3=250
 def render_beat3(outdir, nframes):
     os.makedirs(outdir, exist_ok=True)
-    f_eye=font(FM,30); f_cap=font(FB,50); f_big=font(FB,38); f_sm=font(FM,24)
+    f_eye=font(FM,30); f_cap=font(FB,48); f_big=font(FB,38); f_sm=font(FM,24)
     cx, cy, R, Rr = 960, 510, 120, 330
     for i in range(nframes):
         t=i/FPS; p=i/max(1,nframes-1)
@@ -275,12 +281,12 @@ def render_beat5(outdir, nframes):
                 fr=((t-0.7-j*0.5)%1.0)
                 if 0<fr<1 and aa>0:
                     pxx=ax+8+(axe-28-(ax+8))*fr; glow_dot(base,pxx,ay,7,(140,240,255),0.8)
-        text_center(d,cx_,196,"Any app in, head-tracked binaural out, on any headphones.",f_big5,MUTED,int(smooth((t-0.4)/0.7)*255))
+        text_center(d,cx_,196,"Any app in, head-tracked binaural out, on any headphones.",f_big5,INK,int(smooth((t-0.4)/0.7)*255))
         d.text((120,y0+bh+70),"Rust core · ~5x real time on CPU · no GPU needed",font=f_sm,fill=MUTED+(int(smooth((t-2)/0.8)*220) if t>2 else 0,))
         lower_third(base,"Rust engine · VB-Audio Cable in · your headphones out · live EQ",f_cap,(t-1.0)/0.6)
         base.convert("RGB").save(os.path.join(outdir,f"{i:05d}.png"))
     print(f"beat5: {nframes} frames")
-cx_=960; f_big5=ImageFont.truetype(FB,38)
+cx_=960; f_big5=ImageFont.truetype(FB,44)
 
 # --- beat 6: end card ------------------------------------------------------
 def render_beat6(outdir, nframes):
@@ -312,7 +318,7 @@ def render_beat6(outdir, nframes):
 # --- HRTF step 1: interaural time difference, wavefront to the ears ---------
 def render_itd(outdir, nframes):
     os.makedirs(outdir, exist_ok=True)
-    f_eye=font(FM,30); f_cap=font(FB,48); f_big=font(FB,38); f_sm=font(FM,24); f_rd=font(FM,30)
+    f_eye=font(FM,30); f_cap=font(FB,48); f_big=font(FB,44); f_sm=font(FM,24); f_rd=font(FM,30)
     cx, cy, R = 720, 560, 120
     Lx, Rx = cx-R, cx+R
     sx, sy = 1330, 300
@@ -355,7 +361,7 @@ def render_itd(outdir, nframes):
         rd_a=int(smooth((t-1.4)/0.8)*255) if t>1.4 else 0
         d.text((1120,560),"right ear first",font=f_rd,fill=CYAN+(rd_a,))
         d.text((1120,604),"left ear  ~0.6 ms later",font=f_rd,fill=MUTED+(rd_a,))
-        text_center(d,960,196,"A sound reaches one ear a little sooner.",f_big,MUTED,int(smooth((t-0.4)/0.7)*255))
+        text_center(d,960,196,"A sound reaches one ear a little sooner.",f_big,INK,int(smooth((t-0.4)/0.7)*255))
         lower_third(base,"Interaural time difference: your first clue to direction",f_cap,(t-1.0)/0.6)
         base.convert("RGB").save(os.path.join(outdir,f"{i:05d}.png"))
     print(f"itd: {nframes} frames")

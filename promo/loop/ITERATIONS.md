@@ -7,3 +7,4 @@ Videos folder, and make a local commit + tag `explainer-vNN`.
 
 | version | tag | what changed |
 |---|---|---|
+| v01 | explainer-v01 | typography hierarchy fix (headlines to ink), unified caption scale + stable lower-third geometry, branded animated pivot card, dip-to-bg transitions between all 12 beats with black top/tail, restyled webcam caption |
