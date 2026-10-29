@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 import vizchrome as vc
 vc.style()
-CYAN,AMBER,INK,MUTED,GRID = vc.CYAN,vc.AMBER,vc.INK,vc.MUTED,vc.GRID
+CYAN,FOCAL,AMBER,INK,MUTED,LABEL,GRID = vc.CYAN,vc.FOCAL,vc.AMBER,vc.INK,vc.MUTED,vc.LABEL,vc.GRID
 OUT="/tmp/claude-1000/-home-jean-git-world-locked-binaural-surround/97432dac-b43b-491a-a91a-02b24812f7e8/scratchpad/cut"
 SOFA=sorted(glob.glob('/home/jean/git/binaural-localization/data/ircam_sofa/IRC_*_R_44100.sofa'))
 SR=44100.0
@@ -35,21 +35,21 @@ ir0,sp0=load(SOFA[0]); idx0,az0=horiz(sp0)
 M=np.stack([octave_smooth(magdb(ir0[m,1])) for m in idx0],axis=0)
 fI=interp1d(az0,M,axis=0,bounds_error=False,fill_value=(M[0],M[-1]))
 d=mkd("fb_spec")
-fig,ax=vc.new_fig(); ins=fig.add_axes([0.70,0.52,0.20,0.26]); ins.set_aspect('equal')
+fig,ax=vc.new_fig(); ins=fig.add_axes([0.765,0.56,0.17,0.25]); ins.set_aspect('equal')
 Nb=300
 for i in range(Nb):
     a=150*np.sin(2*np.pi*i/Nb)
-    ax.cla(); ax.semilogx(FREQ,fI(a),color=CYAN,lw=3); ax.fill_between(FREQ,fI(a),-40,color=CYAN,alpha=0.08)
-    ax.axhline(0,color=MUTED,lw=1.2,ls='--'); ax.text(210,1.5,"unchanged",color=MUTED,fontsize=14,va='bottom')
+    ax.cla(); ax.semilogx(FREQ,fI(a),color=CYAN,lw=3); ax.fill_between(FREQ,fI(a),-40,color=CYAN,alpha=0.06)
+    ax.axhline(0,color=MUTED,lw=1.2,ls='--'); ax.text(210,1.5,"flat reference",color=MUTED,fontsize=15,va='bottom')
     ax.set_xlim(200,20000); ax.set_ylim(-40,8); vc.khz(ax); ax.grid(alpha=0.35,which='major')
-    ax.set_xlabel("pitch  (frequency)",fontsize=20,color=INK)
-    ax.set_ylabel("tone colour  (dB,  + brighter / - duller)",fontsize=20,color=INK)
+    ax.set_xlabel("pitch  (Hz)",fontsize=21,color=INK)
+    ax.set_ylabel("tone colour  (dB,  + brighter / - duller)",fontsize=21,color=INK)
     side = "front" if abs(a)<8 else (f"{abs(a):.0f} deg right" if a>0 else f"{abs(a):.0f} deg left")
-    ax.text(210,6.5,f"sound at: {side}",color=AMBER,fontsize=22,va='top')
+    ax.text(210,6.6,f"sound at: {side}",color=AMBER,fontsize=23,va='top')
     ins.cla(); ins.axis('off'); ins.set_xlim(-1.4,1.4); ins.set_ylim(-1.4,1.4)
     th=np.linspace(0,2*np.pi,60); ins.plot(np.cos(th),np.sin(th),color=CYAN,lw=2); ins.plot([0,0],[1,1.25],color=CYAN,lw=2)
     ar=np.radians(a); ins.plot([np.sin(ar)*1.15],[np.cos(ar)*1.15],'o',color=AMBER,ms=14)
-    vc.chrome(fig,"04b","COLOUR","Same sound, a new direction = a new tone colour")
+    vc.chrome(fig,"","TONE COLOUR","Same sound, new direction — new tone colour")
     fig.savefig(os.path.join(d,f"{i:05d}.png")); [a2.remove() for a2 in fig.axes if a2 not in (ax,ins)]
 plt.close(fig); print("fb_spec done")
 
@@ -68,19 +68,19 @@ for i in range(Nc):
     for k,c in enumerate(curves[:show]):
         if k==YOU: continue
         ax.semilogx(FREQ,c,color=CYAN,lw=1.3,alpha=0.42)
-    ax.text(210,8.6,f"{show} real people  -  same direction, same sound",color=MUTED,fontsize=18,va='top')
+    ax.text(210,8.8,f"{show} real people  —  same direction, same sound",color=LABEL,fontsize=19,va='top')
     if show>YOU:
         ya=min(1.0,max(0.0,(i-120)/20.))
-        ax.semilogx(FREQ,curves[YOU],color=AMBER,lw=3.4,alpha=ya)
-        ax.text(240,6.4,"amber = one of these people (you)",color=AMBER,fontsize=16,va='top',alpha=ya)
+        ax.semilogx(FREQ,curves[YOU],color=FOCAL,lw=3.6,alpha=ya)
+        ax.text(240,6.5,"bright line = one of them (you)",color=FOCAL,fontsize=17,va='top',alpha=ya)
     if i>REV:                                   # honest: differences grow with frequency (no 'identical below')
         pa=min(1.0,(i-REV)/28.)
-        ax.annotate("",xy=(18000,5.6),xytext=(6500,5.6),arrowprops=dict(color=AMBER,arrowstyle="-|>",lw=2.2,alpha=0.85*pa))
-        ax.text(240,5.0,"spread grows toward the highs - the folds of your ear",
-                color=AMBER,fontsize=15,va='top',ha='left',alpha=pa)
+        ax.annotate("",xy=(18000,5.6),xytext=(6500,5.6),arrowprops=dict(color=FOCAL,arrowstyle="-|>",lw=2.2,alpha=0.85*pa))
+        ax.text(240,5.0,"at high pitches they scatter — the folds of your ear",
+                color=INK,fontsize=16,va='top',ha='left',alpha=pa)
     ax.set_xlim(200,20000); ax.set_ylim(-42,11); vc.khz(ax); ax.grid(alpha=0.35,which='major')
-    ax.set_xlabel("pitch  (frequency)",fontsize=20,color=INK); ax.set_ylabel("tone colour  (dB)",fontsize=20,color=INK)
-    vc.chrome(fig,"04d","INDIVIDUALITY","No two people's ears colour sound the same")
+    ax.set_xlabel("pitch  (Hz)",fontsize=21,color=INK); ax.set_ylabel("tone colour  (dB)",fontsize=21,color=INK)
+    vc.chrome(fig,"","INDIVIDUALITY","Everyone's ears colour sound a little differently")
     fig.savefig(os.path.join(d,f"{i:05d}.png")); [a2.remove() for a2 in fig.axes if a2 is not ax]
 plt.close(fig); print("fc_indiv done",nppl,"subjects")
 print("ALL DONE")

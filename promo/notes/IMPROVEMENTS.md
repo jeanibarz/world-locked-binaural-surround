@@ -18,7 +18,21 @@ Visual/data/science fixes done on the four crash-course data clips (seq2b, seq3,
 - **P2#15** — cone: fixed ¾ camera (never edge-on), filled translucent cone, faint sphere.
 - **Factual** — beat 2 "can be placed" + dropped premature HRTF label. (Count now reads 30, the real loaded N.)
 
-**Still open (next iterations):** P0#2 & #5 and most pedagogy items are VO/structure (go into the script at
+## ✅ Applied in iteration 3 (polish pass, 2 agents: visual/color/typo + on-screen copy)
+- **Eyebrows unified** (title-only, cyan bullet + label) across every slide and data clip via `vizchrome.chrome`
+  and `anim.eyebrow`; killed the `01/02/04a/02 TIME DIFFERENCE` numbering collisions (numbers deferred to final cut).
+- **Accent discipline:** added a FOCAL value step (#6ff0e4); the individuality "you" line is now FOCAL (not amber),
+  so amber stays reserved for the broken/ambiguous cue. b5 boxes value-laddered (inputs muted · RUST ENGINE cyan ·
+  YOUR HEADPHONES focal).
+- **Copy/glyphs/units:** em dashes in data captions; "pitch (Hz)"; "flat reference"; s1/s2 "hears it X ms sooner";
+  b5 "track · spatialise · EQ" and "~5x real time … no GPU needed"; b3 "headphone copy" (was "smudge");
+  individuality "at high pitches they scatter — the folds of your ear".
+- **Composition:** cone is now two-column (plain-text left, 3D right — no dead space); ITD inset and spectra inset
+  moved clear of the curves; spectra "flat reference" 0 dB line; matplotlib fonts bumped (axes 21, ticks 16),
+  curve fills lightened (0.06). End card: brighter/filled CTA + stronger icon glow.
+
+**Still open (next iterations):** b4 webcam caption is still ffmpeg ASCII "->" with no eyebrow/lower-third (an
+assembly-time ffmpeg change); P0#2 & #5 and most pedagogy items are VO/structure (go into the script at
 assembly, draft in STORYBOARD.md); P2 motion polish (#14 mug-slide redo, #16 easing, #17 transitions/match-cuts,
 #18 depth/typography, #19 webcam chrome, #20 end-card motion); P1#10 concrete→general spectral; P1#12 the ~10 µs
 wow-number; P1#13 define-HRTF-once placement.

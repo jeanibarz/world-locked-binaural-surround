@@ -9,14 +9,15 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from matplotlib.patches import Rectangle
 
-BG="#0a0e14"; PANEL="#121b24"; CYAN="#35e0d0"; AMBER="#f5b556"; INK="#e8eef0"; MUTED="#8a9aa3"; GRID="#1e2a33"
+BG="#0a0e14"; PANEL="#121b24"; CYAN="#35e0d0"; FOCAL="#6ff0e4"; AMBER="#f5b556"
+INK="#e8eef0"; MUTED="#8a9aa3"; LABEL="#aab6bc"; GRID="#1e2a33"
 
 def style():
     plt.rcParams.update({
         "figure.facecolor":BG,"axes.facecolor":"none","savefig.facecolor":BG,
-        "text.color":INK,"axes.labelcolor":INK,"xtick.color":MUTED,"ytick.color":MUTED,
+        "text.color":INK,"axes.labelcolor":INK,"xtick.color":LABEL,"ytick.color":LABEL,
         "axes.edgecolor":GRID,"grid.color":GRID,"axes.linewidth":1.6,
-        "font.family":"DejaVu Sans Mono","font.size":18,
+        "font.family":"DejaVu Sans Mono","font.size":19,"xtick.labelsize":16,"ytick.labelsize":16,
         "axes.spines.top":False,"axes.spines.right":False,
     })
 
@@ -30,16 +31,15 @@ def new_fig():
 
 _overlay=None
 def chrome(fig, idx, label, caption):
-    """Top-left section tag + bottom lower-third caption bar (drawn each frame)."""
+    """Title-only eyebrow (cyan bullet + label) + bottom lower-third caption bar.
+    `idx` is ignored (numbering is deferred to final-cut order); kept for caller compat."""
     ax=fig.add_axes([0,0,1,1]); ax.set_axis_off(); ax.set_xlim(0,1); ax.set_ylim(0,1)
     ax.set_zorder(50)
-    # section tag
-    ax.text(0.035,0.955,idx,color=CYAN,fontsize=24,fontweight='bold',family='monospace',va='top')
-    ax.text(0.085,0.952,label,color=MUTED,fontsize=19,family='monospace',va='top')
-    # lower-third caption bar
-    ax.add_patch(Rectangle((0.035,0.035),0.60,0.085,facecolor='black',alpha=0.62,zorder=51))
-    ax.add_patch(Rectangle((0.035,0.035),0.0055,0.085,facecolor=CYAN,zorder=52))
-    ax.text(0.055,0.078,caption,color=INK,fontsize=24,fontweight='bold',va='center',zorder=52)
+    ax.add_patch(Rectangle((0.035,0.946),0.012,0.014,facecolor=CYAN,zorder=52))
+    ax.text(0.058,0.953,label,color=LABEL,fontsize=21,family='monospace',va='top',zorder=52)
+    ax.add_patch(Rectangle((0.035,0.033),0.70,0.090,facecolor='black',alpha=0.62,zorder=51))
+    ax.add_patch(Rectangle((0.035,0.033),0.0058,0.090,facecolor=CYAN,zorder=52))
+    ax.text(0.058,0.078,caption,color=INK,fontsize=26,fontweight='bold',va='center',zorder=52)
     return ax
 
 def ramp(n):

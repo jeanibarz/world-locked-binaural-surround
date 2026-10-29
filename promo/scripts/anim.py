@@ -64,6 +64,13 @@ def draw_headphone(d, cx, cy, a):
     d.rounded_rectangle([cx-32, cy-6, cx-18, cy+22], radius=5, fill=col)
     d.rounded_rectangle([cx+18, cy-6, cx+32, cy+22], radius=5, fill=col)
 
+LABEL = (170, 186, 194)          # brighter than MUTED, for small labels/eyebrow
+FOCAL = (111, 240, 228)          # value step above CYAN for the one live element
+def eyebrow(d, title, a):        # title-only section eyebrow, consistent across every slide
+    if a <= 0: return
+    d.rectangle([120, 96, 135, 111], fill=CYAN + (a,))
+    d.text((150, 91), title, font=font(FM, 30), fill=LABEL + (a,))
+
 def lower_third(base, s, fnt, appear):
     if appear <= 0: return
     layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
@@ -92,8 +99,7 @@ def render_beat1(outdir, nframes):
         intro = smooth(t / 0.6)
         ha = int(intro * 255)
         eye_a = int(smooth((t-0.3)/0.6) * 255)
-        d.text((120, 90), "01", font=font(FM,34), fill=CYAN + (eye_a,))
-        d.text((188, 92), "PLAIN  STEREO", font=f_eye, fill=MUTED + (eye_a,))
+        eyebrow(d, "STEREO", eye_a)
         # headphone cue (top-right)
         hp_a = int(smooth((t-0.2)/0.7) * 220)
         draw_headphone(d, 1706, 100, hp_a)
@@ -157,8 +163,7 @@ def render_beat2(outdir, nframes):
         t=i/FPS; base=BASE_BG.convert("RGBA").copy(); d=ImageDraw.Draw(base,"RGBA")
         intro=smooth(t/0.6); ha=int(intro*255)
         ea=int(smooth((t-0.3)/0.6)*255)
-        d.text((120,90),"02",font=font(FM,34),fill=CYAN+(ea,))
-        d.text((188,92),"BINAURAL",font=f_eye,fill=MUTED+(ea,))
+        eyebrow(d, "BINAURAL", ea)
         hp=int(smooth((t-0.2)/0.7)*220); draw_headphone(d,1706,100,hp); d.text((1548,138),"headphones on",font=f_sm,fill=MUTED+(hp,))
         # faint orbit guide
         d.ellipse([cx-Rx,cy-Ry,cx+Rx,cy+Ry],outline=CYAN_D+(int(ha*0.5),),width=2)
@@ -200,8 +205,7 @@ def render_beat3(outdir, nframes):
     for i in range(nframes):
         t=i/FPS; p=i/max(1,nframes-1)
         base=BASE_BG.convert("RGBA").copy(); d=ImageDraw.Draw(base,"RGBA")
-        d.text((120,90),"03",font=font(FM,34),fill=CYAN+(220,))
-        d.text((188,92),"THE MISSING CUE",font=f_eye,fill=MUTED+(220,))
+        eyebrow(d, "THE MISSING CUE", 220)
         aA=env(p,0,0.03,0.27,0.32); aB=env(p,0.30,0.35,0.52,0.57); aC=env(p,0.55,0.60,1.01,1.02)
         swing=math.sin(t*1.6)*math.radians(28)
         # A: speakers glued to head -> rotate together (bad / amber)
@@ -222,7 +226,7 @@ def render_beat3(outdir, nframes):
             glow_dot(base,ex,ey,12,(140,240,255)); d.text((ex-26,ey+22),"you",font=f_sm,fill=MUTED+(ha,))
             # smudge moves WITH you (fake)
             d.ellipse([ex-60,ey-150-0,ex-20,ey-110],fill=AMBER+(int(ha*0.6),))
-            d.text((ex-70,ey-180),"smudge — moves with you",font=f_sm,fill=AMBER+(ha,))
+            d.text((ex-96,ey-180),"headphone copy - moves with you",font=f_sm,fill=AMBER+(ha,))
         # C: world-locked — ring fixed, head rotates inside (good / cyan)
         if aC>0.01:
             ha=int(aC*255); _ring(d,cx,cy,Rr,0.0,ha,good=True); head_group(d,cx,cy,R,ha,nose=swing)
@@ -246,17 +250,17 @@ def render_beat5(outdir, nframes):
     os.makedirs(outdir, exist_ok=True)
     f_eye=font(FM,30); f_cap=font(FB,48); f_box=font(FB,30); f_sm=font(FM,23)
     boxes=[("ANY APP","game · film · music"),("VB-AUDIO\nCABLE","virtual device"),
-           ("RUST ENGINE","head-track · convolve · EQ"),("YOUR\nHEADPHONES","any pair")]
+           ("RUST ENGINE","track · spatialise · EQ"),("YOUR\nHEADPHONES","any pair")]
     n=len(boxes); bw,bh=300,150; gap=(W-120*2-n*bw)/(n-1); y0=470
     xs=[120+i*(bw+gap) for i in range(n)]
     for i in range(nframes):
         t=i/FPS; base=BASE_BG.convert("RGBA").copy(); d=ImageDraw.Draw(base,"RGBA")
-        d.text((120,90),"05",font=font(FM,34),fill=CYAN+(220,)); d.text((188,92),"UNDER THE HOOD",font=f_eye,fill=MUTED+(220,))
+        eyebrow(d, "UNDER THE HOOD", 220)
         for j,(x,(t1,t2)) in enumerate(zip(xs,boxes)):
             a=smooth((t-0.4-j*0.5)/0.6); ha=int(a*255)
             if ha<=0: continue
-            hot = boxes[j][0].startswith("RUST")
-            col=CYAN if hot else MUTED
+            name0=boxes[j][0]
+            col = CYAN if name0.startswith("RUST") else (FOCAL if "HEADPHONES" in name0 else MUTED)
             d.rounded_rectangle([x,y0,x+bw,y0+bh],radius=14,fill=PANEL+(ha,),outline=col+(ha,),width=3)
             lines=t1.split("\n")
             for k,ln in enumerate(lines):
@@ -272,7 +276,7 @@ def render_beat5(outdir, nframes):
                 if 0<fr<1 and aa>0:
                     pxx=ax+8+(axe-28-(ax+8))*fr; glow_dot(base,pxx,ay,7,(140,240,255),0.8)
         text_center(d,cx_,196,"Any app in, head-tracked binaural out, on any headphones.",f_big5,MUTED,int(smooth((t-0.4)/0.7)*255))
-        d.text((120,y0+bh+70),"Rust core · about 5x real time on CPU · no GPU",font=f_sm,fill=MUTED+(int(smooth((t-2)/0.8)*220) if t>2 else 0,))
+        d.text((120,y0+bh+70),"Rust core · ~5x real time on CPU · no GPU needed",font=f_sm,fill=MUTED+(int(smooth((t-2)/0.8)*220) if t>2 else 0,))
         lower_third(base,"Rust engine · VB-Audio Cable in · your headphones out · live EQ",f_cap,(t-1.0)/0.6)
         base.convert("RGB").save(os.path.join(outdir,f"{i:05d}.png"))
     print(f"beat5: {nframes} frames")
@@ -290,7 +294,7 @@ def render_beat6(outdir, nframes):
         t=i/FPS; base=BASE_BG.convert("RGBA").copy(); d=ImageDraw.Draw(base,"RGBA")
         ia=smooth(t/0.7)
         if icon is not None:
-            glow_dot(base,960,300,110,CYAN,0.5*ia)
+            glow_dot(base,960,300,110,CYAN,0.8*ia)
             tmp=icon.copy(); tmp.putalpha(icon.getchannel("A").point(lambda v:int(v*ia)))
             base.alpha_composite(tmp,(960-115,300-115))
         text_center(d,960,470,"World-Locked Binaural Surround",f_title,INK,int(smooth((t-0.4)/0.7)*255))
@@ -298,9 +302,9 @@ def render_beat6(outdir, nframes):
         ca=smooth((t-1.2)/0.7)
         if ca>0:
             s="Comment  EARS  — I'll send you the build"; tb=d.textbbox((0,0),s,font=f_cta)
-            tw=tb[2]-tb[0]; bx0=960-tw/2-34; bx1=960+tw/2+34
-            d.rounded_rectangle([bx0,650,bx1,726],radius=16,outline=CYAN+(int(ca*255),),width=3)
-            d.text((960-tw/2,668),s,font=f_cta,fill=CYAN+(int(ca*255),))
+            tw=tb[2]-tb[0]; bx0=960-tw/2-38; bx1=960+tw/2+38
+            d.rounded_rectangle([bx0,650,bx1,728],radius=16,fill=(18,58,56)+(int(ca*150),),outline=FOCAL+(int(ca*255),),width=3)
+            d.text((960-tw/2,669),s,font=f_cta,fill=FOCAL+(int(ca*255),))
         text_center(d,960,790,"built in public · donationware",f_sm,MUTED,int(smooth((t-1.6)/0.7)*255))
         base.convert("RGB").save(os.path.join(outdir,f"{i:05d}.png"))
     print(f"beat6: {nframes} frames")
@@ -318,7 +322,7 @@ def render_itd(outdir, nframes):
         t=i/FPS; base=BASE_BG.convert("RGBA").copy(); d=ImageDraw.Draw(base,"RGBA")
         intro=smooth(t/0.6); ha=int(intro*255)
         ea=int(smooth((t-0.3)/0.6)*255)
-        d.text((120,90),"02",font=font(FM,34),fill=CYAN+(ea,)); d.text((188,92),"TIME DIFFERENCE",font=f_eye,fill=MUTED+(ea,))
+        eyebrow(d, "TIMING", ea)
         # path lines
         d.line([sx,sy,Rx,cy],fill=CYAN+(int(ha*0.9),),width=3)                 # near
         seg=16; px0=sx;

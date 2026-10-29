@@ -10,7 +10,7 @@ from scipy.interpolate import interp1d
 from mpl_toolkits.mplot3d import Axes3D  # noqa
 import vizchrome as vc
 vc.style()
-CYAN,AMBER,INK,MUTED,GRID = vc.CYAN,vc.AMBER,vc.INK,vc.MUTED,vc.GRID
+CYAN,FOCAL,AMBER,INK,MUTED,LABEL,GRID = vc.CYAN,vc.FOCAL,vc.AMBER,vc.INK,vc.MUTED,vc.LABEL,vc.GRID
 OUT="/tmp/claude-1000/-home-jean-git-world-locked-binaural-surround/97432dac-b43b-491a-a91a-02b24812f7e8/scratchpad/cut"
 SOFA=sorted(glob.glob('/home/jean/git/binaural-localization/data/ircam_sofa/IRC_*_R_44100.sofa'))
 SR=44100.0
@@ -34,7 +34,7 @@ def itd_at(a):
 
 # ===== clip 2b: animated ITD, source sweeps azimuth, right = up =====
 dd=mkd("fa2_itd")
-fig,axc=vc.new_fig(); axh=fig.add_axes([0.72,0.33,0.22,0.42]); axh.set_aspect('equal')
+fig,axc=vc.new_fig(); axh=fig.add_axes([0.115,0.565,0.17,0.25]); axh.set_aspect('equal')
 N=360
 for i in range(N):
     a=(i/N)*360.0; aw=((a+180)%360)-180; val=itd_at(a)
@@ -49,7 +49,7 @@ for i in range(N):
     axc.plot([aw],[val],'o',color=AMBER,ms=20); axc.plot([aw,aw],[0,val],color=AMBER,lw=1.5,ls=':')
     axc.set_xlim(-180,180); axc.set_ylim(-1.1,1.1); axc.set_xticks([-180,-90,0,90,180])
     axc.set_yticks([-0.5,0,0.5]); axc.grid(alpha=0.4)
-    axc.set_xlabel("sound direction   (deg,  0 = front,  + = right)",fontsize=20,color=INK)
+    axc.set_xlabel("sound direction   (deg,  0 = front,  + = right)",fontsize=21,color=INK)
     axc.text(-205,0.95,"RIGHT ear\nfirst",color=CYAN,fontsize=15,va='top',ha='left')
     axc.text(-205,-0.55,"LEFT ear\nfirst",color=CYAN,fontsize=15,va='top',ha='left')
     if abs(val)<0.05: rd="both ears together"
@@ -66,13 +66,13 @@ for i in range(N):
     near=0.62 if aw>0 else -0.62
     axh.plot([sxx,near],[syy,0],color=AMBER,lw=2); axh.plot([sxx,-near],[syy,0],color=MUTED,lw=1,ls=':')
     axh.plot([sxx],[syy],'o',color=AMBER,ms=15)
-    vc.chrome(fig,"04a","TIMING","The nearer ear hears it first - by under a millisecond")
+    vc.chrome(fig,"","TIMING","The nearer ear hears it first — by under a millisecond")
     fig.savefig(os.path.join(dd,f"{i:05d}.png")); [a2.remove() for a2 in fig.axes if a2 not in (axc,axh)]
 plt.close(fig); print("fa2_itd done  display range",round(itdd.min(),2),round(itdd.max(),2))
 
 # ===== clip 5: cone of confusion (fixed 3/4 camera, filled cone) =====
 de=mkd("fe_cone"); fig=plt.figure(figsize=(19.2,10.8),dpi=100)
-ax=fig.add_axes([0.0,0.04,1.0,0.80],projection='3d')
+ax=fig.add_axes([0.40,0.075,0.58,0.80],projection='3d')
 u=np.linspace(0,2*np.pi,24); v=np.linspace(0,np.pi,14)
 sx=0.5*np.outer(np.cos(u),np.sin(v)); sy=0.5*np.outer(np.sin(u),np.sin(v)); sz=0.5*np.outer(np.ones_like(u),np.cos(v))
 alpha=math.radians(55); xC=math.cos(alpha); rC=math.sin(alpha)
@@ -80,26 +80,29 @@ phi=np.linspace(0,2*np.pi,160); ringY=rC*np.cos(phi); ringZ=rC*np.sin(phi)
 tt=np.linspace(0,1,2); PH,TT=np.meshgrid(phi,tt)
 coneX=TT*xC; coneY=TT*rC*np.cos(PH); coneZ=TT*rC*np.sin(PH)
 dots=[0,45,90,135,180,225,270,315]
+# static left-column explanation (set once, persists across frames)
+fig.text(0.055,0.80,"Same timing.\nSame loudness.",color=INK,fontsize=31,fontweight='bold',
+         va='top',family='monospace',linespacing=1.3)
+fig.text(0.055,0.585,"Every direction on this cone reaches\nyour two ears with the same timing\nand the same loudness.",
+         color=LABEL,fontsize=20,va='top',linespacing=1.5)
+fig.text(0.055,0.40,"A still head has only tone colour to\ngo on — and it blurs front from back,\nand up from down.",
+         color=MUTED,fontsize=19,va='top',linespacing=1.5)
 Nc=300
 for i in range(Nc):
     ax.cla(); ax.set_axis_off(); ax.set_box_aspect((1,1,0.85))
-    ax.set_xlim(-1.2,1.2); ax.set_ylim(-1.2,1.2); ax.set_zlim(-1.0,1.0)
-    ax.plot_surface(coneX,coneY,coneZ,color=AMBER,alpha=0.13,linewidth=0,shade=False)
+    ax.set_xlim(-1.15,1.15); ax.set_ylim(-1.15,1.15); ax.set_zlim(-1.0,1.0)
+    ax.plot_surface(coneX,coneY,coneZ,color=AMBER,alpha=0.14,linewidth=0,shade=False)
     ax.plot_wireframe(sx,sy,sz,color=CYAN,alpha=0.10,linewidth=0.6)
-    ax.plot([-1.15,1.15],[0,0],[0,0],color=CYAN,lw=2)
+    ax.plot([-1.1,1.1],[0,0],[0,0],color=CYAN,lw=2)
     ax.scatter([-0.5,0.5],[0,0],[0,0],color=CYAN,s=60)
-    ax.text(-0.9,0,0.14,"L ear",color=MUTED,fontsize=13); ax.text(0.62,0,0.14,"R ear",color=MUTED,fontsize=13)
+    ax.text(-0.9,0,0.14,"L ear",color=LABEL,fontsize=13); ax.text(0.62,0,0.14,"R ear",color=LABEL,fontsize=13)
     ax.plot(np.full_like(phi,xC),ringY,ringZ,color=AMBER,lw=3)
     pr=(i/Nc)
     for base in dots:
         ph=math.radians(base)+pr*2*np.pi
         ax.scatter([xC],[rC*math.cos(ph)],[rC*math.sin(ph)],color=AMBER,s=110,edgecolor=INK,linewidth=0.5)
-    ax.view_init(elev=17, azim=-58+5*math.sin(2*np.pi*i/Nc))   # fixed 3/4, never edge-on
-    fig.text(0.5,0.90,"Every direction on this cone shares the SAME timing AND loudness",
-             color=AMBER,fontsize=22,ha='center')
-    fig.text(0.5,0.165,"A still head can only lean on the fragile spectral fingerprint  (front/back and up/down blur)",
-             color=MUTED,fontsize=17,ha='center')
-    vc.chrome(fig,"04c","THE CONE OF CONFUSION","But turn your head, and the timing flips front vs back - the missing cue")
+    ax.view_init(elev=16, azim=-56+5*math.sin(2*np.pi*i/Nc))   # fixed 3/4, never edge-on
+    vc.chrome(fig,"","CONE OF CONFUSION","Turn your head, and the timing flips front to back — the missing cue")
     fig.savefig(os.path.join(de,f"{i:05d}.png")); [a2.remove() for a2 in fig.axes if a2 is not ax]
 plt.close(fig); print("fe_cone done")
 print("ALL DONE")
