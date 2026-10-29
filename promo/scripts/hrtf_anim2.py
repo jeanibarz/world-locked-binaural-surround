@@ -11,7 +11,7 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa
 import vizchrome as vc
 vc.style()
 CYAN,FOCAL,AMBER,INK,MUTED,LABEL,GRID = vc.CYAN,vc.FOCAL,vc.AMBER,vc.INK,vc.MUTED,vc.LABEL,vc.GRID
-OUT="/tmp/claude-1000/-home-jean-git-world-locked-binaural-surround/97432dac-b43b-491a-a91a-02b24812f7e8/scratchpad/cut"
+OUT=os.environ.get("PROMO_OUT", os.getcwd())
 SOFA=sorted(glob.glob('/home/jean/git/binaural-localization/data/ircam_sofa/IRC_*_R_44100.sofa'))
 SR=44100.0
 def mkd(n): p=os.path.join(OUT,n); os.makedirs(p,exist_ok=True); return p
