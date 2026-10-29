@@ -36,7 +36,7 @@ M=np.stack([octave_smooth(magdb(ir0[m,1])) for m in idx0],axis=0)
 fI=interp1d(az0,M,axis=0,bounds_error=False,fill_value=(M[0],M[-1]))
 d=mkd("fb_spec")
 fig,ax=vc.new_fig(); ins=fig.add_axes([0.765,0.56,0.17,0.25]); ins.set_aspect('equal')
-Nb=300
+Nb=450          # more frames -> smoother sweep under the ~2.5x VO stretch
 for i in range(Nb):
     a=150*np.sin(2*np.pi*i/Nb)
     ax.cla(); ax.semilogx(FREQ,fI(a),color=CYAN,lw=3); ax.fill_between(FREQ,fI(a),-40,color=CYAN,alpha=0.06)
@@ -49,6 +49,12 @@ for i in range(Nb):
     ins.cla(); ins.axis('off'); ins.set_xlim(-1.4,1.4); ins.set_ylim(-1.4,1.4)
     th=np.linspace(0,2*np.pi,60); ins.plot(np.cos(th),np.sin(th),color=CYAN,lw=2); ins.plot([0,0],[1,1.25],color=CYAN,lw=2)
     ar=np.radians(a); ins.plot([np.sin(ar)*1.15],[np.cos(ar)*1.15],'o',color=AMBER,ms=14)
+    # name the payoff exactly when the VO says "...your H R T F" (end of the segment)
+    if i/Nb>0.84:
+        la=min(1.0,(i/Nb-0.84)/0.08)
+        ax.text(0.97,0.90,"timing + colour = one filter: your HRTF",transform=ax.transAxes,
+                color=FOCAL,fontsize=25,fontweight='bold',ha='right',va='top',alpha=la,
+                bbox=dict(boxstyle='round,pad=0.45',fc='#0a0e14',ec=FOCAL,alpha=la))
     vc.chrome(fig,"","TONE COLOUR","Same sound, new direction — new tone colour")
     fig.savefig(os.path.join(d,f"{i:05d}.png")); [a2.remove() for a2 in fig.axes if a2 not in (ax,ins)]
 plt.close(fig); print("fb_spec done")

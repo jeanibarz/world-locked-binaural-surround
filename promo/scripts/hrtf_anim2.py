@@ -36,8 +36,12 @@ def itd_at(a):
 dd=mkd("fa2_itd")
 fig,axc=vc.new_fig(); axh=fig.add_axes([0.115,0.565,0.17,0.25]); axh.set_aspect('equal')
 N=360
+# phrase-keyed azimuth (q -> deg, 0=front,+=right): swing to the side (max gap), then front=0, then back=0,
+# so the sweep lands on the VO "...the bigger the head start ... straight in front ... straight behind ... both give zero".
+QW=[0.0, 0.13, 0.30, 0.50, 0.63, 0.75, 1.0]
+AZ=[0.0, 0.0,  45.0, 90.0, 0.0,  179.0, 179.0]
 for i in range(N):
-    a=(i/N)*360.0; aw=((a+180)%360)-180; val=itd_at(a)
+    q=i/N; a=float(np.interp(q,QW,AZ)); aw=((a+180)%360)-180; val=itd_at(a)
     axc.cla(); axc.axhline(0,color=GRID,lw=1.2)
     axc.plot(azd,itdd,color=CYAN,lw=3); axc.fill_between(azd,itdd,0,color=CYAN,alpha=0.10)
     # zero-crossing markers: front (0) and back (+/-180)
@@ -46,13 +50,20 @@ for i in range(N):
         if lab: axc.annotate(lab,(z,0),color=MUTED,fontsize=14,xytext=(z-40,0.28))
     axc.annotate("same!",(180,0),color=AMBER,fontsize=15,xytext=(120,-0.33),
                  arrowprops=dict(color=AMBER,arrowstyle="->")); axc.plot([-180],[0],'o',color=MUTED,ms=9)
+    # when the dot parks at front/back, pulse BOTH zero markers (VO: "...both give zero")
+    if q>0.60:
+        pul=0.45+0.55*abs(math.sin(i*0.5)); ea=min(1.0,(q-0.60)/0.08)
+        for z in (0,180):
+            axc.plot([z],[0],'o',mfc='none',mec=AMBER,ms=12+16*pul,mew=2.5,alpha=ea)
+        axc.text(0,-0.66,"front = back = 0  ->  timing alone can't tell them apart",color=AMBER,
+                 fontsize=16,ha='center',va='top',alpha=min(1.0,(q-0.60)/0.10))
     axc.plot([aw],[val],'o',color=AMBER,ms=20); axc.plot([aw,aw],[0,val],color=AMBER,lw=1.5,ls=':')
     axc.set_xlim(-180,180); axc.set_ylim(-1.1,1.1); axc.set_xticks([-180,-90,0,90,180])
     axc.set_yticks([-0.5,0,0.5]); axc.grid(alpha=0.4)
     axc.set_xlabel("sound direction   (deg,  0 = front,  + = right)",fontsize=21,color=INK)
     axc.text(-205,0.95,"RIGHT ear\nfirst",color=CYAN,fontsize=15,va='top',ha='left')
     axc.text(-205,-0.55,"LEFT ear\nfirst",color=CYAN,fontsize=15,va='top',ha='left')
-    if abs(val)<0.05: rd="both ears together"
+    if abs(val)<0.10: rd="both ears together"
     elif val>0: rd=f"right ear hears it {abs(val):.1f} ms sooner"
     else: rd=f"left ear hears it {abs(val):.1f} ms sooner"
     axc.text(aw+(14 if aw<120 else -14), val+(0.16 if val<0.8 else -0.18), rd,
@@ -87,7 +98,7 @@ fig.text(0.055,0.585,"Every direction on this cone reaches\nyour two ears with t
          color=LABEL,fontsize=20,va='top',linespacing=1.5)
 fig.text(0.055,0.40,"A still head has only tone colour to\ngo on — and it blurs front from back,\nand up from down.",
          color=MUTED,fontsize=19,va='top',linespacing=1.5)
-Nc=300
+Nc=520          # more frames -> smoother under the ~3.5x VO stretch (was a visible slow-mo judder)
 for i in range(Nc):
     ax.cla(); ax.set_axis_off(); ax.set_box_aspect((1,1,0.85))
     ax.set_xlim(-1.15,1.15); ax.set_ylim(-1.15,1.15); ax.set_zlim(-1.0,1.0)
@@ -101,7 +112,18 @@ for i in range(Nc):
     for base in dots:
         ph=math.radians(base)+pr*2*np.pi
         ax.scatter([xC],[rC*math.cos(ph)],[rC*math.sin(ph)],color=AMBER,s=110,edgecolor=INK,linewidth=0.5)
-    ax.view_init(elev=16, azim=-56+5*math.sin(2*np.pi*i/Nc))   # fixed 3/4, never edge-on
+    # phrase-keyed camera: idle 3/4 wobble, then ONE decisive turn on the VO "Turn your head" (frac ~0.76)
+    fr=i/Nc
+    if fr<0.74:
+        azim=-56.0+4.0*math.sin(2*np.pi*i/Nc)
+    else:
+        s=max(0.0,min(1.0,(fr-0.74)/0.16)); azim=-56.0+34.0*(s*s*(3-2*s))
+    ax.view_init(elev=16, azim=azim)
+    if fr>0.80:                                   # payoff caption: "Movement breaks the tie"
+        la=min(1.0,(fr-0.80)/0.10)
+        ax.text2D(0.02,0.15,"Move your head and the timing flips —\nthat movement breaks the tie.",
+                  transform=ax.transAxes,color=FOCAL,fontsize=19,fontweight='bold',va='top',
+                  linespacing=1.4,alpha=la,zorder=60)
     vc.chrome(fig,"","CONE OF CONFUSION","Turn your head, and the timing flips front to back — the missing cue")
     fig.savefig(os.path.join(de,f"{i:05d}.png")); [a2.remove() for a2 in fig.axes if a2 is not ax]
 plt.close(fig); print("fe_cone done")

@@ -8,3 +8,4 @@ Videos folder, and make a local commit + tag `explainer-vNN`.
 | version | tag | what changed |
 |---|---|---|
 | v01 | explainer-v01 | typography hierarchy fix (headlines to ink), unified caption scale + stable lower-third geometry, branded animated pivot card, dip-to-bg transitions between all 12 beats with black top/tail, restyled webcam caption |
+| v02 | explainer-v02 | sync visuals to the words + kill mid-section drag: reordered missing-cue beat to match VO (parallax -> headphone-fail -> world-lock) with a decisive head-turn on the money line; phrase-keyed ITD sweep with front/back zero-marker pulse; HRTF label reveal on 'your HRTF'; cone camera-turn + 'movement breaks the tie' payoff; cold-open hook caption + slow push-in; removed dead air at beat openings; smoother HRTF/cone frames |

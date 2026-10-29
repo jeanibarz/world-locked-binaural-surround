@@ -40,14 +40,18 @@ ffmpeg -nostdin -v error -y -ss 335 -t 15 -i "$SRC" -loop 1 -t 15 -i mask_face.p
 [sf][mk]alphamerge[sa];[bb][sa]overlay=0:0,vignette=PI/4.5,\
 drawtext=fontfile=${FONT}:text='Your webcam tracks your head, the sound follows':x=(w-text_w)/2:y=h-150:fontsize=48:fontcolor=0xe8eef0:box=1:boxcolor=black@0.62:boxborderw=24[v]" \
 -map "[v]" $V webcamv.mp4
-# cold: source money-shot crop
-ffmpeg -nostdin -v error -y -ss 118 -t 16 -i "$SRC" -vf "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,setsar=1" $V coldv.mp4
+# cold: source money-shot crop + slow push-in + two-stage burned hook caption (muted viewers, biggest retention window)
+ffmpeg -nostdin -v error -y -ss 118 -t 16 -i "$SRC" -vf \
+"scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,setsar=1,\
+zoompan=z='min(1.0+0.00013*on,1.06)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=1920x1080:fps=30,\
+drawtext=fontfile=${FONT}:text='Every sound is trapped inside your head':x=(w-text_w)/2:y=h-150:fontsize=54:fontcolor=0xe8eef0:box=1:boxcolor=black@0.62:boxborderw=24:alpha='if(lt(t,1.0)\,0\,if(lt(t,1.6)\,(t-1.0)/0.6\,if(lt(t,4.3)\,1\,if(lt(t,4.8)\,1-(t-4.3)/0.5\,0))))',\
+drawtext=fontfile=${FONT}:text='Watch this.':x=(w-text_w)/2:y=h-150:fontsize=60:fontcolor=0x35e0d0:box=1:boxcolor=black@0.62:boxborderw=24:alpha='if(lt(t,4.6)\,0\,min(1\,(t-4.6)/0.5))'" $V coldv.mp4
 # pivot card: branded chapter divider — eyebrow + alpha reveal + slow centre push (VO-safe: length fixed by -t)
 ffmpeg -nostdin -v error -y -f lavfi -t 8 -i color=c=0x0a0e14:s=1920x1080:r=30 \
  -vf "drawbox=x=120:y=96:w=15:h=15:color=0x35e0d0:t=fill,\
 drawtext=fontfile=$FONTM:text='FIRST PRINCIPLES':x=156:y=88:fontsize=30:fontcolor=0xaabac2:alpha='if(lt(t,0.4)\,t/0.4\,1)',\
 drawtext=fontfile=$FONT:text='First, how do you actually hear in 3D?':x=(w-text_w)/2:y=(h-text_h)/2-40:fontsize=72:fontcolor=0xe8eef0:alpha='if(lt(t,0.6)\,t/0.6\,1)',\
-drawtext=fontfile=$FONT:text='3 minutes. Do not move.':x=(w-text_w)/2:y=(h/2)+74:fontsize=34:fontcolor=0x8a9aa3:alpha='if(lt(t,1.0)\,0\,min(1\,(t-1.0)/0.6))',\
+drawtext=fontfile=$FONT:text='3 minutes. Do not move.':x=(w-text_w)/2:y=(h/2)+74:fontsize=34:fontcolor=0x8a9aa3:alpha='if(lt(t,6.0)\,0\,min(1\,(t-6.0)/0.6))',\
 zoompan=z='min(1.0+0.000208*on,1.05)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=1920x1080:fps=30,setsar=1" $V pivotv.mp4
 # timing = wavefront + ITD sweep
 printf "file 'beatv_itd.mp4'\nfile 'seq2b.mp4'\n" > tcat.txt

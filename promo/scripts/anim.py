@@ -127,8 +127,8 @@ def render_beat1(outdir, nframes):
             d.text((ex-(tb[2]-tb[0])/2, cy+40), lab, font=f_lab, fill=MUTED + (ha,))
 
         # the trapped sound dot: moves ear-to-ear only, never outside the head
-        if t > 0.8:
-            tt = t - 0.8
+        if t > 0.3:
+            tt = t - 0.3
             px = cx + a * math.sin(tt * 1.4)
             trail.append(px); trail[:] = trail[-10:]
             for k, txp in enumerate(trail[:-1]):
@@ -175,9 +175,9 @@ def render_beat2(outdir, nframes):
         d.ellipse([cx-Rx,cy-Ry,cx+Rx,cy+Ry],outline=CYAN_D+(int(ha*0.5),),width=2)
         head_group(d,cx,cy,R*lerp(0.92,1,intro),ha)
         # ear level meters
-        phi = -math.pi/2 + 0.30*max(0.0,t-1.0)     # start front, orbit
+        phi = -math.pi/2 + 0.30*max(0.0,t-0.3)     # start front, orbit (begins almost at once)
         sx=cx+Rx*math.cos(phi); sy=cy+Ry*math.sin(phi)
-        if t>1.0:
+        if t>0.3:
             lvlR=max(0.06,0.5+0.5*((sx-cx)/Rx)); lvlL=max(0.06,0.5-0.5*((sx-cx)/Rx))
             for bx,lv,lab in ((250,lvlL,"L EAR"),(1670,lvlR,"R EAR")):
                 d.rounded_rectangle([bx-34,cy-150,bx+34,cy+150],radius=10,outline=MUTED+(int(ha*0.6),),width=2)
@@ -212,15 +212,13 @@ def render_beat3(outdir, nframes):
         t=i/FPS; p=i/max(1,nframes-1)
         base=BASE_BG.convert("RGBA").copy(); d=ImageDraw.Draw(base,"RGBA")
         eyebrow(d, "THE MISSING CUE", 220)
-        aA=env(p,0,0.03,0.27,0.32); aB=env(p,0.30,0.35,0.52,0.57); aC=env(p,0.55,0.60,1.01,1.02)
+        # VO order: "In a real room ... the speakers stay put" (parallax, EARLY) then
+        # "Normal headphones do the opposite ... the whole scene turns with you" (bad, MIDDLE).
+        aPar=env(p,0,0.04,0.30,0.36); aBad=env(p,0.34,0.39,0.50,0.55); aC=env(p,0.55,0.60,1.01,1.02)
         swing=math.sin(t*1.6)*math.radians(28)
-        # A: speakers glued to head -> rotate together (bad / amber)
-        if aA>0.01:
-            ha=int(aA*255); _ring(d,cx,cy,Rr,swing,ha,good=False); head_group(d,cx,cy,R,ha,nose=swing)
-            text_center(d,cx,200,"Turn your head and the whole scene turns with you.",f_big,AMBER,ha)
-        # B: parallax — a real object stays put when you move
-        if aB>0.01:
-            ha=int(aB*255); sway=math.sin(t*1.3)*120
+        # PARALLAX (early): a real object stays put when you move
+        if aPar>0.01:
+            ha=int(aPar*255); sway=math.sin(t*1.3)*120
             # mug (world-fixed) at centre-top
             mx,my=cx,cy-40
             d.rounded_rectangle([mx-46,my-54,mx+46,my+54],radius=10,fill=PANEL+(ha,),outline=CYAN+(ha,),width=3)
@@ -233,21 +231,27 @@ def render_beat3(outdir, nframes):
             # smudge moves WITH you (fake)
             d.ellipse([ex-60,ey-150-0,ex-20,ey-110],fill=AMBER+(int(ha*0.6),))
             d.text((ex-96,ey-180),"headphone copy - moves with you",font=f_sm,fill=AMBER+(ha,))
-        # C: world-locked — ring fixed, head rotates inside (good / cyan)
+        # BAD (middle): speakers glued to head -> whole scene rotates together (amber)
+        if aBad>0.01:
+            ha=int(aBad*255); _ring(d,cx,cy,Rr,swing,ha,good=False); head_group(d,cx,cy,R,ha,nose=swing)
+            text_center(d,cx,200,"Turn your head and the whole scene turns with you.",f_big,AMBER,ha)
+        # C: world-locked — ring fixed, head makes ONE decisive turn on the money line (good / cyan)
         if aC>0.01:
-            ha=int(aC*255); _ring(d,cx,cy,Rr,0.0,ha,good=True); head_group(d,cx,cy,R,ha,nose=swing)
+            # hold ~0 until the VO says "Turn your head now", then one clean sweep; ring stays bolted
+            cturn=math.radians(30)*smooth((p-0.70)/0.06)
+            ha=int(aC*255); _ring(d,cx,cy,Rr,0.0,ha,good=True); head_group(d,cx,cy,R,ha,nose=cturn)
             # facing cone from head
             cone=Image.new("RGBA",(W,H),(0,0,0,0)); cd=ImageDraw.Draw(cone)
-            L=Rr+10; a1=swing-math.radians(20); a2=swing+math.radians(20)
+            L=Rr+10; a1=cturn-math.radians(20); a2=cturn+math.radians(20)
             cd.polygon([(cx,cy),(cx+L*math.sin(a1),cy-L*math.cos(a1)),(cx+L*math.sin(a2),cy-L*math.cos(a2))],fill=CYAN+(int(ha*0.18),))
             base.alpha_composite(cone)
             text_center(d,cx,200,"World-locked: the speakers stay put. Only you move.",f_big,CYAN,ha)
             if p>0.86:
                 hy=int(smooth((p-0.86)/0.08)*255)
                 lower_third(base,"The bet: this is what gets sound out of your head  (hypothesis, now testing)",font(FB,40),(p-0.86)/0.06)
-        # phase captions
-        if aA>0.5: lower_third(base,"Binaural is static — turn your head, the scene turns too",f_cap,aA)
-        elif aB>0.5: lower_third(base,"A real sound stays put as you move — that is the cue",f_cap,aB)
+        # phase captions (match the VO order: real-room cue first, then the headphone failure)
+        if aPar>0.5: lower_third(base,"A real sound stays put as you move — that is the cue",f_cap,aPar)
+        elif aBad>0.5: lower_third(base,"Normal headphones: turn your head and the scene turns too",f_cap,aBad)
         base.convert("RGB").save(os.path.join(outdir,f"{i:05d}.png"))
     print(f"beat3: {nframes} frames")
 
@@ -338,8 +342,8 @@ def render_itd(outdir, nframes):
             u0=k/n; u1=min((k+1)/n,1.0)
             d.line([sx+(Lx-sx)*u0,sy+(cy-sy)*u0, sx+(Lx-sx)*u1,sy+(cy-sy)*u1],fill=MUTED+(int(ha*0.8),),width=3)
         # expanding wavefront rings centred on the source
-        if t>0.8:
-            cyc=(t-0.8)%T; r=cyc*speed
+        if t>0.3:
+            cyc=(t-0.3)%T; r=cyc*speed
             for off,al in ((0,150),(70,70),(140,30)):
                 rr=r-off
                 if rr>8: d.ellipse([sx-rr,sy-rr,sx+rr,sy+rr],outline=CYAN+(int(al*intro),),width=3)
