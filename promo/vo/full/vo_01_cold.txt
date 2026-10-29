@@ -1,0 +1,1 @@
+Put on headphones. Right now, every sound you hear is trapped inside your head. But watch this. With a webcam and some code, I got these same headphones to place sound out in the room, in real three D, and hold it fixed in space while I move my head. No special hardware. Just the camera, watching me.

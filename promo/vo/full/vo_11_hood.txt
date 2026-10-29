@@ -1,0 +1,1 @@
+Under the hood, the heavy lifting is a Rust engine, running the audio on a normal processor, about five times faster than real time, no graphics card needed. Any app plays into a virtual audio cable, the engine renders it head-tracked, and sends it to your headphones through Windows. Along the way, it corrects for your headphones and runs a live equalizer.
