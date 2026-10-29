@@ -1,7 +1,7 @@
 {
   "iteration": 0,
   "max_iterations": 50,
-  "schedule_id": null,
+  "schedule_id": "ece924ee-7cce-4dca-9158-8f5304df8697",
   "current_video": "/home/jean/promo-loop/build/explainer.mp4",
   "vo_locked": true,
   "history": []
