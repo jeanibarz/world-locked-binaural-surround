@@ -47,7 +47,7 @@ this playbook again for the next iteration, up to **50** total. Never loop insid
    SID=$(python3 -c 'import json;print(json.load(open("promo/loop/state.json")).get("schedule_id") or "")')
    [ -n "$SID" ] && kookr schedule disable "$SID" || true
    ```
-   Report "50 iterations complete" and STOP (do nothing else).
+   Report "50 iterations complete", then **complete this task** (step 9) and STOP (do nothing else).
 
 2. **Sync canonical scripts into the build dir** (keeps `vo_full/` and `explainer-current.mp4`):
    ```
@@ -96,7 +96,18 @@ this playbook again for the next iteration, up to **50** total. Never loop insid
    and makes a **local commit + tag `explainer-vNN`** (and best-effort push).
 
 8. **Report** briefly: version N shipped, the two critic lenses used, the concrete improvements made,
-   and the output path. Then STOP.
+   and the output path.
+
+9. **Complete the task (REQUIRED — do not just stop).** This is a *scheduled, one-shot* task: the
+   next iteration is a **separate** hourly run. If you only stop emitting output, this task lingers in
+   `inProgress` and the schedule gate skips every hourly fire until the 3h hung-task reaper kills it —
+   silently losing ~3 iterations each time. So end the turn by marking the task terminal:
+   ```
+   kookr signal completion-ready --note "explainer v$N shipped; one iteration done" || true
+   curl -sS -X POST "${KOOKR_API_BASE_URL:-http://127.0.0.1:4800}/api/tasks/${KOOKR_TASK_ID}/complete" \
+     -H 'content-type: application/json' -d '{}' >/dev/null 2>&1 || true
+   ```
+   Then STOP. (The same applies to the `DONE` / cap-reached path in step 1 and to any early safe-exit.)
 
 ## Idempotency
 
