@@ -159,36 +159,61 @@ def head_group(d, cx, cy, r, ha, nose=0.0):
         ex = cx + r*math.sin(nose+s*math.pi/2); ey = cy - r*math.cos(nose+s*math.pi/2)
         d.ellipse([ex-11, ey-22, ex+11, ey+22], fill=CYAN_D+(ha,), outline=CYAN+(ha,), width=2)
 
-# --- beat 2: binaural, a source orbits the head ----------------------------
+# --- beat 2: binaural, a source orbits the head in TRUE 3D (front/back/above) -
+# Shared tilted-orthographic projector (X=right, Y=up, Z=front, + toward camera).
+# A single look-down camera turns the flat "radar" orbit into a ring that tilts in
+# depth: front rides high & bright, back sits low & dim, and the source can rise
+# overhead on the VO "...even above". Radius is CONSTANT (HRTF = direction, not
+# distance, per DECISIONS.md) -- only the direction changes, never the distance.
+def project3(cx, cy, X, Y, Z, vf=0.55, vu=0.82):
+    return cx + X, cy - vu*Y - vf*Z
 def render_beat2(outdir, nframes):
     os.makedirs(outdir, exist_ok=True)
     f_eye=font(FM,30); f_cap=font(FB,48); f_big=font(FB,44); f_sm=font(FM,24)
-    cx, cy, R = 960, 500, 128
-    Rx, Ry = 340, 250
+    cx, cy, R = 960, 500, 122
+    RHO=330                                        # constant direction-shell radius
     for i in range(nframes):
         t=i/FPS; base=BASE_BG.convert("RGBA").copy(); d=ImageDraw.Draw(base,"RGBA")
         intro=smooth(t/0.6); ha=int(intro*255)
         ea=int(smooth((t-0.3)/0.6)*255)
         eyebrow(d, "BINAURAL", ea)
         hp=int(smooth((t-0.2)/0.7)*220); draw_headphone(d,1706,100,hp); d.text((1548,138),"headphones on",font=f_sm,fill=MUTED+(hp,))
-        # faint orbit guide
-        d.ellipse([cx-Rx,cy-Ry,cx+Rx,cy+Ry],outline=CYAN_D+(int(ha*0.5),),width=2)
+        # faint wire shell of all directions: 3 latitude rings + 2 longitude arcs
+        sh_a=int(ha*0.32)
+        if sh_a>0:
+            for bdeg in (-32,0,32):
+                b=math.radians(bdeg); pts=[]
+                for aa in range(0,361,8):
+                    al=math.radians(aa); pts.append(project3(cx,cy,RHO*math.cos(b)*math.sin(al),RHO*math.sin(b),RHO*math.cos(b)*math.cos(al)))
+                d.line(pts,fill=CYAN_D+(sh_a,),width=2)
+            for ldeg in (0,90):
+                l=math.radians(ldeg); pts=[]
+                for bb in range(-90,91,6):
+                    b=math.radians(bb); pts.append(project3(cx,cy,RHO*math.cos(b)*math.sin(l),RHO*math.sin(b),RHO*math.cos(b)*math.cos(l)))
+                d.line(pts,fill=CYAN_D+(int(sh_a*0.8),),width=2)
+        # source: orbit azimuth + an elevation RISE (and settle) on the VO "...even above"
+        al=0.42*max(0.0,t-0.3)
+        belev=math.radians(50)*(smooth((t-5.0)/2.2)-smooth((t-8.4)/2.2))
+        X=RHO*math.cos(belev)*math.sin(al); Y=RHO*math.sin(belev); Z=RHO*math.cos(belev)*math.cos(al)
+        sx,sy=project3(cx,cy,X,Y,Z)
+        behind = Z<0 and math.hypot(sx-cx,sy-cy)<R+6
+        sf=lerp(0.74,1.26,(Z/RHO+1)/2)             # depth cue: near = bigger/brighter
+        def draw_source():
+            d.line([cx,cy,sx,sy],fill=CYAN_D+(int(130*sf),),width=2)
+            glow_dot(base,sx,sy,int(15*sf),(140,240,255),intensity=min(1.0,0.55+0.45*sf))
+            d.text((sx+20,sy-12),"a sound",font=f_sm,fill=MUTED+(int(210*sf),))
+        if t>0.3 and behind: draw_source()
         head_group(d,cx,cy,R*lerp(0.92,1,intro),ha)
-        # ear level meters
-        phi = -math.pi/2 + 0.30*max(0.0,t-0.3)     # start front, orbit (begins almost at once)
-        sx=cx+Rx*math.cos(phi); sy=cy+Ry*math.sin(phi)
+        if t>0.3 and not behind: draw_source()
+        # ear level meters, driven by horizontal (X) only -> overhead reads ~equal both ears
         if t>0.3:
-            lvlR=max(0.06,0.5+0.5*((sx-cx)/Rx)); lvlL=max(0.06,0.5-0.5*((sx-cx)/Rx))
+            lvlR=max(0.06,0.5+0.5*(X/RHO)); lvlL=max(0.06,0.5-0.5*(X/RHO))
             for bx,lv,lab in ((250,lvlL,"L EAR"),(1670,lvlR,"R EAR")):
                 d.rounded_rectangle([bx-34,cy-150,bx+34,cy+150],radius=10,outline=MUTED+(int(ha*0.6),),width=2)
                 hh=int(290*min(1,lv)); d.rounded_rectangle([bx-28,cy+144-hh,bx+28,cy+144],radius=8,fill=CYAN+(int(ha*0.85),))
                 d.text((bx-34,cy+164),lab,font=f_sm,fill=MUTED+(ha,))
-            # connecting ray + source dot (draw behind head when in back half)
-            d.line([cx,cy,sx,sy],fill=CYAN_D+(130,),width=2)
-            glow_dot(base,sx,sy,15,(140,240,255))
-            d.text((sx-44,sy-46),"a sound",font=f_sm,fill=MUTED+(200,))
         tag_a=int(smooth((t-6)/0.8)*255) if t>6 else 0
-        if tag_a: d.text((cx-170,cy+R+70),"two ears, two different signals - recreated",font=f_sm,fill=CYAN+(tag_a,))
+        if tag_a: d.text((cx-170,cy+R+96),"two ears, two different signals - recreated",font=f_sm,fill=CYAN+(tag_a,))
         text_center(d,cx,196,"Now it can be placed anywhere around you.",f_big,INK,int(smooth((t-0.4)/0.7)*255))
         lower_third(base,"Binaural recreates what each ear would really hear",f_cap,(t-1.0)/0.6)
         base.convert("RGB").save(os.path.join(outdir,f"{i:05d}.png"))

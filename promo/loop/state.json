@@ -1,5 +1,5 @@
 {
-  "iteration": 2,
+  "iteration": 3,
   "max_iterations": 50,
   "schedule_id": "ece924ee-7cce-4dca-9158-8f5304df8697",
   "current_video": "/home/jean/promo-loop/build/explainer.mp4",
@@ -16,6 +16,12 @@
       "when": "2026-10-29T09:30:36",
       "summary": "sync visuals to the words + kill mid-section drag: reordered missing-cue beat to match VO (parallax -> headphone-fail -> world-lock) with a decisive head-turn on the money line; phrase-keyed ITD sweep with front/back zero-marker pulse; HRTF label reveal on 'your HRTF'; cone camera-turn + 'movement breaks the tie' payoff; cold-open hook caption + slow push-in; removed dead air at beat openings; smoother HRTF/cone frames",
       "video": "world-locked-explainer-v02.mp4"
+    },
+    {
+      "n": 3,
+      "when": "2026-10-29T10:34:33",
+      "summary": "data-viz rigour + 3D hero: fixed an honesty bug (individuality now level-aligns each subject so inter-ear spread visibly widens with frequency, matching the VO instead of contradicting it); tone-colour replotted as directional transfer fn vs the all-directions average (honest 0 dB baseline) with relocated direction inset; ITD plot gained a proper labelled ms y-axis (peak now on the tick ladder) + full +/-180 domain; cone of confusion gained front/up/nose anchors and a MEASURED front/back ITD readout that flips from a tie to tie-broken as the head turns; rebuilt the binaural beat as a true tilted-3D orbit on a constant-radius direction shell (source rises overhead on 'even above', depth-cued size/brightness, VU meters even out above); cinematic depth-push transition on all 12 cuts",
+      "video": "world-locked-explainer-v03.mp4"
     }
   ]
 }

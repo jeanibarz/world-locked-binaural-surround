@@ -26,7 +26,7 @@ for m in idx:
     dd=0.5*(c[p-1]-c[p+1])/den if den else 0
     itd.append(((p-(len(L)-1))+dd)/SR*1e3)
 itd=np.array(itd)
-azd=np.linspace(az.min(),az.max(),721)
+azd=np.linspace(-180,180,721)   # full circle so the curve and its front/back zero markers coincide
 # DISPLAY sign: right-side source -> UP (positive). raw: right source is negative, so negate.
 itdd=-savgol_filter(interp1d(az,itd,kind='cubic',fill_value='extrapolate')(azd), 61, 3)
 def itd_at(a):
@@ -58,11 +58,11 @@ for i in range(N):
         axc.text(0,-0.66,"front = back = 0  ->  timing alone can't tell them apart",color=AMBER,
                  fontsize=16,ha='center',va='top',alpha=min(1.0,(q-0.60)/0.10))
     axc.plot([aw],[val],'o',color=AMBER,ms=20); axc.plot([aw,aw],[0,val],color=AMBER,lw=1.5,ls=':')
-    axc.set_xlim(-180,180); axc.set_ylim(-1.1,1.1); axc.set_xticks([-180,-90,0,90,180])
-    axc.set_yticks([-0.5,0,0.5]); axc.grid(alpha=0.4)
+    axc.set_xlim(-180,180); axc.set_ylim(-1.0,1.0); axc.set_xticks([-180,-90,0,90,180])
+    axc.set_yticks([-0.9,-0.5,0,0.5,0.9]); axc.grid(alpha=0.4)
     axc.set_xlabel("sound direction   (deg,  0 = front,  + = right)",fontsize=21,color=INK)
-    axc.text(-205,0.95,"RIGHT ear\nfirst",color=CYAN,fontsize=15,va='top',ha='left')
-    axc.text(-205,-0.55,"LEFT ear\nfirst",color=CYAN,fontsize=15,va='top',ha='left')
+    # proper quantitative y-axis: the peak the VO cites (~0.9 ms) now sits on the tick ladder
+    axc.set_ylabel("interaural time difference\n(ms,  + = right ear first)",fontsize=18,color=INK)
     if abs(val)<0.10: rd="both ears together"
     elif val>0: rd=f"right ear hears it {abs(val):.1f} ms sooner"
     else: rd=f"left ear hears it {abs(val):.1f} ms sooner"
@@ -107,18 +107,34 @@ for i in range(Nc):
     ax.plot([-1.1,1.1],[0,0],[0,0],color=CYAN,lw=2)
     ax.scatter([-0.5,0.5],[0,0],[0,0],color=CYAN,s=60)
     ax.text(-0.9,0,0.14,"L ear",color=LABEL,fontsize=13); ax.text(0.62,0,0.14,"R ear",color=LABEL,fontsize=13)
+    # orientation anchors so the front/back & up/down ambiguity points at something real
+    ax.plot([0,0],[0,1.05],[0,0],color=CYAN,lw=2,alpha=0.65); ax.text(0,1.14,0,"front",color=LABEL,fontsize=12)
+    ax.plot([0,0],[0,0],[0,0.95],color=CYAN,lw=1.6,alpha=0.45); ax.text(0,0,1.02,"up",color=LABEL,fontsize=12)
+    ax.scatter([0],[0.5],[0.02],color=INK,s=26,zorder=40)                # nose glyph on the sphere front
     ax.plot(np.full_like(phi,xC),ringY,ringZ,color=AMBER,lw=3)
     pr=(i/Nc)
     for base in dots:
         ph=math.radians(base)+pr*2*np.pi
         ax.scatter([xC],[rC*math.cos(ph)],[rC*math.sin(ph)],color=AMBER,s=110,edgecolor=INK,linewidth=0.5)
+    # two FIXED cone points -- one front, one back -- that the readout refers to
+    for ph0_ in (0.0,180.0):
+        yv=rC*math.cos(math.radians(ph0_)); zv=rC*math.sin(math.radians(ph0_))
+        ax.scatter([xC],[yv],[zv],color=INK,s=95,edgecolor=AMBER,linewidth=1.8,zorder=55)
     # phrase-keyed camera: idle 3/4 wobble, then ONE decisive turn on the VO "Turn your head" (frac ~0.76)
     fr=i/Nc
-    if fr<0.74:
-        azim=-56.0+4.0*math.sin(2*np.pi*i/Nc)
-    else:
-        s=max(0.0,min(1.0,(fr-0.74)/0.16)); azim=-56.0+34.0*(s*s*(3-2*s))
+    s=max(0.0,min(1.0,(fr-0.74)/0.16))
+    azim=-56.0+(4.0*math.sin(2*np.pi*i/Nc) if fr<0.74 else 34.0*(s*s*(3-2*s)))
     ax.view_init(elev=16, azim=azim)
+    # MEASURED payoff: the front and back cone points share the SAME ITD while still, then
+    # diverge as the head yaws -- shown with the real data via itd_at(), not just asserted.
+    yaw=34.0*(s*s*(3-2*s))
+    itF,itB=itd_at(35.0-yaw),itd_at(145.0-yaw)      # front/back point azimuths relative to the turning head
+    tied=abs(itF-itB)<0.08
+    ax.text2D(0.02,0.34,f"front point:  {itF:+.2f} ms\nback point :  {itB:+.2f} ms",
+              transform=ax.transAxes,color=(LABEL if tied else AMBER),fontsize=17,
+              family='monospace',va='top',linespacing=1.5,zorder=60)
+    ax.text2D(0.02,0.255,"same timing - a tie" if tied else "timing differs - the tie is broken",
+              transform=ax.transAxes,color=(MUTED if tied else AMBER),fontsize=14,va='top',zorder=60)
     if fr>0.80:                                   # payoff caption: "Movement breaks the tie"
         la=min(1.0,(fr-0.80)/0.10)
         ax.text2D(0.02,0.15,"Move your head and the timing flips —\nthat movement breaks the tie.",

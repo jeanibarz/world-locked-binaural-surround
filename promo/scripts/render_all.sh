@@ -84,8 +84,11 @@ for row in "${map[@]}"; do
   [ "$idx" = "01" ] && { fid=0.6; fic=black; }
   [ "$idx" = "12" ] && { fod=0.8; foc=black; }
   fost=$($SYSPY -c "print(max(0,$vd-$fod))")
+  # cinematic depth-push: every cut eases in from a hair of extra scale (1.03 -> 1.0 over
+  # ~0.4s) while fading up, giving a consistent filmic push-in. zoompan d=1 preserves the
+  # frame count, so each segment stays exactly its VO length (VO sync untouched).
   ffmpeg -nostdin -v error -y -i "$vis" -i "$VF/$voseg.mp3" \
-    -filter_complex "[0:v]setpts=${fac}*PTS,fps=30,scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:-1:-1:color=0x0a0e14,setsar=1,fade=t=in:st=0:d=${fid}:c=${fic},fade=t=out:st=${fost}:d=${fod}:c=${foc}[v]" \
+    -filter_complex "[0:v]setpts=${fac}*PTS,fps=30,scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:-1:-1:color=0x0a0e14,setsar=1,zoompan=z='if(lt(on,12),1.03-0.03*on/12,1.0)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=1920x1080:fps=30,fade=t=in:st=0:d=${fid}:c=${fic},fade=t=out:st=${fost}:d=${fod}:c=${foc}[v]" \
     -map "[v]" -map 1:a -shortest $ENC "a_$idx.mp4"
   echo "file 'a_$idx.mp4'" >> acat.txt
 done
