@@ -165,6 +165,17 @@
          than left misleading. Re-add it here and wire the engine when the A/B feature lands. -->
   </div>
 </div>
+
+<!-- First-run success cue (#234): so a first-time user can tell success from silent failure.
+     Hidden by default; cockpit.js reveals it only over http on the first run (localStorage flag),
+     so the standalone design preview still renders identically to the mockup. Pressing C, the
+     "Got it" button, or Recentering dismisses it for good. -->
+<div id="first-run-cue" class="first-run-cue" role="dialog" aria-labelledby="first-run-cue-title" aria-describedby="first-run-cue-body" hidden>
+  <div id="first-run-cue-title" class="first-run-cue-title">Is it working?</div>
+  <p id="first-run-cue-body" class="first-run-cue-body">Turn your head — the sound should stay put. Press <kbd>C</kbd> (or <b>Recenter</b>) to re-zero.</p>
+  <button id="first-run-cue-dismiss" type="button" class="btn btn-cyan first-run-cue-dismiss">Got it</button>
+</div>
+
 <script src="./cockpit.js"></script>
 </body>
 </html>

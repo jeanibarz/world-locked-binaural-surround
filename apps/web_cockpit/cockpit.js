@@ -33,6 +33,32 @@
     setTimeout(() => t.remove(), 5000);
   }
 
+  // ---- first-run success cue + keyboard recenter (#234) ---------------------
+  // A first-time user needs a way to tell success from silent failure. The cue tells them to turn
+  // their head (the sound should stay put) and to press C / Recenter to re-zero. It shows once on
+  // the first hosted launch; pressing C, clicking "Got it", or recentering dismisses it for good.
+  // Persistence is origin-scoped localStorage — reliable at the default fixed port (8732); a
+  // non-default port would re-show it, which is acceptable for a one-line hint.
+  const FIRST_RUN_KEY = "wlbs.firstRunCueSeen";
+  function dismissFirstRunCue() {
+    const cue = $("first-run-cue");
+    if (cue) cue.hidden = true;
+    try { localStorage.setItem(FIRST_RUN_KEY, "1"); } catch (_) { /* private mode: just hide it */ }
+  }
+  function maybeShowFirstRunCue() {
+    const cue = $("first-run-cue");
+    if (!cue) return;
+    let seen = false;
+    try { seen = localStorage.getItem(FIRST_RUN_KEY) === "1"; } catch (_) { /* unreadable: treat as unseen */ }
+    if (!seen) cue.hidden = false;
+  }
+  // A bare letter key is a shortcut only when the user isn't typing into a field.
+  function isTypingTarget(t) {
+    if (!t) return false;
+    const tag = t.tagName;
+    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t.isContentEditable === true;
+  }
+
   // Gain commands are acknowledged by engine state, rather than the queued HTTP response.
   let outputGain = null, gainEditing = false, gainPending = null, gainTimer = null;
   let gainStateVersion = 0, gainRequestVersion = 0;
@@ -365,6 +391,19 @@
     });
     const sb = $("settings-btn"); if (sb) sb.addEventListener("click", () => window.open("/settings.html", "cockpit-settings", "width=576,height=1012"));
     const rc = $("recenter-btn"); if (rc) rc.addEventListener("click", () => call("recenter"));
+    const frc = $("first-run-cue-dismiss"); if (frc) frc.addEventListener("click", dismissFirstRunCue);
+    // Press C to recenter (re-zero the world-lock), matching the first-run cue (#234). Ignored while
+    // typing in a field, and when a modifier is held so Ctrl/⌘+C (copy) is untouched.
+    document.addEventListener("keydown", (e) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (isTypingTarget(e.target)) return;
+      if (e.key === "c" || e.key === "C") {
+        e.preventDefault();
+        call("recenter");
+        toast("Recentered — the ring is re-zeroed to where you're facing now.", "info");
+        dismissFirstRunCue();
+      }
+    });
     // The experiments drawer is hidden (#212), so its tab/A-B/shuffle controls are not wired here.
     // Keep the preview + overlay aligned when the window (and the preview box) resizes.
     window.addEventListener("resize", () => drawPreview());
@@ -455,6 +494,7 @@
     renderBufferCells({ fill_blocks: 7, cushion_blocks: 6, capacity: 12 });  // sample buffer meter
     if (location.protocol.indexOf("http") === 0) {
       connect(); startPreview();
+      maybeShowFirstRunCue();  // first-run success cue (#234), hosted only — keeps the standalone preview pristine
       // Size the window reliably from the page: Chrome ignores --window-size for an --app window when
       // Chrome is already running (and our port changes each launch, so it can't remember either), so
       // resize ourselves to the saved size. window.resizeTo works on a standalone --app window.

@@ -157,3 +157,17 @@ html,body{margin:0;background:var(--bg)}
 .output-level-bar{margin:4px 0 5px}
 #output-clipping.warn{color:var(--amber)}
 #output-clipping.bad{color:var(--red)}
+
+/* First-run success cue (#234) — a dismissible card that tells a newcomer how to confirm the
+   world-lock is working. Fixed overlay (like the toast) so it never disturbs the cockpit grid. */
+.first-run-cue{position:fixed;left:50%;top:18px;transform:translateX(-50%);z-index:2500;
+  width:min(460px,calc(100vw - 32px));background:var(--panel);border:1px solid var(--cyan);
+  border-radius:12px;padding:16px 18px;box-shadow:0 12px 40px rgba(0,0,0,.5);
+  display:flex;flex-direction:column;gap:9px}
+.first-run-cue[hidden]{display:none}
+.first-run-cue-title{font-size:15px;font-weight:700;color:var(--cyan)}
+.first-run-cue-body{margin:0;font-size:13px;line-height:1.5;color:var(--text2)}
+.first-run-cue-body b{color:var(--text);font-weight:600}
+.first-run-cue kbd{font-family:'JetBrains Mono',monospace;font-size:12px;background:var(--inset);
+  border:1px solid var(--border2);border-bottom-width:2px;border-radius:5px;padding:1px 6px;color:var(--text)}
+.first-run-cue-dismiss{align-self:flex-end;height:32px;padding:0 16px;border-radius:8px;font-size:13px}
