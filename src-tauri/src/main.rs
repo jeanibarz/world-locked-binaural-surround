@@ -1,29 +1,41 @@
 // Native shell for World-Locked Binaural Surround.
-// Spawns the Python engine (hidden, fixed port, no browser) and shows a single native window
-// pointing at the local cockpit server. Closing the window kills the engine. The HTTP server
-// stays reachable, so the same URL can be opened in Chrome for inspection.
+// Spawns the standalone Rust engine (hidden, fixed port, no window) and shows a single native
+// window pointing at the local cockpit server. Closing the window kills the engine. The HTTP
+// server stays reachable, so the same URL can be opened in Chrome for inspection.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::net::TcpStream;
 use std::os::windows::process::CommandExt;
+use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use tauri::Manager;
 
-const PORT: u16 = 8731;
+const PORT: u16 = 8732;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-const RUN_CMD: &str = r"C:\Users\ibarz\BinauralHeadtracker\run.cmd";
 
 struct Backend(Mutex<Option<Child>>);
+
+/// The engine binary ships next to this shell's exe (the installer/bundle lays them out
+/// side by side — see host/bundle-engine.sh). No hardcoded install path: resolve it from
+/// our own location so the bundle runs wherever it is dropped.
+fn engine_path() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("wlbs_engine.exe")))
+        .unwrap_or_else(|| PathBuf::from("wlbs_engine.exe"))
+}
 
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
-            // start the Python engine hidden on the fixed port, no auto-browser
-            let child = Command::new("cmd")
-                .args(["/c", RUN_CMD, "listen", "--port", "8731", "--no-browser"])
+            // Start the Rust engine hidden on the fixed port. It resolves its own assets
+            // (ONNX models, BRIR packs, hp_eq, web_cockpit) relative to its exe and serves the
+            // cockpit over HTTP; it does not open a browser of its own.
+            let child = Command::new(engine_path())
+                .args(["--port", &PORT.to_string()])
                 .creation_flags(CREATE_NO_WINDOW)
                 .spawn()
                 .ok();

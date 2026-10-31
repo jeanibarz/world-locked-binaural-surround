@@ -14,6 +14,15 @@ A real-time, head-tracked, world-locked binaural renderer for Windows. Read
 [`README.md`](README.md) for the idea and [`docs/requirements.md`](docs/requirements.md)
 for the full requirements and architecture before doing anything else.
 
+> **The product is 100% Rust — the Python prototype has been removed (`chore/remove-python`,
+> RFC G4: zero Python in the delivered product).** The engine is the single standalone binary
+> `wlbs_engine.exe` (crates: `rust-engine` + `rust-{render-core-lib,conv-core,control-plane,audio-io,vision-client}`;
+> `rust-filterpack-bake` is the zero-Python BRIR baker). **Build every feature in the Rust
+> crates.** Do not reintroduce Python, `apps/launch.py`, a PyO3 kernel, or a `run.cmd` launcher —
+> that regresses G4. The parity goldens (`rust-engine/hp_eq/oracle_golden_48k.f32`,
+> `rust-vision-client/tests/fixtures/kabsch_fixture.json`) are frozen snapshots of the old
+> Python oracles, kept as data; recover a generator from git history only if one must be re-derived.
+
 ## The one-block loop (how each task works)
 
 1. **Read durable state, not memory.** Open `docs/backlog.md` (the ordered block
@@ -91,15 +100,16 @@ The dev box is **WSL2 (Linux)**, but it sits on the owner's **Windows** host and
 reaches it through **WSL interop** — so Windows-only spikes (audio/WASAPI,
 camera) are runnable **from here**, not blocked:
 
-- `py.exe -3.12` launches a native **Windows Python** that has the real audio
-  stack (`sounddevice`/PortAudio → WASAPI) and the webcam. Run a repo script by
-  its Windows path: `WINPATH=$(wslpath -w <script>); py.exe -3.12 "$WINPATH"`.
+- The engine is a Windows binary (`wlbs_engine.exe`, WASAPI + webcam). Build it for
+  the host with `cargo xwin` (see `host/bundle-engine.sh`) and run it over interop —
+  `wlbs_engine.exe --list-devices` enumerates endpoints from here without a window.
 - WSL itself exposes only WSLg PulseAudio (no WASAPI, no soundcard), which is
   **not** representative of the Windows low-latency path — never quote WSL audio
-  numbers. Keep portable logic in the package (unit-tested on WSL/CI without any
-  device), and put hardware-touching code in `spikes/`.
-- Do **not** record an audio/camera block as "blocked on WSL" — drive the
-  Windows Python. (See journal 02.)
+  numbers. Keep portable DSP/geometry in the pure crates (unit-tested on WSL/CI
+  without any device via `cargo test`); the WASAPI/vision modules are `cfg(windows)`
+  and type-check with `cargo xwin check --target x86_64-pc-windows-msvc`.
+- Do **not** record an audio/camera block as "blocked on WSL" — drive the Windows
+  engine over interop. (See journal 02.)
 
 ### Elevated host control — the SSH admin channel (for driver/VM work)
 
@@ -144,161 +154,76 @@ restart. (Owner granted "max autonomy", journal 54.)
   a VM, uninstalling tools or the audio driver, network-exposing changes). Installs, VM creation,
   checkpoints, and in-VM work are fine to do autonomously.
 
-### Running the host GUI apps (camera + audio + a window) — ON WINDOWS, not WSL
+### Running the engine on the host (camera + audio + a window) — ON WINDOWS, not WSL
 
-The host apps — the world-lock passthrough engine (daily driver + the cockpit UI) — and
-the vision/audio spikes need a **real webcam, a real audio
-output, and a display** — they **must run on the Windows host**, never under WSL (no
-`/dev/video*`, no WASAPI, and the package's `cv2`/`mediapipe`/`sounddevice` aren't even
-installed on the WSL side). There is **one** host entrypoint, `apps/launch.py`, with a
-**mode** as its first argument (`listen` | `test`); the host's
-single `run.cmd` (tracked template in `host/`) forwards to it. Drive it through interop
-with the **host** Python, which *does* have those libs (`py.exe -3.12` →
-`C:\Users\<user>\AppData\Local\Programs\Python\Python312`). The recipe, with the two
-gotchas that will otherwise waste a launch:
+The engine needs a **real webcam, a real audio output, and a display**, so it **must run on
+the Windows host**, never under WSL (no `/dev/video*`, no WASAPI). It is a single standalone
+binary — `wlbs_engine.exe` — with no interpreter, no `sys.path`, and no model-path gotchas:
+it resolves its own assets (ONNX models, BRIR packs, `hp_eq/`, `web_cockpit/`) relative to its
+exe. Drive it through WSL interop:
 
-1. **Inject the package via `sys.path`, not `PYTHONPATH`.** The host Python does not
-   have `binaural_headtracker` installed, and on this box `PYTHONPATH` is overridden by
-   the environment, so exporting it does nothing. Instead call `apps/launch.py` over a
-   `\\wsl.localhost\<distro>\home\...` **UNC path** — it prepends its own repo's `src`
-   and `apps` to `sys.path` from `__file__` and dispatches to the mode's `main()`. UNC
-   imports work fine from Windows Python — the supported way to run the WSL checkout's
-   code on the host without installing anything:
-   ```bat
-   py.exe -3.12 "\\wsl.localhost\Ubuntu-22.04\home\jean\git\world-locked-binaural-surround\apps\launch.py" listen <--flags>
-   ```
-   (`wslpath -w <path>` gives the UNC path for a worktree file; `host/run.cmd` wraps this
-   with the owner's device flags and the exit-97 reload loop.) Launch it with the Bash
-   tool's **`run_in_background`** — it's a long-lived GUI; the completion notice is the
-   user quitting (or a crash to read).
-2. **MediaPipe can't open a UNC model path.** `cv2`/`sounddevice`/imports take UNC, but
-   the FaceLandmarker C++ loader throws `FileNotFoundError` on `\\wsl.localhost\...` —
-   **copy the `.task` to a local `C:` path** and pass that as `--model`. (Baked BRIR dirs
-   and source WAVs are already real `C:` paths, so they're fine.)
+1. **Build + bundle from WSL:** `host/bundle-engine.sh <out_dir>` cross-compiles the engine
+   with `cargo xwin` and assembles the self-contained bundle (exe + `DirectML.dll` + `assets/`
+   + `packs/default/` + `hp_eq/` + `web_cockpit/`). Copy the bundle to the owner's host folder
+   (below).
+2. **Run it** — `wlbs_engine.exe` prints `COCKPIT http://127.0.0.1:8732` and serves the cockpit
+   there. Launch it with the Bash tool's **`run_in_background`** (it's long-lived; the
+   completion notice is the user quitting or a crash to read). `wlbs_engine.exe --list-devices`
+   enumerates WASAPI endpoints from here without a window.
 
-Host assets (owner's, kept out of git): the FaceLandmarker model
-`spikes/models/face_landmarker.task` (download per `spikes/b0_4_head_tracker.py`; also
-keep a local-`C:` copy for MediaPipe), the baked BRIR dir (`docs/baked-brir-setup.md`),
-and dry source WAVs (e.g. `caisse_claire_*`). A WSLg Tk window can **preview** a dialog
-from WSL, but the camera + audio always run on the host. (See journal 02; B6.2.)
+**The owner's host install location is `C:\Users\ibarz\WLBS-Engine\`** (per-user; Program Files
+needs admin we don't have). Put new host assets (BRIR packs, hp_eq profiles) there, or import
+them into `%APPDATA%\WLBS` with `wlbs_engine --import-pack <dir>` / `--import-hp-eq <dir>`.
 
 **Anything visual (alignment, symmetry, text width, clipping, DPI) is checked by screenshot +
 pixel measurement, never by reasoning about the math or by an isolated probe** — load the
-`host-gui-visual-check` skill (`spikes/host_window_shot.ps1` + `spikes/host_shot_measure.py`).
+`host-gui-visual-check` skill.
 
 ### Measurements & latency experiments — headless, run them here too
 
 **"Needs host hardware" in the backlog/journals (e.g. B8.5, the latency split, B8.8) means
-*run it on the host via interop* — NOT "blocked / deferred".** The measurement harnesses are
-**headless** (no window, no dialog), so they're easier than the GUI apps above — don't write
-"needs host hardware, deferred" without first running it from here:
+*run it on the host via interop* — NOT "blocked / deferred".** Don't write "needs host
+hardware, deferred" without first running it from here:
 
-- **Device buffer + split, unattended:** the passthrough's own live latency probe splits
-  pose-age-at-the-ear into **stale / queue / device** (shown in the S-panel and printed on exit;
-  journals 46/85). The standalone `latency_sweep`/`latency_bench` apps and the `latency` mode were
-  retired once the live probe replaced them; to isolate the device buffer, replicate the pipeline
-  with a synthetic pose as in the next bullet.
+- **Device buffer + split, unattended:** the engine's own live latency probe splits
+  pose-age-at-the-ear into **stale / queue / device** (shown in the cockpit and printed on exit;
+  journals 46/85).
 - **The live `queue`/`stale` audio-pipeline terms do NOT need a face.** The camera only sets a
-  pose *value + timestamp*; it does not touch FIFO timing. To measure them unattended, replicate
-  the passthrough's loopback-capture → burst-drain worker → output FIFO with a **synthetic
-  `pose_t`** (set at ~30 Hz) — real VoiceMeeter loopback + real FiiO out, no camera, no window.
+  pose *value + timestamp*; it does not touch FIFO timing — a synthetic `pose_t` (~30 Hz) over
+  real VoiceMeeter loopback + real output exercises them with no camera, no window.
 - The only things you genuinely can't do from here are a **human moving their head** and judging
   audio **by ear** (the motion→sound ground-truth, B8.5 §c). Everything else is runnable now.
 
-**The owner's host install location is `C:\Users\ibarz\BinauralHeadtracker\`** (per-user;
-Program Files needs admin we don't have). It holds the **single** `run.cmd` (the tracked
-template is `host/run.cmd`; it uses `%~dp0` so it keeps working wherever the folder is, and
-calls `apps/launch.py` in the `main` checkout over the UNC path), the local-`C:` model copy,
-`dry_snare.wav`, and the `hrir_sets\` candidates. Put new host assets here, not in Downloads.
-Deploy/update the launcher by copying `host/run.cmd` over (see `host/README.md`); keep it a
-single start script — add a *mode* to `apps/launch.py`, don't spawn another `run_*.cmd`.
+### Build & deploy to the owner's Windows host — the runbook
 
-**GPU compute (CuPy on the RTX 3090) — now OPTIONAL.** The native Rust kernel (B8.2, the
-`--rust` path) renders the 8-channel 500 ms-BRIR passthrough in real time on the **CPU**
-(~5× RT), so the GPU is no longer required — it's an alternative, not the headline. Only
-*pure-Python* convolution is too slow (~0.97× RT); the GPU does ≈6× RT at block 256, full
-BRIR. If you do use `--gpu`: host Python has `cupy-cuda12x` **plus the matching CUDA 12
-runtime wheels** — `nvidia-{cuda-runtime,cufft,cublas,cusparse,cusolver,curand,
-cuda-nvrtc,nvjitlink}-cu12` — because the system only has CUDA 11.x toolkits and CuPy 13's
-pathfinder needs a consistent CUDA-12 set in site-packages (installing only some leaves
-cuFFT/nvrtc broken). Two gotchas when launching the host Python **from WSL**: (1) run it
-with the cwd on a **real `C:` drive**, never the WSL worktree — CuPy's `_get_cuda_path`
-falls back to `if os.path.exists('/usr/local/cuda')`, which resolves into the WSL mount
-when the process cwd is a `\\wsl.localhost\…` path and makes it load the wrong CUDA; (2)
-the owner's `.cmd` runs on Windows so neither applies there. (See journal 24; B4.1/B4.2.)
+The product is **CPU, no GPU, no Python** — the Rust render core sustains the 8-channel
+500 ms-BRIR passthrough in real time on the CPU. The runbook:
 
-**Native render kernel (Rust/PyO3) — the GPU-free fast path (B8.2).** `rust/` is a separate
-maturin crate `binaural_kernel` (the batched partitioned bus convolution in Rust), an
-**optional accelerator** — not part of the Python wheel, never required on CI (tests
-`pytest.importorskip("binaural_kernel")`). It reaches ~5× RT on CPU at block 256 (bit-exact vs
-the Python renderer), so the GPU is now optional. Build it into the venv with a Rust toolchain:
-`VIRTUAL_ENV=.venv maturin develop --release -m rust/Cargo.toml` (or from `rust/`). The apps
-select it with `--rust` (takes precedence over `--gpu`; falls back to pure-Python CPU if
-unbuilt). `rust/target/` is gitignored; `rust/Cargo.lock` is committed. (See journal 27.)
+1. **Build the bundle** (WSL): `host/bundle-engine.sh <out_dir> [onnx_dir] [canonical] [pack]`.
+   A **native-ext4 `CARGO_TARGET_DIR`** is recommended (`llvm-dlltool` EACCESes on `/mnt/*`).
+   The pure DSP/geometry builds and unit-tests on WSL with `cargo test`; the `cfg(windows)`
+   WASAPI/vision modules type-check with `cargo xwin check --target x86_64-pc-windows-msvc`.
+2. **Copy to the host** install folder (`C:\Users\ibarz\WLBS-Engine\`) and run
+   `wlbs_engine.exe`. Defaults match the owner's listening setup (`timealign`, headphone comp
+   on); override devices with `--source`/`--output`, port with `--port`, interpolation with
+   `--method`, block/cushion with `--block`/`--latency-ms`.
+3. **Native window (optional):** `host/build-tauri.sh` builds the `src-tauri/` shell, which
+   launches `wlbs_engine.exe` (resolved beside its own exe) hidden on port 8732 and shows the
+   cockpit in a single native window; closing the window stops the engine.
 
-**Distributing the kernel cross-platform (B8.3).** Built **abi3** (`abi3-py310`), so one wheel
-per platform runs on CPython 3.10+ (including the newest — the host Python version is gated by
-mediapipe/opencv wheels, not the kernel). `rust/build-wheels.sh [linux|windows|all]` builds
-wheels into `dist/` (gitignored) with **no CI**: Linux native, and **Windows cross-compiled from
-WSL** via `cargo-xwin` + `pyo3/generate-import-lib` (prereqs in the script header: the
-windows-msvc target, `cargo install cargo-xwin`, `apt install clang lld llvm`, a `clang-cl`
-symlink, and a native-ext4 `CARGO_TARGET_DIR` — `llvm-dlltool` EACCESes on `/mnt/*`). **macOS is
-not cross-buildable from Linux** (Apple SDK + a Mac): the Mac colleague runs `maturin build`
-locally or uses the pure-Python fallback. Install a built wheel with `pip install <wheel>` into
-the Python that runs the app. (See journal 28.)
-
-### Build & deploy to the owner's Windows host — the current runbook
-
-The owner runs the apps on the **Windows host** (native `py -3.12`), driven from the WSL
-worktree via the **single** host-local `run.cmd` in `C:\Users\ibarz\BinauralHeadtracker\`,
-which forwards to `apps/launch.py <mode>` (`listen` = daily world-lock passthrough, `test` =
-+ HRIR-set blind A/B & localization), injecting the permanent WSL checkout's `src`/`apps` onto
-`sys.path` before calling the app's `main()`. (The old `run_binaural.cmd` / `run_passthrough.cmd`
-/ `launch_live.py` / `launch_passthrough.py` zoo was consolidated into it — journal 64.) Host assets kept out of
-git live there too: `face_landmarker.task`, `dry_snare.wav`, the baked BRIR dir (under the
-EqualizerAPO config), and `wheels/` (the built kernel).
-
-Fast path (what the launchers already do): **CPU, no GPU, via the native Rust kernel.**
-
-1. **Build the kernel wheel once** (in WSL): `rust/build-wheels.sh windows` → a
-   `cp310-abi3-win_amd64.whl` in `dist/`. (abi3 ⇒ one wheel for any host Python 3.10+.)
-2. **Install it into the host Python**: copy the wheel to `C:\…\BinauralHeadtracker\wheels\`
-   and `py -3.12 -m pip install --force-reinstall "C:\…\wheels\<wheel>"`. Verify
-   `py -3.12 -c "import binaural_kernel"`.
-3. **Run**: double-click `run.cmd` (daily `listen`), or pass a mode — `run.cmd test`.
-   That one script is the **only** host entrypoint (it forwards to
-   `apps/launch.py`); the passthrough uses `--rust --lfe-mode brir --output-eq
-   <rev26_final.txt>` at a small `--block` with a low `--latency-ms` for snappy head-tracking.
-   `--gpu` (CuPy) stays available as an alternative but needs the CUDA-12 wheel set above;
-   plain pure-Python CPU is the last-resort fallback (works everywhere, ~0.97× RT, may drop
-   out under motion).
-
-Updating the app's code needs no redeploy — the launcher imports live from the WSL checkout;
-only a **kernel** change (anything under `rust/`) requires rebuilding + reinstalling the wheel
-(steps 1–2). Sharing with a colleague: build their platform's wheel (Linux native / Windows via
-cargo-xwin / macOS on a Mac), or they run the pure-Python fallback.
-
-**Latency characterisation.** The standalone latency-sweep/bench apps (`latency_sweep.py` /
-`latency_bench.py`) and the `latency` run mode were retired; the passthrough now measures
-pose-age-at-the-ear **live** and **splits it into stale / queue / device** in the S-panel and on
-exit (journals 46/85). To characterise block/cushion offline, drive the pipeline with a synthetic
-pose (see "Measurements & latency experiments" above). The WASAPI-shared-vs-MME device-buffer
-finding is journals 42–44.
-
-**In-app reload (so a code change needs no manual restart).** The passthrough returns exit code
-`RESTART_EXIT_CODE` (97) when the owner presses **Enter** (the *Reload* button); `run.cmd`
-wraps the `py` call in a `:loop` that relaunches while it sees 97, so a fresh process picks up the
-latest WSL code and re-opens the audio devices cleanly — no closing the window or re-running
-`run.cmd`. Quit (**Q**/**Esc**) exits 0 and falls through to `pause`. Any new host launcher that
-wants the same must keep the `if %errorlevel%==97 goto loop` line. (Journal 39.)
+A code change requires a **rebuild + rebundle** (the engine is compiled — there is no live
+import). Live settings (camera, flip, HRIR set, headphone comp, **per-position ITD**)
+reconfigure the running engine from the cockpit's Settings panel with no restart. Cross-platform:
+the engine builds for Linux natively and Windows via `cargo xwin`; macOS needs a Mac (Track S).
 
 ## Working discipline
 
-- **Prototype in Python first** for fast iteration, but the language is **not
-  locked**: a block may prototype or benchmark a hot path in **C/C++/Rust** as
-  soon as performance is the deciding question — don't defer all native work to
-  M8 (see requirements § 5). Record the language choice and its licence in the
-  journal; keep config/HRIR/world-model shared across languages.
+- **Build in Rust** — the product is the Rust engine and the Python prototype has been
+  removed (RFC G4). Add features in the right crate: DSP in `rust-render-core-lib` /
+  `rust-conv-core`, the pipeline/CLI/settings in `rust-engine`, the cockpit/HTTP in
+  `rust-control-plane`, WASAPI in `rust-audio-io`, head tracking in `rust-vision-client`,
+  pack baking in `rust-filterpack-bake`. Keep config/HRIR/world-model shared across crates.
+  Record any new third-party licence in the journal.
 - One variable at a time for any comparison; state the hypothesis before the
   result; record negative results. (Mirrors the sibling project's method.)
 - Keep large binaries (SOFA, wav, models) **out of git** (see `.gitignore`);
@@ -355,11 +280,11 @@ Trained localization judges are published to a **shared, persistent, non-version
 registry** — default **`/mnt/d/binaural-models/registry/`** (a 4 TB drive outside
 every worktree, so it survives branch switches), override with
 **`$JUDGE_MODEL_REGISTRY`** (binaural-localization honours the same var). **Never
-guess which `saved_model/*.keras` to use** — resolve the best validated judge with
-`binaural_headtracker.judge_registry.best_judge()` (pure-python; returns the model
-path + metadata/metrics). Current best: **`pooled5_distribution_v1`** (pooled 5-rig,
-cross-rig QE 9.0%, in-domain 0.44%). The keras model loads in the *sibling's* env;
-this repo only resolves the path. See `judge_registry` for the contract.
+guess which `saved_model/*.keras` to use** — resolve the best validated judge from the
+registry's own metadata, or via the sibling project `binaural-localization` (which owns
+the judge tooling and loads the keras model in its env). Current best:
+**`pooled5_distribution_v1`** (pooled 5-rig, cross-rig QE 9.0%, in-domain 0.44%). Judging
+is a sibling-project analysis workflow — it is **not** part of this (Rust, zero-Python) product.
 
 ### Reading the judge output (observability methodology)
 
