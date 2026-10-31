@@ -760,26 +760,6 @@ mod tests {
         assert!((np_interp(9.0, &xp, &fp) - 20.0).abs() < 1e-12);
     }
 
-    // Parity gate vs the Python reference (scipy/numpy) on the owner's Audeze baked_7p1_test set.
-    // `#[ignore]`d because it reads the owner's pack + the dumped reference; run explicitly:
-    //   cargo test --release parity_vs_python_reference -- --ignored --nocapture
-    fn read_ref(method: &str) -> (Vec<f64>, Vec<f64>, Vec<f64>, usize, usize) {
-        let dir = "/tmp/claude-1000/-home-jean-git-world-locked-binaural-surround/0fe2dec5-053f-4191-ba13-7316e1077cc0/scratchpad";
-        let bytes = std::fs::read(format!("{dir}/ref_{method}.bin")).unwrap();
-        let naz = u32::from_le_bytes(bytes[0..4].try_into().unwrap()) as usize;
-        let ntaps = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
-        let rd = |off: usize, count: usize| -> Vec<f64> {
-            (0..count)
-                .map(|i| f64::from_le_bytes(bytes[off + i * 8..off + i * 8 + 8].try_into().unwrap()))
-                .collect()
-        };
-        let n = naz * ntaps;
-        let left = rd(8, n);
-        let right = rd(8 + n * 8, n);
-        let az = rd(8 + 2 * n * 8, naz);
-        (left, right, az, naz, ntaps)
-    }
-
     #[test]
     #[ignore]
     fn bench_dense_ring_render_cost() {
@@ -817,35 +797,4 @@ mod tests {
         }
     }
 
-    #[test]
-    #[ignore]
-    fn parity_vs_python_reference() {
-        use crate::pack::BrirPack;
-        let pack =
-            BrirPack::load(std::path::Path::new("/mnt/c/Users/ibarz/WLBS-Engine/packs/default")).unwrap();
-        let max_abs = |a: &[f64], b: &[f64]| a.iter().zip(b).map(|(x, y)| (x - y).abs()).fold(0.0, f64::max);
-        let peak = |a: &[f64]| a.iter().map(|v| v.abs()).fold(0.0, f64::max);
-        let mut worst_time = 0.0f64;
-        for method in ["nearest", "timealign", "minphase", "notchwarp"] {
-            let dense = interpolated_ring(
-                &pack.ring_left, &pack.ring_right, &pack.ring_az, pack.n_ring, pack.n_taps,
-                pack.samplerate, method, 10.0, true,
-            );
-            let (rl, rr, raz, naz, ntaps) = read_ref(method);
-            assert_eq!((naz, ntaps), (dense.naz, dense.n_taps), "{method} shape");
-            let ml = max_abs(&dense.left, &rl);
-            let mr = max_abs(&dense.right, &rr);
-            let maz = max_abs(&dense.az, &raz);
-            let pk = peak(&rl).max(peak(&rr)).max(1e-30);
-            let rel = ml.max(mr) / pk;
-            eprintln!(
-                "PARITY {method:>9}: max|ΔL|={ml:.3e} max|ΔR|={mr:.3e} rel={rel:.3e} max|Δaz|={maz:.3e} (peak={pk:.3e})"
-            );
-            worst_time = worst_time.max(rel);
-            assert!(maz < 1e-9, "{method} azimuth mismatch {maz}");
-        }
-        // The synthesis methods go through several FFT round-trips + Hilbert + cepstrum; allow a
-        // small floating divergence from numpy/pocketfft but keep it tight.
-        assert!(worst_time < 1e-3, "parity drift too large: rel={worst_time:.3e}");
-    }
 }

@@ -1,2 +1,0 @@
-# The vendored patch must stay byte-exact (CRLF preserved to match the Windows source tree).
-sysvad_b1b2.patch -text
