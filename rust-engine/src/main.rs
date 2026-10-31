@@ -33,6 +33,19 @@ mod packs;
 mod telemetry;
 mod vision;
 
+// Build identity, baked by build.rs (git SHA + build time). Reported on startup and over the
+// cockpit API so a running engine says exactly which source it came from — the anti-staleness stamp.
+pub const GIT_SHA: &str = env!("WLBS_GIT_SHA");
+pub const GIT_SHA_SHORT: &str = env!("WLBS_GIT_SHA_SHORT");
+pub const GIT_DIRTY: &str = env!("WLBS_GIT_DIRTY"); // "1" if the build tree had uncommitted changes
+pub const BUILD_DATE: &str = env!("WLBS_BUILD_DATE");
+
+/// `{sha, short, date, dirty}` — the build stamp as JSON, embedded in `/api/get_config` and served
+/// at `/api/version`, and printed as `ENGINE_BUILD …` on startup.
+pub fn build_version_json() -> serde_json::Value {
+    serde_json::json!({ "sha": GIT_SHA, "short": GIT_SHA_SHORT, "date": BUILD_DATE, "dirty": GIT_DIRTY == "1" })
+}
+
 #[cfg(not(windows))]
 fn main() {
     eprintln!("wlbs_engine needs WASAPI (Windows). Build for x86_64-pc-windows-msvc.");
@@ -279,6 +292,9 @@ mod engine {
             "flip_h": s.flip_h, "flip_v": s.flip_v, "show_landmarks": s.show_landmarks,
             "win_w": s.win_w, "win_h": s.win_h,
             "camera": s.camera, "cam_w": s.cam_w, "cam_h": s.cam_h, "cam_fps": s.cam_fps,
+            // Build identity (git SHA + build time) so the UI footer and host/check-deploy.sh can
+            // tell at a glance whether the running engine matches the source. Also at /api/version.
+            "version": crate::build_version_json(),
         })
     }
 
@@ -292,6 +308,12 @@ mod engine {
         // the process base class, so without this a CPU hog starves them and audio drops out despite
         // MMCSS (journal 82). Best-effort, Windows-only, reverts on exit.
         println!("PROCESS_PRIORITY {}", if set_high_priority() { "HIGH" } else { "normal" });
+        println!(
+            "ENGINE_BUILD {} {}{}",
+            crate::GIT_SHA_SHORT,
+            crate::BUILD_DATE,
+            if crate::GIT_DIRTY == "1" { " (dirty)" } else { "" }
+        );
 
         // Pack management sub-commands (install-relative + %APPDATA%\WLBS\packs), then exit.
         if flag(&a, "--list-packs") {

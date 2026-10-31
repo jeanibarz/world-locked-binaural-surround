@@ -45,6 +45,10 @@ cp -r "$REPO/rust-engine/hp_eq" "$OUT/hp_eq"
 rm -f "$OUT/hp_eq/oracle_golden_48k.f32"
 cp -r "$REPO/apps/web_cockpit/"* "$OUT/web_cockpit/"
 
+# Build stamp so host/check-deploy.sh can tell a fresh bundle's provenance (the exe also carries it,
+# baked by rust-engine/build.rs and served at /api/version).
+printf '%s  bundled %s from %s\n' "$(cd "$REPO" && git rev-parse HEAD)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(cd "$REPO" && git rev-parse --abbrev-ref HEAD)" > "$OUT/DEPLOYED_SHA"
+
 echo "bundle assembled at $OUT"
 du -sh "$OUT"
 du -sh "$OUT"/* 2>/dev/null || true
