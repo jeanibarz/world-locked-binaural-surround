@@ -137,6 +137,61 @@
     wireToggle("hpeq-toggle", "set_hpeq");
     if (C.hp_models) wireDropdown("set-hpmodel", () => C.hp_models, "set_hp_model");
 
+    // --- spatial width / ITD --- population curve + two draggable handles (front/rear, sides).
+    // Dragging retunes the engine live via set_itd(front_rear, sides). POP is fetched once.
+    const itd = { pop: null, baseline: { front_rear: 0.14, sides: 0.70 },
+                  groupAz: { front_rear: 30, sides: 110 }, val: { front_rear: 0.14, sides: 0.70 } };
+    const svg = $("itd-plot");
+    const W = 520, H = 300, M = { l: 42, r: 12, t: 12, b: 30 }, IW = W - M.l - M.r, IH = H - M.t - M.b;
+    const AZ1 = 180, Y1 = 0.8;
+    const px = (a) => M.l + a / AZ1 * IW, py = (v) => M.t + (1 - v / Y1) * IH, ay = (y) => (1 - (y - M.t) / IH) * Y1;
+    const interp = (a, arr) => { const z = itd.pop.az; let i = z.findIndex((x) => x >= a); if (i <= 0) i = 1;
+      const t = (a - z[i - 1]) / (z[i] - z[i - 1]); return arr[i - 1] + t * (arr[i] - arr[i - 1]); };
+    const COL = { band: "#3fd0bd", med: "#5fe0cf", user: "#ff7a52", target: "#b08ce6", grid: "#24323f", faint: "#6f8090" };
+    function poly(lo, hi) { const z = itd.pop.az; let t = "", b = "";
+      z.forEach((a, i) => { t += px(a).toFixed(1) + "," + py(hi[i]).toFixed(1) + " "; });
+      for (let i = z.length - 1; i >= 0; i--) b += px(z[i]).toFixed(1) + "," + py(lo[i]).toFixed(1) + " ";
+      return t + b; }
+    function line(arr) { return itd.pop.az.map((a, i) => px(a).toFixed(1) + "," + py(arr[i]).toFixed(1)).join(" "); }
+    const HANDLES = [{ az: 30, g: "front_rear", k: 0 }, { az: 150, g: "front_rear", k: 1 }, { az: 110, g: "sides", k: 2 }];
+    function verdict(v, az) { const q1 = interp(az, itd.pop.q1), q3 = interp(az, itd.pop.q3),
+      p5 = interp(az, itd.pop.p05), p95 = interp(az, itd.pop.p95);
+      if (v >= q1 && v <= q3) return ["#3fd0bd", "quartiles"]; if (v >= p5 && v <= p95) return ["#f0c24a", v < q1 ? "bas" : "haut"];
+      return ["#ff7a52", v < p5 ? "trop étroit" : "trop large"]; }
+    function drawItd() {
+      if (!itd.pop) return; const P = itd.pop; let s = "";
+      for (let v = 0; v <= 0.8; v += 0.2) { const y = py(v);
+        s += `<line x1="${M.l}" y1="${y}" x2="${W - M.r}" y2="${y}" stroke="${COL.grid}"/>`;
+        s += `<text x="${M.l - 6}" y="${y + 3.5}" text-anchor="end" font-size="9.5" fill="${COL.faint}" font-family="monospace">${v.toFixed(1)}</text>`; }
+      [0, 30, 90, 110, 150, 180].forEach((a) => { const x = px(a);
+        s += `<line x1="${x}" y1="${M.t}" x2="${x}" y2="${H - M.b}" stroke="${COL.grid}"/>`;
+        s += `<text x="${x}" y="${H - M.b + 14}" text-anchor="middle" font-size="9.5" fill="${COL.faint}" font-family="monospace">${a}°</text>`; });
+      s += `<text x="${M.l - 30}" y="${M.t + IH / 2}" transform="rotate(-90 ${M.l - 30} ${M.t + IH / 2})" text-anchor="middle" font-size="10" fill="${COL.faint}">ITD (ms)</text>`;
+      s += `<polygon points="${poly(P.p05, P.p95)}" fill="${COL.band}" opacity="0.16"/>`;
+      s += `<polygon points="${poly(P.q1, P.q3)}" fill="${COL.band}" opacity="0.32"/>`;
+      s += `<polyline points="${line(P.med)}" fill="none" stroke="${COL.med}" stroke-width="2"/>`;
+      HANDLES.forEach((h) => { s += `<circle cx="${px(h.az)}" cy="${py(interp(h.az, P.med))}" r="5" fill="none" stroke="${COL.target}" stroke-width="2" opacity="0.85"/>`; });
+      HANDLES.forEach((h) => { const v = itd.val[h.g], x = px(h.az), y = py(v);
+        s += `<circle class="itd-h" data-k="${h.k}" cx="${x}" cy="${y}" r="8" fill="${COL.user}" stroke="#16202c" stroke-width="2" style="cursor:ns-resize"/>`;
+        s += `<text x="${x}" y="${y - 12}" text-anchor="middle" font-size="10" font-weight="600" fill="${COL.user}" font-family="monospace">${v.toFixed(2)}</text>`; });
+      svg.innerHTML = s; bindItd();
+      const r = $("itd-readout"); if (r) r.innerHTML = [["front_rear", "Avant/arrière"], ["sides", "Côtés"]].map(([g, lbl]) => {
+        const [c, t] = verdict(itd.val[g], itd.groupAz[g]); return `<span>${lbl}: <b style="color:${c}">${itd.val[g].toFixed(2)} ms</b> <span style="color:${c}">${t}</span></span>`; }).join("");
+    }
+    let dragK = null;
+    function bindItd() { svg.querySelectorAll(".itd-h").forEach((c) => c.addEventListener("pointerdown", (e) => {
+      dragK = +c.dataset.k; c.setPointerCapture(e.pointerId); e.preventDefault(); })); }
+    svg.addEventListener("pointermove", (e) => { if (dragK == null || !itd.pop) return;
+      const r = svg.getBoundingClientRect(); const y = (e.clientY - r.top) / r.height * H;
+      let v = Math.max(0, Math.min(0.8, ay(y))); v = Math.round(v * 100) / 100;
+      itd.val[HANDLES[dragK].g] = v; drawItd(); });
+    window.addEventListener("pointerup", () => { if (dragK != null) { dragK = null; call("set_itd", itd.val.front_rear, itd.val.sides); } });
+    const seedItd = (c) => { if (c.itd_front_rear != null) itd.val.front_rear = c.itd_front_rear;
+      if (c.itd_sides != null) itd.val.sides = c.itd_sides; drawItd(); };
+    if (location.protocol.indexOf("http") === 0)
+      fetch("/itd_pop.json").then((r) => r.json()).then((d) => { itd.pop = d.pop;
+        if (d.baseline) itd.baseline = d.baseline; if (d.group_az) itd.groupAz = d.group_az; seedItd(C); }).catch(() => {});
+
     // --- seed current selections from the live config (idempotent; also run after reset) ---
     const seed = (c) => {
       C = c || {};
@@ -169,6 +224,7 @@
       cushionMs = C.cushion_ms != null ? C.cushion_ms : 60;
       cushBlk = cushFromMs();
       showBlock();
+      seedItd(C);  // refresh the ITD handles (first load + after reset-to-defaults)
     };
     seed(C);
 

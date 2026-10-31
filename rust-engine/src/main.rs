@@ -128,6 +128,12 @@ mod engine {
         output_gain_db: f64,
         hp_model: Option<String>,
         predict: bool,
+        /// Interaural time difference (ms) per position group — the in-app ITD retune (no re-bake,
+        /// #248). `itd_front_rear` covers L/R/RL/RR (±30°/±150° share a lateral angle), `itd_sides`
+        /// covers SL/SR (±110°). Defaults equal the pack's baked baseline, so the default is a no-op;
+        /// a change shifts the contralateral ear and rebuilds the steering ring live.
+        itd_front_rear: f64,
+        itd_sides: f64,
         /// Head-tracking direction override (BUG #189/#191). `false` passes the pose through with the
         /// solver's own handedness; the tracking direction is corrected by un-mirroring the camera
         /// (`flip_h`). `true` is an advanced override that inverts the direction for a mount still
@@ -202,6 +208,8 @@ mod engine {
             }
             if let Some(s) = o.get("hp_model").and_then(|x| x.as_str()) { self.hp_model = Some(s.into()); }
             if let Some(b) = o.get("predict").and_then(|x| x.as_bool()) { self.predict = b; }
+            if let Some(n) = o.get("itd_front_rear").and_then(|x| x.as_f64()) { self.itd_front_rear = n.clamp(0.0, 1.5); }
+            if let Some(n) = o.get("itd_sides").and_then(|x| x.as_f64()) { self.itd_sides = n.clamp(0.0, 1.5); }
             if let Some(b) = o.get("invert_tracking").and_then(|x| x.as_bool()) { self.invert_tracking = b; }
             if let Some(b) = o.get("flip_h").and_then(|x| x.as_bool()) { self.flip_h = b; }
             if let Some(b) = o.get("flip_v").and_then(|x| x.as_bool()) { self.flip_v = b; }
@@ -231,6 +239,7 @@ mod engine {
                 "exclusive": self.exclusive, "hp_eq": self.hp_eq, "hp_model": self.hp_model,
                 "output_gain_db": self.output_gain_db,
                 "predict": self.predict, "invert_tracking": self.invert_tracking,
+                "itd_front_rear": self.itd_front_rear, "itd_sides": self.itd_sides,
                 "flip_h": self.flip_h, "flip_v": self.flip_v,
                 "show_landmarks": self.show_landmarks, "camera": self.camera,
                 "cam_w": self.cam_w, "cam_h": self.cam_h, "cam_fps": self.cam_fps,
@@ -266,6 +275,7 @@ mod engine {
             "hp_models": if hp_models.is_empty() { serde_json::Value::Null } else { serde_json::json!(hp_models) },
             "hp_model": s.hp_model,
             "predict": s.predict, "invert_tracking": s.invert_tracking,
+            "itd_front_rear": s.itd_front_rear, "itd_sides": s.itd_sides,
             "flip_h": s.flip_h, "flip_v": s.flip_v, "show_landmarks": s.show_landmarks,
             "win_w": s.win_w, "win_h": s.win_h,
             "camera": s.camera, "cam_w": s.cam_w, "cam_h": s.cam_h, "cam_fps": s.cam_fps,
@@ -441,6 +451,8 @@ mod engine {
             hp_eq: true, // the owner listened with the headphone comp + subjective EQ on (#193)
             hp_model: None,
             predict: false,
+            itd_front_rear: crate::interp::ITD_BASELINE_FRONT_REAR_MS,
+            itd_sides: crate::interp::ITD_BASELINE_SIDES_MS,
             invert_tracking: false,
             flip_h: true, // mirrored webcam is the common case (BUG #191); operator confirms on host
             flip_v: false,
@@ -629,7 +641,8 @@ mod engine {
             println!("SOURCE 5.1 assumed layout L,R,C,LFE,SL,SR (side surrounds)");
         }
 
-        let mut render = build_render(&pack, n_in, block, latency_ms, &settings.method, interp_step)?;
+        let mut render = build_render(&pack, n_in, block, latency_ms, &settings.method, interp_step,
+                                      settings.itd_front_rear, settings.itd_sides)?;
 
         // Post-convolution headphone comp + subjective EQ (#193) — the stereo output-bus timbre
         // stage that reproduces an EqualizerAPO chain. The selected profile's config is resolved
@@ -733,6 +746,7 @@ mod engine {
             let block_before = settings.block;
             let cush_before = settings.cushion_ms;
             let method_before = settings.method.clone();
+            let itd_before = (settings.itd_front_rear, settings.itd_sides);
             let hp_model_before = settings.hp_model.clone();
             let mut dirty = false;
             for (name, args) in cockpit.take_dispatched() {
@@ -771,6 +785,18 @@ mod engine {
                     "set_hp_model" => { if let Some(s) = a0.and_then(|v| v.as_str()) { settings.hp_model = Some(s.into()); dirty = true; } }
                     "set_block" => { if let Some(n) = a0.and_then(|v| v.as_u64()) { settings.block = (n as usize).clamp(64, 8192); dirty = true; } }
                     "set_cushion" => { if let Some(n) = a0.and_then(|v| v.as_f64()) { settings.cushion_ms = n.clamp(1.0, 500.0); dirty = true; } }
+                    // Per-position ITD retune (#248): two ms values (front/rear, sides). Rebuilds the
+                    // steering ring in the `dirty` reconfigure block below — no re-bake. Clamped to a
+                    // sane span (0 = collapsed, 1.5 ms = well past the human max) so a typo can't crash.
+                    "set_itd" => {
+                        if let (Some(fr), Some(sd)) =
+                            (a0.and_then(|v| v.as_f64()), args.get(1).and_then(|v| v.as_f64()))
+                        {
+                            settings.itd_front_rear = fr.clamp(0.0, 1.5);
+                            settings.itd_sides = sd.clamp(0.0, 1.5);
+                            dirty = true;
+                        }
+                    }
                     "set_camera" => {
                         // The picker sends the camera id as a string; tolerate a legacy numeric value.
                         let id = a0.and_then(|v| v.as_str().map(String::from).or_else(|| v.as_u64().map(|n| n.to_string())));
@@ -820,17 +846,21 @@ mod engine {
                 // same rebuild mechanism block/cushion use.
                 let block_changed = settings.block != block_before;
                 let method_changed = settings.method != method_before;
-                if block_changed || method_changed || settings.cushion_ms != cush_before {
+                let itd_changed = (settings.itd_front_rear, settings.itd_sides) != itd_before;
+                if block_changed || method_changed || itd_changed || settings.cushion_ms != cush_before {
                     let trace_reconfigure = trace.enabled().then(Instant::now);
                     let new_block = settings.block;
                     let cushion = cushion_blocks(settings.cushion_ms, pack.samplerate, new_block);
-                    let render_ok = if block_changed || method_changed {
-                        match build_render(&pack, n_in, new_block, latency_ms, &settings.method, interp_step) {
+                    let render_ok = if block_changed || method_changed || itd_changed {
+                        match build_render(&pack, n_in, new_block, latency_ms, &settings.method, interp_step,
+                                           settings.itd_front_rear, settings.itd_sides) {
                             Ok(r) => { render = r; true }
                             Err(e) => {
                                 eprintln!("RECONFIG_ERROR {e}");
                                 settings.block = block_before;
                                 settings.method = method_before.clone();
+                                settings.itd_front_rear = itd_before.0;
+                                settings.itd_sides = itd_before.1;
                                 settings.cushion_ms = cush_before;
                                 false
                             }
@@ -1184,17 +1214,27 @@ mod engine {
     /// for the synthesis methods it's the dense interpolated ring (`interp`, every `step_deg`), so a
     /// head turn moves the phantom smoothly through the in-between directions (#187). The grid is
     /// built once here (off the realtime path); `GridRender` itself stays allocation-free per block.
+    #[allow(clippy::too_many_arguments)]
     fn build_render(
         pack: &BrirPack, n_in: usize, block: usize, latency_ms: f64, method: &str, step_deg: f64,
+        itd_front_rear: f64, itd_sides: f64,
     ) -> Result<GridRender, String> {
         let fade = (latency_ms * 1e-3 * pack.samplerate as f64).round().max(1.0) as i64;
+        // Per-position ITD retune (#248): shift each measured speaker's contralateral ear before the
+        // ring is assembled, so both `nearest` and the synthesis grid steer with the retuned image.
+        // A no-op when both values equal the baked baseline. No re-bake.
+        let (ring_l, ring_r) = crate::interp::apply_itd_trims(
+            &pack.ring_left, &pack.ring_right, &pack.ring_az, pack.n_ring, pack.n_taps,
+            pack.samplerate, itd_front_rear, itd_sides,
+            crate::interp::ITD_BASELINE_FRONT_REAR_MS, crate::interp::ITD_BASELINE_SIDES_MS,
+        );
         // Steering grid: measured ring for nearest, dense interpolated ring otherwise. `taps` comes
         // from the grid itself (the interpolation preserves the pack's tap count).
         let (grid_l, grid_r, grid_az, n_grid, taps) = if method == "nearest" {
-            (pack.ring_left.clone(), pack.ring_right.clone(), pack.ring_az.clone(), pack.n_ring, pack.n_taps)
+            (ring_l, ring_r, pack.ring_az.clone(), pack.n_ring, pack.n_taps)
         } else {
             let d = crate::interp::interpolated_ring(
-                &pack.ring_left, &pack.ring_right, &pack.ring_az, pack.n_ring, pack.n_taps,
+                &ring_l, &ring_r, &pack.ring_az, pack.n_ring, pack.n_taps,
                 pack.samplerate, method, step_deg, true,
             );
             (d.left, d.right, d.az, d.naz, d.n_taps)

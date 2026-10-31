@@ -589,6 +589,63 @@ fn interpolate_one(
 /// Build the dense interpolated ring — the port of `live_render.interpolated_ring`. One BRIR every
 /// `step_deg` around the full circle. `loudness_match` defaults on in the render path.
 #[allow(clippy::too_many_arguments)]
+/// Baseline interaural time difference (ms) each position group is baked with — the owner's
+/// configured contralateral `Delay` values (front/rear 0.14 ms, sides 0.70 ms). A retune shifts the
+/// contralateral ear by `target - baseline` from here, so the default (target == baseline) is a
+/// no-op and the retune is *relative*: it does not re-measure the baked ITD (unreliable on a
+/// reverberant blocked-ear BRIR), so the absolute ms label is only as good as this assumption.
+pub const ITD_BASELINE_FRONT_REAR_MS: f64 = 0.14;
+pub const ITD_BASELINE_SIDES_MS: f64 = 0.70;
+
+/// Lateral angle in `[0, 90]` for an azimuth (front/back symmetry: 150° and 30° both fold to 30°).
+fn lateral_angle(az_deg: f64) -> f64 {
+    let a = az_deg.rem_euclid(360.0);
+    let a = if a > 180.0 { 360.0 - a } else { a }; // → [0, 180]
+    if a > 90.0 { 180.0 - a } else { a } // → [0, 90]
+}
+
+/// Retune the per-position ITD of a measured directional ring, returning new `(left, right)` banks
+/// (row-major `n_ring × n_taps`). Each speaker's CONTRALATERAL ear is shifted by `target - baseline`
+/// samples: front/rear speakers (lateral < 50°) toward `front_rear_ms`, side speakers (lateral ≥ 50°)
+/// toward `sides_ms`. A head-centre speaker (no lateral offset) has no ITD and is copied unchanged.
+/// Larger target ⇒ the far ear arrives later ⇒ a wider image. The shift uses the band-limited
+/// [`fractional_delay`], so it is exact for an integer amount and click-free. See
+/// [`ITD_BASELINE_FRONT_REAR_MS`] for the relative-shift caveat.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_itd_trims(
+    ring_left: &[f64], ring_right: &[f64], ring_az_deg: &[f64],
+    n_ring: usize, n_taps: usize, samplerate: u32,
+    front_rear_ms: f64, sides_ms: f64,
+    baseline_front_rear_ms: f64, baseline_sides_ms: f64,
+) -> (Vec<f64>, Vec<f64>) {
+    let mut left = ring_left.to_vec();
+    let mut right = ring_right.to_vec();
+    let sr = samplerate as f64;
+    for i in 0..n_ring {
+        let az = ring_az_deg[i];
+        let lat = lateral_angle(az);
+        if lat < 1.0 {
+            continue; // centre: no interaural delay to retune
+        }
+        let (target, base) = if lat >= 50.0 {
+            (sides_ms, baseline_sides_ms)
+        } else {
+            (front_rear_ms, baseline_front_rear_ms)
+        };
+        let shift = (target - base) * sr / 1000.0;
+        if shift == 0.0 {
+            continue;
+        }
+        // Contralateral (far) ear: a left-hemisphere speaker (positive wrapped az) is delayed at the
+        // right ear, and vice-versa.
+        let w = (az + 180.0).rem_euclid(360.0) - 180.0; // (-180, 180]
+        let bank = if w > 0.0 { &mut right } else { &mut left };
+        let shifted = fractional_delay(&bank[i * n_taps..(i + 1) * n_taps], shift);
+        bank[i * n_taps..(i + 1) * n_taps].copy_from_slice(&shifted[..n_taps]);
+    }
+    (left, right)
+}
+
 pub fn interpolated_ring(
     ring_left: &[f64], ring_right: &[f64], ring_az_deg: &[f64],
     _n_ring: usize, n_taps: usize, samplerate: u32,
@@ -622,6 +679,61 @@ mod tests {
         x[4] = 1.0;
         let y = fractional_delay(&x, 3.0);
         assert!((y[7] - 1.0).abs() < 1e-9, "delta moved to index 7");
+    }
+
+    fn argmax_abs(x: &[f64]) -> usize {
+        (0..x.len()).max_by(|&a, &b| x[a].abs().partial_cmp(&x[b].abs()).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn apply_itd_shifts_only_the_contralateral_ear_by_the_exact_amount() {
+        let sr = 48000u32;
+        let n = 128usize;
+        // L at +30° (front/rear group, contra = right ear); SL at +110° (sides group, contra = right).
+        let az = vec![30.0, 110.0];
+        let mut left = vec![0.0; 2 * n];
+        let mut right = vec![0.0; 2 * n];
+        for s in 0..2 {
+            left[s * n + 20] = 1.0; // ipsi dirac at 20
+            right[s * n + 20] = 1.0; // contra dirac at 20 (baseline already folded into the bake)
+        }
+        let fr = ITD_BASELINE_FRONT_REAR_MS + 10.0 * 1000.0 / sr as f64; // +10 samples
+        let sd = ITD_BASELINE_SIDES_MS - 8.0 * 1000.0 / sr as f64; // -8 samples
+        let (l, r) = apply_itd_trims(
+            &left, &right, &az, 2, n, sr, fr, sd,
+            ITD_BASELINE_FRONT_REAR_MS, ITD_BASELINE_SIDES_MS,
+        );
+        assert_eq!(argmax_abs(&l[0..n]), 20, "L ipsi (left) untouched");
+        assert_eq!(argmax_abs(&r[0..n]), 30, "L contra (right) delayed by +10");
+        assert_eq!(argmax_abs(&l[n..2 * n]), 20, "SL ipsi untouched");
+        assert_eq!(argmax_abs(&r[n..2 * n]), 12, "SL contra advanced by -8");
+    }
+
+    #[test]
+    fn apply_itd_identity_at_baseline_and_skips_centre() {
+        let sr = 48000u32;
+        let n = 64usize;
+        let az = vec![0.0, 30.0]; // C (no ITD) + L
+        let mut left = vec![0.0; 2 * n];
+        let mut right = vec![0.0; 2 * n];
+        left[10] = 1.0; right[10] = 1.0; // C
+        left[n + 15] = 1.0; right[n + 20] = 1.0; // L
+        let (l, r) = apply_itd_trims(
+            &left, &right, &az, 2, n, sr,
+            ITD_BASELINE_FRONT_REAR_MS, ITD_BASELINE_SIDES_MS,
+            ITD_BASELINE_FRONT_REAR_MS, ITD_BASELINE_SIDES_MS,
+        );
+        assert_eq!(l, left, "target == baseline is identity");
+        assert_eq!(r, right);
+    }
+
+    #[test]
+    fn lateral_angle_folds_front_back() {
+        assert!((lateral_angle(30.0) - 30.0).abs() < 1e-9);
+        assert!((lateral_angle(150.0) - 30.0).abs() < 1e-9); // rear folds onto front
+        assert!((lateral_angle(110.0) - 70.0).abs() < 1e-9); // side
+        assert!((lateral_angle(-110.0) - 70.0).abs() < 1e-9);
+        assert!((lateral_angle(0.0)).abs() < 1e-9);
     }
 
     #[test]
