@@ -290,6 +290,12 @@ def main(argv=None) -> int:
                    help="EqualizerAPO config whose global per-ear comp+EQ chain (the part after "
                         "the downmix to L/R) is applied to the stereo output, so the render "
                         "matches your tuned EqualizerAPO sound (B5.3). Pair with --lfe-mode brir.")
+    p.add_argument("--itd-front-rear", type=float, default=0.14,
+                   help="interaural time difference (ms) for the front+rear positions (L/R/RL/RR); "
+                        "retunes the baked ring live, no re-bake. Baseline 0.14; ~0.26 = pop. median.")
+    p.add_argument("--itd-sides", type=float, default=0.70,
+                   help="interaural time difference (ms) for the side positions (SL/SR). Baseline "
+                        "0.70 (above the human max ~0.6); ~0.55 = pop. median → narrower side image.")
     p.add_argument("--cam-width", type=int, default=0, help="request camera width (0 = default)")
     p.add_argument("--cam-height", type=int, default=0, help="request camera height (0 = default)")
     p.add_argument("--cam-fps", type=int, default=0, help="request camera fps (0 = default)")
@@ -349,7 +355,18 @@ def main(argv=None) -> int:
     # cockpit starving the render worker on the GIL, not an intrinsic cost — fixed by the tighter
     # GIL switch interval below, so both paths share the normal 60 ms default again (issue #109).
 
-    brir = load_baked_brir(args.brir_dir)
+    _brir_base = load_baked_brir(args.brir_dir)  # untuned baked set (never mutated)
+    # Per-position ITD retune (B?.?): `brir` is the ITD-retuned VIEW every renderer below
+    # builds from, so a live ITD change is just `brir = _retune_brir(...)` + a rebuild — no
+    # re-bake, no builder edits. Defaults equal the configured baseline (a no-op copy).
+    from binaural_headtracker.itd_tune import apply_itd_trims
+    itd_state = {"front_rear": float(getattr(args, "itd_front_rear", 0.14)),
+                 "sides": float(getattr(args, "itd_sides", 0.70))}
+
+    def _retune_brir():
+        return apply_itd_trims(_brir_base, dict(itd_state))
+
+    brir = _retune_brir()
 
     def _resolve_backend(backend: str | None) -> tuple[bool, bool]:
         """(use_rust, use_gpu) for an explicit backend ('cpu'/'rust'/'gpu'), else the launch flags.
@@ -1218,13 +1235,34 @@ def main(argv=None) -> int:
         # a session (no dialog), so there it stays None and auto-save behaves as before.
         _edit: dict = {"snap": None}
 
+        def _set_itd(front_rear, sides) -> None:  # noqa: ANN001
+            """Retune the per-position ITD live: rebuild the steering ring from a freshly
+            ITD-retuned BRIR (front/rear and side groups, ms). No re-bake — same live rebuild
+            path as a method change. Values are clamped to the config's valid range."""
+            nonlocal brir
+            from binaural_headtracker.config_store import ITD_MAX_MS, ITD_MIN_MS
+            fr = max(ITD_MIN_MS, min(ITD_MAX_MS, float(front_rear)))
+            sd = max(ITD_MIN_MS, min(ITD_MAX_MS, float(sides)))
+            if fr == itd_state["front_rear"] and sd == itd_state["sides"]:
+                return
+            with lock:
+                itd_state["front_rear"], itd_state["sides"] = fr, sd
+                brir = _retune_brir()  # the builders below read this name at call time
+                nm, _ = build_main_renderer(test["method"], cur["backend"])
+                main_rend["r"], main_rend["label"] = nm, render_label(nm, test["method"])
+                test_renderers.clear()
+                test_renderers[test["method"]] = build_test_renderer(test["method"])
+                test["renderer"] = test_renderers[test["method"]]
+            win_ck.set_itd_display(fr, sd)
+
         def _knobs_now() -> dict:
             return _SB.current_knobs(
                 method=test["method"], backend=cur["backend"], block=blk["n"],
                 cushion_blocks=cushion, exclusive=bool(args.exclusive),
                 hrir=cur_set["name"], comp=cur["comp"], predict=cur["predict"],
                 camera=cam_index, cam_w=cam_w, cam_h=cam_h, cam_fps=cam_fps,
-                hp_eq=(args.output_eq is not None))
+                hp_eq=(args.output_eq is not None),
+                itd_front_rear=itd_state["front_rear"], itd_sides=itd_state["sides"])
 
         def _apply_snapshot(s: dict) -> None:
             """Restore the live engine to a snapshot (dialog Cancel). exclusive/hp_eq don't apply
@@ -1239,6 +1277,10 @@ def main(argv=None) -> int:
                 _set_comp(s["comp"])
             if s["hrir"] != cur_set["name"]:
                 _set_hrir(s["hrir"])
+            if (s.get("itd_front_rear"), s.get("itd_sides")) != (
+                    itd_state["front_rear"], itd_state["sides"]):
+                _set_itd(s.get("itd_front_rear", itd_state["front_rear"]),
+                         s.get("itd_sides", itd_state["sides"]))
             _set_cushion(int(s["cushion_blocks"]) * blk["n"] / brir.samplerate * 1000.0)
             cur["predict"] = bool(s["predict"])
             win_ck.set_exclusive_display(bool(s["exclusive"]))
@@ -1299,6 +1341,7 @@ def main(argv=None) -> int:
         win_ck.on_hrir = _set_hrir
         win_ck.on_hrir_blind = lambda n: _set_hrir(n, announce=False)
         win_ck.on_comp = _set_comp
+        win_ck.on_set_itd = _set_itd
         win_ck.on_loc_start = _loc_start
         win_ck.on_loc_answer = _loc_answer
         win_ck.on_loc_stop = _loc_stop
@@ -1312,6 +1355,7 @@ def main(argv=None) -> int:
         win_ck.set_method_display(test["method"])    # method dropdown → the launch method
         win_ck.set_exclusive_display(bool(args.exclusive))  # exclusive toggle → launch value
         win_ck.set_hpeq_display(args.output_eq is not None)  # HP-EQ toggle → launch value
+        win_ck.set_itd_display(itd_state["front_rear"], itd_state["sides"])  # ITD sliders → launch
         cur["backend"] = _backend_of(main_rend["r"])  # the engine that actually built at launch
         win_ck.set_backend_display(cur["backend"])    # radio → real launch backend (not 'rust'),
         if args.gpu and cur["backend"] != "gpu":      # and warn if --gpu silently fell back

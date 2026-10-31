@@ -56,6 +56,18 @@ def _is_str(v):
     return isinstance(v, str)
 
 
+def _float_range(lo, hi):
+    """Accept a real number (int or float, not bool) in the closed range [lo, hi]."""
+    return lambda v: (isinstance(v, (int, float)) and not isinstance(v, bool)
+                      and lo <= float(v) <= hi)
+
+
+# Interaural time difference (ms) per position group — the in-app ITD retune. The
+# baseline is the owner's configured contralateral Delay; 0..1.5 ms spans silence to
+# well past the human maximum (~0.8 ms) so a bold A/B is possible but a typo cannot.
+ITD_MIN_MS, ITD_MAX_MS = 0.0, 1.5
+
+
 # The user-tweakable settings and how each one fails. Defaults are the app's baseline; the launch
 # profile (run.cmd flags) may override them, and a saved settings.json overrides that.
 SCHEMA: dict[str, Key] = {
@@ -68,6 +80,9 @@ SCHEMA: dict[str, Key] = {
     "comp":           Key("ctf", _in(COMPS), "catchable"),
     "predict":        Key(True, _is_bool, "catchable"),
     "hp_eq":          Key(True, _is_bool, "catchable"),
+    # ITD (ms) per position group; retuned live by rebuilding the ring (live-reversible).
+    "itd_front_rear": Key(0.14, _float_range(ITD_MIN_MS, ITD_MAX_MS), "live-reversible"),
+    "itd_sides":      Key(0.70, _float_range(ITD_MIN_MS, ITD_MAX_MS), "live-reversible"),
     "camera":         Key(0, _int_min(0), "catchable"),
     "cam_w":          Key(0, _int_min(0), "catchable"),
     "cam_h":          Key(0, _int_min(0), "catchable"),

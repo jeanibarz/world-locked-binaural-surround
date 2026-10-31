@@ -251,7 +251,7 @@ class WebCockpit:
         for name in ("predict", "recenter", "method", "backend", "block", "cushion", "exclusive",
                      "hrir", "hrir_blind", "comp", "camera", "cam_format", "place_test", "test",
                      "solo", "rotate", "quit", "loc_start", "loc_answer", "loc_stop",
-                     "blind_result", "reset_defaults", "window_size",
+                     "blind_result", "reset_defaults", "window_size", "set_itd",
                      "settings_begin", "settings_commit", "settings_cancel"):
             setattr(self, "on_" + name, (lambda *a, **k: None))
 
@@ -297,6 +297,10 @@ class WebCockpit:
 
     def set_hpeq_display(self, on):
         self._config["hp_eq"] = bool(on)
+
+    def set_itd_display(self, front_rear, sides):
+        self._config["itd_front_rear"] = float(front_rear)
+        self._config["itd_sides"] = float(sides)
 
     def set_test_state(self, on, az):
         pass

@@ -37,6 +37,8 @@ def apply_to_args(cfg: dict, args) -> None:
     args.latency_ms = cfg["cushion_blocks"] * cfg["block"] / _SR * 1000.0
     if not cfg["hp_eq"]:
         args.output_eq = None   # disable headphone EQ by dropping the output-EQ file
+    args.itd_front_rear = float(cfg["itd_front_rear"])
+    args.itd_sides = float(cfg["itd_sides"])
     # hrir + comp are applied at the cockpit (via cur_set / cur["comp"]); caller reads them from cfg
 
 
@@ -56,6 +58,8 @@ def knobs_from_args(args) -> dict:
         "comp": "ctf",
         "predict": bool(getattr(args, "predict", True)),
         "hp_eq": getattr(args, "output_eq", None) is not None,
+        "itd_front_rear": float(getattr(args, "itd_front_rear", 0.14)),
+        "itd_sides": float(getattr(args, "itd_sides", 0.70)),
         "camera": int(getattr(args, "camera", 0)),
         "cam_w": int(getattr(args, "cam_width", 0)),
         "cam_h": int(getattr(args, "cam_height", 0)),
@@ -64,12 +68,14 @@ def knobs_from_args(args) -> dict:
 
 
 def current_knobs(*, method, backend, block, cushion_blocks, exclusive, hrir, comp,
-                  predict, camera, cam_w, cam_h, cam_fps, hp_eq) -> dict:
+                  predict, camera, cam_w, cam_h, cam_fps, hp_eq,
+                  itd_front_rear=0.14, itd_sides=0.70) -> dict:
     """Assemble a SCHEMA config dict from the live engine state (for saving on change)."""
     return {
         "method": method, "backend": backend, "block": int(block),
         "cushion_blocks": int(cushion_blocks), "exclusive": bool(exclusive),
         "hrir": hrir, "comp": comp, "predict": bool(predict), "hp_eq": bool(hp_eq),
+        "itd_front_rear": float(itd_front_rear), "itd_sides": float(itd_sides),
         "camera": int(camera), "cam_w": int(cam_w), "cam_h": int(cam_h), "cam_fps": int(cam_fps),
     }
 
