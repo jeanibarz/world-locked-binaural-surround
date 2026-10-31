@@ -10,6 +10,16 @@
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(args),
   }).catch(() => {});
 
+  // Show the engine build stamp (git SHA + date) in the SYSTEM panel, so a stale deployed engine is
+  // visible at a glance. `v` is the config's `version` object; absent on a pre-stamp engine.
+  function showBuild(v) {
+    const el = document.getElementById("build-stamp");
+    if (!el) return;
+    if (!v || !v.short) { el.textContent = "unknown (pre-stamp engine)"; return; }
+    const day = typeof v.date === "string" ? v.date.slice(0, 10) : "";
+    el.textContent = v.short + (day ? " · " + day : "") + (v.dirty ? " ·⚠dirty" : "");
+  }
+
   function toast(message, kind) {
     const t = document.createElement("div");
     t.textContent = message;
@@ -452,6 +462,7 @@
       fetch("/api/get_config").then((r) => { if (!r.ok) throw new Error("config unavailable"); return r.json(); }).then((c) => {
         if (gainStateVersion === startupGainVersion) receiveGain(c.output_gain_db);
         if (c.win_w && c.win_h) { try { window.resizeTo(c.win_w, c.win_h); } catch (_) { /* blocked */ } }
+        showBuild(c.version);
       }).catch(() => {});
       // remember the window size: report it (debounced) on resize so the engine reopens at this
       // size next launch. outerWidth/Height is what Chrome's --window-size controls. Arm only after

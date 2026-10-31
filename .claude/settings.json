@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/host/stop-hook-deploy-check.sh\"",
+            "timeout": 15,
+            "statusMessage": "Checking Windows deploy is current…"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -146,6 +146,7 @@ pub fn router(cockpit: Arc<Cockpit>) -> Router {
         .route("/camera", get(mjpeg))
         .route("/preview", get(preview))
         .route("/api/get_config", get(get_config))
+        .route("/api/version", get(version))
         .route("/api/*name", post(api_post).layer(DefaultBodyLimit::max(MAX_API_BODY)))
         .fallback(get(static_file))
         .layer(middleware::from_fn(guard))
@@ -202,6 +203,20 @@ fn sent(status: StatusCode, ctype: &str, body: Vec<u8>) -> Response {
 async fn get_config(State(c): State<Arc<Cockpit>>) -> Response {
     let body = serde_json::to_vec(&*c.config.lock().unwrap()).unwrap();
     sent(StatusCode::OK, "application/json", body)
+}
+
+/// The engine's build stamp (git SHA + build time), lifted from the `version` field of the config
+/// payload. A tiny, stable target for host/check-deploy.sh to curl and compare against HEAD, and
+/// for the cockpit footer. `{}` if the config carries no version (older engine).
+async fn version(State(c): State<Arc<Cockpit>>) -> Response {
+    let v = c
+        .config
+        .lock()
+        .unwrap()
+        .get("version")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    sent(StatusCode::OK, "application/json", serde_json::to_vec(&v).unwrap())
 }
 
 async fn api_post(State(c): State<Arc<Cockpit>>, Path(name): Path<String>, body: Bytes) -> Response {

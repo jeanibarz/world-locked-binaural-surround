@@ -216,6 +216,22 @@ import). Live settings (camera, flip, HRIR set, headphone comp, **per-position I
 reconfigure the running engine from the cockpit's Settings panel with no restart. Cross-platform:
 the engine builds for Linux natively and Windows via `cargo xwin`; macOS needs a Mac (Track S).
 
+**NON-NEGOTIABLE — never leave the Windows app stale.** The engine is a compiled binary, so
+"merged to main" is NOT "running on Windows" — there is a build+copy gap that silently bit us
+repeatedly. The guardrails:
+- **Deploy with `host/deploy-windows.sh`** — the one blessed in-place updater (build → copy
+  exe + `web_cockpit/` → write `DEPLOYED_SHA`; stages `wlbs_engine.new.exe` if the engine is
+  running, which `run-engine.bat` auto-applies on next launch). Run it after ANY change under
+  `rust-engine/` or `apps/web_cockpit/`, and ALWAYS **before telling the owner to test**.
+- **Every build is stamped** (git SHA + date, baked by `rust-engine/build.rs`): printed as
+  `ENGINE_BUILD …` on startup, served at `/api/version`, and shown in the cockpit SYSTEM panel's
+  "Build" row. To confirm what is live, read that row or curl `/api/version` and compare to
+  `git rev-parse HEAD`.
+- **`host/check-deploy.sh`** reports (exit 2) when the install is stale; a **Stop hook**
+  (`.claude/settings.json` → `host/stop-hook-deploy-check.sh`) runs it every turn and blocks the
+  stop with a reminder when a redeploy is owed — so forgetting is not possible. If it fires,
+  redeploy (or say explicitly why you are not) before finishing.
+
 ## Working discipline
 
 - **Build in Rust** — the product is the Rust engine and the Python prototype has been
