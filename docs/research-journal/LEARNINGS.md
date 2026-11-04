@@ -705,3 +705,10 @@ full story.
     frequency response. Assess the summed, EQ'd signal before clipping, and preserve the
     filters' relative levels. Apply a shared-ear output trim with visible clipping rather than
     normalizing each filter independently. (→ [85](85-output-gain-and-meters.md))
+
+94. **Make only the ceiling configurable, and clip the setting it bounds.** For a user-raisable
+    limit (here the output-gain boost), leave the safe side fixed (the −24 dB attenuation floor),
+    hard-cap the configurable side (+60 dB), sanitise non-finite requests to the default, and when
+    the limit is lowered clip the bounded value down to it through the existing ramp. Persist both
+    values and re-clamp the bounded one to the limit on load so they can't drift apart.
+    (→ [87](87-configurable-output-gain-ceiling.md))
