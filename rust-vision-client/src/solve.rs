@@ -58,7 +58,142 @@ pub fn rotation_to_euler(r: &Matrix3<f64>) -> (f64, f64, f64) {
     (yaw.to_degrees(), pitch.to_degrees(), roll.to_degrees())
 }
 
+/// Full-circle head **azimuth** (degrees, wrapped to `(-180, 180]`) from a 3×3 rotation — the
+/// azimuth of the head's forward axis (canonical `+Z`) projected onto the horizontal `x–z` plane:
+/// `atan2((R·ẑ)_x, (R·ẑ)_z)`.
+///
+/// **Why this exists (RFC "full-range head tracking", slice C0).** [`rotation_to_euler`]'s yaw is
+/// the **middle** axis of the `Rz·Ry·Rx` decomposition, so it is mathematically confined to
+/// `[−90°, +90°]` (`cy = |cos(yaw)| ≥ 0`): a real 150° head turn folds back to 30°, and the gimbal
+/// singularity sits at ±90° — exactly where the extended range begins. This azimuth has **no such
+/// cap**: it is continuous through ±90° and spans the whole circle, so it can represent a head
+/// turned past profile and toward the rear.
+///
+/// **Faithful to the current solver where the current solver is valid.** For a pure yaw rotation it
+/// equals `rotation_to_euler`'s yaw exactly within ±90°; in fact the equality holds exactly for any
+/// **yaw + pitch** (roll = 0), because the common `cos(pitch)` factor cancels inside the `atan2`.
+/// The only divergence is a weak `roll × pitch` coupling (second order; roll is small in normal
+/// head motion), quantified in the module tests. So this is a safe drop-in for the front cone and
+/// the full-range generalization past it. Wiring the engine's scalar `yaw` / `published_yaw` /
+/// azimuth onto it (wrap-safe) is the rest of slice C0; the exact handedness is pinned there against
+/// the live camera.
+pub fn rotation_to_azimuth(r: &Matrix3<f64>) -> f64 {
+    // R · ẑ (ẑ = canonical forward) is the third column of R; its horizontal azimuth never saturates.
+    let fx = r[(0, 2)];
+    let fz = r[(2, 2)];
+    fx.atan2(fz).to_degrees()
+}
+
 /// Full solve: align `canonical` (metric 3D, OpenCV frame) to `detected` (landmark xyz) → head pose.
 pub fn solve_pose(canonical: &[[f64; 3]], detected: &[[f64; 3]]) -> (f64, f64, f64) {
     rotation_to_euler(&umeyama_rotation(canonical, detected))
+}
+
+/// Representation spike (RFC "full-range head tracking", Phase-0 0c). These tests make the RFC's
+/// load-bearing claim **executable**: the current Euler decomposition caps yaw at ±90°, and the
+/// forward-axis azimuth is the continuous full-circle replacement that still matches the current
+/// solver in the operating range. No camera/model needed — pure rotation algebra.
+#[cfg(test)]
+mod full_circle_spike {
+    use super::*;
+
+    fn rx(a: f64) -> Matrix3<f64> {
+        let (s, c) = a.sin_cos();
+        Matrix3::new(1., 0., 0., 0., c, -s, 0., s, c)
+    }
+    fn ry(a: f64) -> Matrix3<f64> {
+        let (s, c) = a.sin_cos();
+        Matrix3::new(c, 0., s, 0., 1., 0., -s, 0., c)
+    }
+    fn rz(a: f64) -> Matrix3<f64> {
+        let (s, c) = a.sin_cos();
+        Matrix3::new(c, -s, 0., s, c, 0., 0., 0., 1.)
+    }
+    /// The engine's convention: `R = Rz(roll)·Ry(yaw)·Rx(pitch)` (see `rotation_to_euler` doc).
+    fn compose(yaw_deg: f64, pitch_deg: f64, roll_deg: f64) -> Matrix3<f64> {
+        rz(roll_deg.to_radians()) * ry(yaw_deg.to_radians()) * rx(pitch_deg.to_radians())
+    }
+    /// Signed smallest difference a−b on the circle, in degrees (−180, 180].
+    fn circ_diff(a: f64, b: f64) -> f64 {
+        (((a - b) + 180.0).rem_euclid(360.0)) - 180.0
+    }
+
+    #[test]
+    fn euler_yaw_caps_at_90_degrees() {
+        // THE problem, executable: a pure yaw past 90° folds back under rotation_to_euler.
+        for (true_yaw, folded) in
+            [(60.0, 60.0), (90.0, 90.0), (120.0, 60.0), (150.0, 30.0), (170.0, 10.0)]
+        {
+            let (y, _, _) = rotation_to_euler(&compose(true_yaw, 0.0, 0.0));
+            assert!(
+                (y - folded).abs() < 1e-6,
+                "pure yaw {true_yaw}° decodes to euler yaw {y}° (folds to {folded}°) — the ±90° cap"
+            );
+        }
+    }
+
+    #[test]
+    fn azimuth_is_full_circle_for_pure_yaw() {
+        // THE fix: the forward-axis azimuth tracks the true yaw around the whole circle.
+        for true_yaw in [-170.0, -120.0, -90.0, -45.0, 0.0, 30.0, 60.0, 90.0, 120.0, 170.0, 180.0] {
+            let az = rotation_to_azimuth(&compose(true_yaw, 0.0, 0.0));
+            assert!(
+                circ_diff(az, true_yaw).abs() < 1e-6,
+                "pure yaw {true_yaw}° -> azimuth {az}° (should equal it, full-circle)"
+            );
+        }
+    }
+
+    #[test]
+    fn azimuth_equals_euler_yaw_when_roll_is_zero() {
+        // Safe drop-in: identical to the current solver wherever the current solver is valid — and
+        // the equality holds for ANY pitch (the cos(pitch) factor cancels in the atan2), not just 0.
+        let mut yaw = -85.0;
+        while yaw <= 85.0 {
+            for pitch in [-30.0, -15.0, 0.0, 15.0, 30.0] {
+                let r = compose(yaw, pitch, 0.0);
+                let (ey, _, _) = rotation_to_euler(&r);
+                let az = rotation_to_azimuth(&r);
+                assert!(
+                    (az - ey).abs() < 1e-9,
+                    "yaw {yaw}, pitch {pitch}: azimuth {az} != euler yaw {ey}"
+                );
+            }
+            yaw += 5.0;
+        }
+    }
+
+    #[test]
+    fn azimuth_is_monotonic_through_the_rear() {
+        // A continuous 0°→180° sweep stays strictly increasing (no fold) — the property the world-
+        // lock needs and that rotation_to_euler cannot provide past 90°.
+        let mut prev_unwrapped = f64::NEG_INFINITY;
+        let mut unwrapped = 0.0;
+        let mut last = rotation_to_azimuth(&compose(0.0, 0.0, 0.0));
+        for step in 1..=36 {
+            let yaw = step as f64 * 5.0;
+            let az = rotation_to_azimuth(&compose(yaw, 0.0, 0.0));
+            unwrapped += circ_diff(az, last);
+            last = az;
+            assert!(
+                unwrapped > prev_unwrapped,
+                "azimuth must keep increasing; at yaw {yaw}° unwrapped={unwrapped}"
+            );
+            prev_unwrapped = unwrapped;
+        }
+        assert!((unwrapped - 180.0).abs() < 1e-6, "0→180° sweep should accumulate 180°, got {unwrapped}");
+    }
+
+    #[test]
+    fn azimuth_roll_pitch_coupling_is_bounded_and_the_only_divergence() {
+        // Honest limit for C0: with BOTH roll and pitch present the azimuth diverges from the Euler
+        // yaw by a small, bounded amount (second-order in roll×pitch). At an extreme corner of the
+        // operating box (roll 20°, pitch 30°) it stays within ~10°, and it is zero whenever roll=0.
+        let r = compose(40.0, 30.0, 20.0);
+        let (ey, _, _) = rotation_to_euler(&r);
+        let az = rotation_to_azimuth(&r);
+        let d = (az - ey).abs();
+        assert!(d > 1e-3, "expected a (small) divergence when roll and pitch are both nonzero");
+        assert!(d < 10.0, "roll×pitch coupling should stay bounded (<10° here), got {d}°");
+    }
 }
