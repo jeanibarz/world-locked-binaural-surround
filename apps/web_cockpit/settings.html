@@ -89,6 +89,14 @@
         </div>
         <div class="note">Takes exclusive control of the output device. Other apps lose audio while on.</div>
       </div>
+
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <div class="row-between">
+          <span class="field-label">Max output gain</span>
+          <div class="stepper"><button type="button" class="stepper-btn" id="maxgain-minus" aria-label="Decrease max output gain">−</button><span class="stepper-val" id="maxgain-val" style="width:72px">+24 dB</span><button type="button" class="stepper-btn" id="maxgain-plus" aria-label="Increase max output gain">+</button></div>
+        </div>
+        <div class="note">Upper limit of the cockpit's output-gain slider. Raise it to lift a very quiet source further; lowering it below the current gain pulls the gain down to the new limit.</div>
+      </div>
     </div>
 
     <!-- Spatial filter -->

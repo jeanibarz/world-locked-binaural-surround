@@ -127,6 +127,21 @@
 
     wireToggle("exclusive-toggle", "set_exclusive");
 
+    // --- max output gain --- stepper over [min, limit] dB (config-driven bounds) in 6 dB steps.
+    // set_max_gain retunes the cockpit slider's ceiling; the engine clips the live gain when the
+    // new ceiling drops below it. Applies live; Confirm persists, Cancel/✕ reverts (engine snapshot).
+    let maxGainDb = 24, maxGainMin = 0, maxGainLimit = 60;
+    const MAXGAIN_STEP = 6;
+    const showMaxGain = () => { const el = $("maxgain-val"); if (el) el.textContent = (maxGainDb > 0 ? "+" : "") + Math.round(maxGainDb) + " dB"; };
+    const nudgeMaxGain = (d) => {
+      const next = Math.max(maxGainMin, Math.min(maxGainLimit, maxGainDb + d));
+      if (next === maxGainDb) return;
+      maxGainDb = next; showMaxGain(); call("set_max_gain", maxGainDb);
+    };
+    const mgMinus = $("maxgain-minus"), mgPlus = $("maxgain-plus");
+    if (mgMinus) mgMinus.addEventListener("click", () => nudgeMaxGain(-MAXGAIN_STEP));
+    if (mgPlus) mgPlus.addEventListener("click", () => nudgeMaxGain(MAXGAIN_STEP));
+
     // --- spatial filter ---
     wireDropdown("set-hrir", () => C.hrir || ["mine"], "set_hrir");
     wireSegment("set-comp", "set_comp");
@@ -208,6 +223,11 @@
       fieldText($("set-resolution"), C.cam_w > 0 && C.cam_h > 0 ? C.cam_w + "×" + C.cam_h : "default");
       fieldText($("set-fps"), C.cam_fps > 0 ? C.cam_fps + " fps" : "default");
       if (C.exclusive != null) setToggle("exclusive-toggle", C.exclusive);
+      // Max output gain: bounds + current value from the live config (also refreshed after reset).
+      if (C.max_gain_min_db != null) maxGainMin = C.max_gain_min_db;
+      if (C.max_gain_limit_db != null) maxGainLimit = C.max_gain_limit_db;
+      if (C.max_gain_db != null) maxGainDb = C.max_gain_db;
+      showMaxGain();
       if (C.hp_eq != null) setToggle("hpeq-toggle", C.hp_eq);
       // Headphone-comp model picker (#240): show the live selection (the engine's resolved profile
       // name), not the static HTML placeholder, so the field reflects what is actually loaded.

@@ -142,6 +142,9 @@ pub struct TeleInput<'a> {
     pub output_err: Option<&'a str>,
     /// User gain applied to the final stereo output, before the safety clamp.
     pub output_gain_db: f64,
+    /// Live upper bound on `output_gain_db` (the configurable boost ceiling). Shipped so the
+    /// cockpit's gain slider can retune its own `max` live when the ceiling changes.
+    pub output_max_gain_db: f64,
     /// Peak and RMS before the safety clamp for this heartbeat; silence has no finite dBFS value.
     pub output_peak_dbfs: Option<f64>,
     pub output_rms_dbfs: Option<f64>,
@@ -383,6 +386,7 @@ pub fn build_state(t: &TeleInput) -> Value {
         "render_load": render_load,
         "output_level": {
             "gain_db": t.output_gain_db,
+            "max_gain_db": t.output_max_gain_db,
             "peak_dbfs": t.output_peak_dbfs.filter(|v| v.is_finite()),
             "rms_dbfs": t.output_rms_dbfs.filter(|v| v.is_finite()),
             "clipped_samples": t.output_clipped_samples,
@@ -475,6 +479,7 @@ mod tests {
             output_sr: 48_000,
             output_err: None,
             output_gain_db: 0.0,
+            output_max_gain_db: 24.0,
             output_peak_dbfs: None,
             output_rms_dbfs: None,
             output_clipped_samples: 0,
@@ -566,7 +571,7 @@ mod tests {
         let lat = LatencyHistogram::new(64, 20, 0.0, 120.0);
         let state = build_state(&sample_input(&lat));
         assert_eq!(state["output_level"], json!({
-            "gain_db": 0.0, "peak_dbfs": null, "rms_dbfs": null,
+            "gain_db": 0.0, "max_gain_db": 24.0, "peak_dbfs": null, "rms_dbfs": null,
             "clipped_samples": 0, "clipped_total": 0, "non_finite_total": 0,
         }));
     }
@@ -576,6 +581,7 @@ mod tests {
         let lat = LatencyHistogram::new(64, 20, 0.0, 120.0);
         let mut input = sample_input(&lat);
         input.output_gain_db = 12.0;
+        input.output_max_gain_db = 36.0; // a raised ceiling is carried through to the wire frame
         input.output_peak_dbfs = Some(6.0);
         input.output_rms_dbfs = Some(-3.25);
         input.output_clipped_samples = 17;
@@ -583,7 +589,7 @@ mod tests {
         input.output_non_finite_total = 2;
         let frame: Value = serde_json::from_str(&wrap_state(build_state(&input))).unwrap();
         assert_eq!(frame["state"]["output_level"], json!({
-            "gain_db": 12.0, "peak_dbfs": 6.0, "rms_dbfs": -3.25,
+            "gain_db": 12.0, "max_gain_db": 36.0, "peak_dbfs": 6.0, "rms_dbfs": -3.25,
             "clipped_samples": 17, "clipped_total": 1017, "non_finite_total": 2,
         }));
         input.output_clipped_samples = 0;

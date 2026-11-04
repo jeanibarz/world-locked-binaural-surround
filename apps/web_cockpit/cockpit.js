@@ -62,8 +62,22 @@
   // Gain commands are acknowledged by engine state, rather than the queued HTTP response.
   let outputGain = null, gainEditing = false, gainPending = null, gainTimer = null;
   let gainStateVersion = 0, gainRequestVersion = 0;
-  const validGain = (v) => typeof v === "number" && Number.isFinite(v) && v >= -24 && v <= 24;
+  // Attenuation floor is fixed; the boost ceiling is engine-configurable (defaults to +24 dB) and
+  // arrives live in telemetry / config as `max_gain_db`. The slider's own `max` tracks it.
+  const GAIN_FLOOR = -24;
+  let gainMax = 24;
+  const validGain = (v) => typeof v === "number" && Number.isFinite(v) && v >= GAIN_FLOOR && v <= gainMax;
   const gainText = (v) => (v > 0 ? "+" : "") + v.toFixed(1) + " dB";
+  // Retune the slider's ceiling from the engine. Ignores junk; redraws so the thumb/label reflect
+  // the new range. The engine has already clipped the live gain to any lowered ceiling, so the
+  // slider value stays in range.
+  function setGainMax(m) {
+    if (typeof m !== "number" || !Number.isFinite(m) || m < 0 || m === gainMax) return;
+    gainMax = m;
+    const slider = $("output-gain");
+    if (slider) slider.max = String(m);
+    drawGain();
+  }
   function drawGain() {
     const slider = $("output-gain"), reset = $("output-gain-reset");
     if (!slider) return;
@@ -102,7 +116,7 @@
       const deadline = setTimeout(() => { controller.abort(); failed(); }, 1000);
       try {
         const r = await fetch("/api/get_config", { signal: controller.signal });
-        if (r.ok) { const c = await r.json(); if (requestVersion === gainRequestVersion) receiveGain(c.output_gain_db); }
+        if (r.ok) { const c = await r.json(); if (requestVersion === gainRequestVersion) { setGainMax(c.max_gain_db); receiveGain(c.output_gain_db); } }
       } catch (_) { /* Restore the last engine-confirmed value below. */ }
       clearTimeout(deadline);
       failed();
@@ -117,6 +131,7 @@
   const levelText = (v) => v === null ? "−∞" : typeof v === "number" && Number.isFinite(v) ? (v > 0 ? "+" : "") + v.toFixed(1) : "—";
   function renderOutputLevel(level) {
     if (!level) return;
+    setGainMax(level.max_gain_db); // widen/narrow the slider range before validating the gain
     receiveGain(level.gain_db);
     const peak = level.peak_dbfs, rms = level.rms_dbfs;
     const text = "Peak " + levelText(peak) + " · RMS " + levelText(rms) + " dBFS";
@@ -500,7 +515,7 @@
       // resize ourselves to the saved size. window.resizeTo works on a standalone --app window.
       const startupGainVersion = gainStateVersion;
       fetch("/api/get_config").then((r) => { if (!r.ok) throw new Error("config unavailable"); return r.json(); }).then((c) => {
-        if (gainStateVersion === startupGainVersion) receiveGain(c.output_gain_db);
+        if (gainStateVersion === startupGainVersion) { setGainMax(c.max_gain_db); receiveGain(c.output_gain_db); }
         if (c.win_w && c.win_h) { try { window.resizeTo(c.win_w, c.win_h); } catch (_) { /* blocked */ } }
         showBuild(c.version);
       }).catch(() => {});
