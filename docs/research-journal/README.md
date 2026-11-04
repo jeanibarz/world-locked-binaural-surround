@@ -128,6 +128,7 @@ The ordered work blocks live in [`../backlog.md`](../backlog.md).
 | 84 | [Bounded underrun timing trace](84-bounded-underrun-timing-trace.md) | Opt-in capture/render/output/FIFO incident windows with bounded recording, loss reporting, and separate pretrigger/overlapping evidence. |
 | 85 | [Output gain and meters](85-output-gain-and-meters.md) | Shared stereo trim after EQ, pre-clamp peak/RMS and cumulative clipping, persisted cockpit control, and portable/browser/Windows verification. |
 | 86 | [Stale-doc audit: index reconciled](86-stale-doc-audit-index-reconciled.md) | Maintenance (cf. 29): rebuilt this index to list all 89 entries (48/51–81 were unlisted) and de-fragmented the table; flagged the duplicate 48/64/81 numbers; refreshed the milestone table (B6.12 cockpit, Track B driver); fixed stale host runbooks (launcher zoo → one `run.cmd`), latency claims, backlog B8.5b/c/B0.5 status, an RFC status, and removed orphaned root mockups. Docs only. |
+| 87 | [Configurable output-gain ceiling](87-configurable-output-gain-ceiling.md) | Output gain (cf. #221 / 85, PR #254): a user-configurable boost ceiling ("Max output gain") raises the +24 dB cap up to a +60 dB hard limit; lowering it below the live gain clips the gain down (ramped), the −24 dB floor stays fixed. 9 new `output_gain` tests + telemetry coverage. |
 
 See also [`LEARNINGS.md`](LEARNINGS.md) — the cumulative, numbered lessons.
 

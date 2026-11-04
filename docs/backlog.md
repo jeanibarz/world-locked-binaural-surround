@@ -13,6 +13,9 @@ Legend: `[ ]` todo · `[~]` in progress (slice done, more remains) · `[x]` done
 - [x] **Adjustable output gain and meters (#221):** shared stereo gain after EQ,
   pre-clamp peak/RMS/clipping measurements, persisted control, and browser/Windows verification.
   See journal 85.
+- [x] **Configurable output-gain ceiling:** a persisted "Max output gain" setting raises the
+  +24 dB boost cap up to a +60 dB hard limit; lowering it below the live gain clips the gain down
+  (ramped); the −24 dB floor stays fixed. PR #254, journal 87.
 
 - [x] **Small-cushion recovery coverage:** test real pipeline stages at three/four-block targets,
   mixed endpoint rates, fragmented packets, repeated configuration changes, and explicit timing

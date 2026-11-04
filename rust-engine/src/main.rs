@@ -139,6 +139,10 @@ mod engine {
         exclusive: bool,
         hp_eq: bool,
         output_gain_db: f64,
+        /// User-configurable upper bound for `output_gain_db`. Defaults to the historical fixed
+        /// +24 dB; raising it lets a quiet source be lifted further, and lowering it clips a gain
+        /// that is now too loud (see [`crate::output_gain`]).
+        max_gain_db: f64,
         hp_model: Option<String>,
         predict: bool,
         /// Interaural time difference (ms) per position group — the in-app ITD retune (no re-bake,
@@ -216,8 +220,17 @@ mod engine {
             if let Some(b) = o.get("hp_eq").and_then(|x| x.as_bool()) {
                 if schema >= SETTINGS_SCHEMA || b { self.hp_eq = b; }
             }
+            // Load the boost ceiling first (sanitised to its allowed span), then the gain, so a
+            // persisted gain is validated against the persisted ceiling — not the default. An
+            // out-of-range persisted gain (e.g. the ceiling was later lowered by hand-editing the
+            // file) is clipped down rather than ignored, keeping the two values consistent.
+            if let Some(n) = o.get("max_gain_db").and_then(|x| x.as_f64()) {
+                self.max_gain_db = crate::output_gain::sanitize_max_gain_db(n);
+            }
             if let Some(n) = o.get("output_gain_db").and_then(|x| x.as_f64()) {
-                if crate::output_gain::valid_gain_db(n) { self.output_gain_db = n; }
+                if n.is_finite() {
+                    self.output_gain_db = crate::output_gain::clamp_gain_db(n, self.max_gain_db);
+                }
             }
             if let Some(s) = o.get("hp_model").and_then(|x| x.as_str()) { self.hp_model = Some(s.into()); }
             if let Some(b) = o.get("predict").and_then(|x| x.as_bool()) { self.predict = b; }
@@ -250,7 +263,7 @@ mod engine {
                 "method": self.method, "hrir_name": self.hrir_name, "backend": self.backend,
                 "comp": self.comp, "block": self.block, "cushion_ms": self.cushion_ms,
                 "exclusive": self.exclusive, "hp_eq": self.hp_eq, "hp_model": self.hp_model,
-                "output_gain_db": self.output_gain_db,
+                "output_gain_db": self.output_gain_db, "max_gain_db": self.max_gain_db,
                 "predict": self.predict, "invert_tracking": self.invert_tracking,
                 "itd_front_rear": self.itd_front_rear, "itd_sides": self.itd_sides,
                 "flip_h": self.flip_h, "flip_v": self.flip_v,
@@ -279,7 +292,10 @@ mod engine {
             "samplerate": samplerate,
             "backend": s.backend, "method": s.method, "hrir_name": s.hrir_name, "comp": s.comp,
             "block": s.block, "cushion_ms": s.cushion_ms, "exclusive": s.exclusive,
-            "output_gain_db": s.output_gain_db,
+            "output_gain_db": s.output_gain_db, "max_gain_db": s.max_gain_db,
+            // Bounds for the max-gain control the settings dialog renders.
+            "max_gain_min_db": crate::output_gain::MIN_MAX_GAIN_DB,
+            "max_gain_limit_db": crate::output_gain::MAX_MAX_GAIN_DB,
             // #240: the discovered headphone-comp profiles populate the cockpit model dropdown
             // (`settings.js` wires it only when `hp_models` is a non-empty list — null leaves the
             // field inert when there is nothing to pick), and `hp_model` is the current selection so
@@ -470,6 +486,7 @@ mod engine {
             cushion_ms: latency_ms,
             exclusive: false,
             output_gain_db: 0.0,
+            max_gain_db: crate::output_gain::DEFAULT_MAX_GAIN_DB,
             hp_eq: true, // the owner listened with the headphone comp + subjective EQ on (#193)
             hp_model: None,
             predict: false,
@@ -707,6 +724,7 @@ mod engine {
         };
         let mut output_eq = build_hp_eq(block, &settings.hp_model);
         let mut output_gain = crate::output_gain::GainStage::new(pack.samplerate);
+        output_gain.set_max_gain_db(settings.max_gain_db); // widen/narrow the range before the gain
         output_gain.set_gain_db(settings.output_gain_db);
         // Tracks the previous tick's enable state so a bypass→enable transition can clear the EQ's
         // stale tail (FIR delay line + biquad memory) and resume without a click.
@@ -800,7 +818,22 @@ mod engine {
                     "set_exclusive" => { if let Some(b) = a0.and_then(|v| v.as_bool()) { settings.exclusive = b; dirty = true; } }
                     "set_output_gain" => {
                         if let Some(n) = a0.and_then(|v| v.as_f64()) {
-                            if crate::output_gain::valid_gain_db(n) { settings.output_gain_db = n; dirty = true; }
+                            if crate::output_gain::valid_gain_db(n, settings.max_gain_db) {
+                                settings.output_gain_db = n; dirty = true;
+                            }
+                        }
+                    }
+                    // Change the output-gain ceiling (#max-gain). The request is sanitised to the
+                    // allowed span; if the current gain now exceeds the new ceiling it is clipped
+                    // down to it, otherwise left as-is. Persisted like `output_gain_db`; applied to
+                    // the live `GainStage` in the `dirty` block below (which re-reads both values).
+                    "set_max_gain" => {
+                        if let Some(n) = a0.and_then(|v| v.as_f64()) {
+                            settings.max_gain_db = crate::output_gain::sanitize_max_gain_db(n);
+                            settings.output_gain_db = crate::output_gain::clamp_gain_db(
+                                settings.output_gain_db, settings.max_gain_db,
+                            );
+                            dirty = true;
                         }
                     }
                     "set_hpeq" => { if let Some(b) = a0.and_then(|v| v.as_bool()) { settings.hp_eq = b; dirty = true; } }
@@ -845,6 +878,10 @@ mod engine {
                 }
             }
             if dirty {
+                // Apply the ceiling before the gain: `settings` already clips its gain to the
+                // ceiling, so pushing the ceiling first keeps the live `GainStage` from rejecting
+                // a gain that is valid under the new, wider range (and clips it under a narrower).
+                output_gain.set_max_gain_db(settings.max_gain_db);
                 output_gain.set_gain_db(settings.output_gain_db);
                 // Reconcile the pose source's tracking direction to the (possibly just reverted)
                 // setting, so a toggle, a settings-dialog cancel, and reset-to-defaults all agree
@@ -1107,6 +1144,7 @@ mod engine {
                     render_load_pct: render_ema,
                     render_peak_pct: render_peak,
                     output_gain_db: output_gain.gain_db(),
+                    output_max_gain_db: output_gain.max_gain_db(),
                     output_peak_dbfs: levels.peak_dbfs,
                     output_rms_dbfs: levels.rms_dbfs,
                     output_clipped_samples: levels.clipped_samples,
@@ -1182,6 +1220,7 @@ mod engine {
                 render_load_pct: render_ema,
                 render_peak_pct: render_peak,
                 output_gain_db: output_gain.gain_db(),
+                output_max_gain_db: output_gain.max_gain_db(),
                 output_peak_dbfs: levels.peak_dbfs,
                 output_rms_dbfs: levels.rms_dbfs,
                 output_clipped_samples: levels.clipped_samples,
