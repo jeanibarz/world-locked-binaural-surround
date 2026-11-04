@@ -256,18 +256,22 @@ usable ground truth. 0b (real-usage histogram) and 0g (render-fidelity) are **ad
 inform scope and the *next* (perception) effort but do not block the tracker. Otherwise the
 deliverable may be just C0 + 0e + the hybrid's front half, a legitimate cheaper outcome.
 
-> **Phase-0 measured results (2026-11-05 — journals 89, 90; done on the host):**
+> **Phase-0 measured results (2026-11-05 — journals 89, 90, 91; done on the host). Tracker gate: GREEN.**
 > **0c PASS** — `rotation_to_azimuth` lands (full-circle, exact front-cone parity, monotonic through
 > the rear); the ±90° Euler cap is proven in a test (journal 89, merged).
-> **0a** — on the production **DirectML** path the current pipeline is **~11.4 ms p50 / 13.6 ms p95**
-> (BlazeFace 0.5 + FaceMesh 10.9); CPU ~23 ms (Rust 1–2-thread fallback ~100 ms). It already uses most
-> of the ~12–16 ms budget.
-> **0d** — a full-range **6DRepNet / RepVGG (224²)** regressor is **~4.3 ms p50** on DirectML — **~2.5×
-> cheaper than FaceMesh**. So the full-range net is a **replacement** for FaceMesh that *frees* ~6.5 ms,
-> and **G3 is satisfiable** — provided the regime runs **one net per frame** (landmark solve *or*
-> regressor, never both except briefly at the blend boundary). This is now a hard design rule for the
-> hybrid below. **0b** deferred (needs real sessions; webcam was busy — index 0 no frames, index 2 is
-> OBS virtual).
+> **0a** — current pipeline on **DirectML** ~**11.4 ms p50 / 13.6 ms p95** (BlazeFace 0.5 + FaceMesh
+> 10.9); it already uses most of the ~12–16 ms budget.
+> **0d latency** — the real **6DRepNet360 (ResNet-50, 224²)** full-range net is **~1.65 ms p50 /
+> 2.2 ms p99** on DirectML — *far* cheaper than FaceMesh. (An earlier RepVGG proxy read 4.3 ms; the
+> actual model is lighter still.) So the full-range net **replaces** FaceMesh and *frees* ~9 ms;
+> **G3 is comfortable** — provided the regime runs **one net per frame** (landmark solve *or*
+> regressor, never both except briefly at the blend boundary). Hard design rule for the hybrid below.
+> **0d behaviour PASS (journal 91)** — on a real 30 s head sweep by the operator, 6DRepNet360 + a
+> RetinaFace crop + the full-circle azimuth tracked **continuously past ±90°** (reached ~−93°/+113°,
+> 53 frames beyond ±85°) where the shipped pipeline dies at ±50°; the capped Euler read-out folded at
+> ±90° on the *same* matrices, confirming journal 89 on real data. Detection (93 %) was the limiting
+> factor at the extremes → a **head** detector is the next wall (Component 1), as predicted. No ground
+> truth yet (that's 0f, the marker cube). **0b** deferred (needs real sessions).
 
 ### The estimator: a hybrid, not a wholesale swap
 
