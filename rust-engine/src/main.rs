@@ -32,6 +32,9 @@ mod pack;
 mod packs;
 mod telemetry;
 mod vision;
+// Clears the engine console's QuickEdit Mode so a stray click can't suspend the process. Windows-only.
+#[cfg(windows)]
+mod win_console;
 
 // Build identity, baked by build.rs (git SHA + build time). Reported on startup and over the
 // cockpit API so a running engine says exactly which source it came from — the anti-staleness stamp.
@@ -317,6 +320,12 @@ mod engine {
     pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         use crate::{assets, hp_profiles, packs};
         let a: Vec<String> = std::env::args().collect();
+
+        // Disable the console's QuickEdit Mode first thing: run directly in a terminal, the engine's
+        // console suspends the whole process the moment the user clicks/selects in it, which freezes
+        // audio + telemetry and looks exactly like a broken build. No-ops cleanly when there is no
+        // console (the hidden Tauri launch). Best-effort, Windows-only.
+        println!("CONSOLE_QUICK_EDIT {}", if crate::win_console::disable_quick_edit() { "disabled" } else { "unavailable" });
 
         // Raise the whole process to HIGH priority before spawning any thread, so normal-priority
         // background load (a compiler, an indexer, a Windows-update task) can't preempt the DSP into
