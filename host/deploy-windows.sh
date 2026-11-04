@@ -8,7 +8,9 @@
 # Usage:  host/deploy-windows.sh [install_dir]
 #   install_dir defaults to $WLBS_WIN_DIR, else /mnt/c/Users/ibarz/WLBS-Engine
 #
-# Verify afterwards with host/check-deploy.sh (also run by the Claude Stop hook).
+# This deploys the FILES. The running engine keeps the old build in memory until it is relaunched —
+# use host/redeploy.sh to deploy AND restart the running engine in one step (the "redeploy properly"
+# path). Verify afterwards with host/check-deploy.sh (also run by the Claude Stop hook).
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -43,16 +45,31 @@ mkdir -p "$DST/web_cockpit"
 cp -f "$REPO/apps/web_cockpit/"* "$DST/web_cockpit/"
 echo "cockpit UI updated"
 
-# The exe is locked while the engine runs; stage it as wlbs_engine.new.exe (run-engine.bat applies
-# it on next launch) and flag that a relaunch is needed. Otherwise replace it in place.
+# Key the exe placement on whether the engine is RUNNING, not on whether the copy is allowed. On
+# the WSL/DrvFs mount the running exe can often be overwritten in place, but that only changes the
+# file on disk — the live process keeps the OLD build in memory, so an in-place replace while the
+# engine runs silently leaves the app stale (and, being neither a lock failure nor a staged
+# .new.exe, check-deploy.sh cannot see it). So: if the engine is running, always STAGE as
+# wlbs_engine.new.exe (run-engine.bat applies it on next launch, and check-deploy flags it as owed
+# until then). Only replace in place when the engine is NOT running. Use host/redeploy.sh to deploy
+# AND relaunch in one step.
 RELAUNCH=0
-if cp -f "$EXE" "$DST/wlbs_engine.exe" 2>/dev/null; then
+ENGINE_RUNNING=0
+if command -v tasklist.exe >/dev/null 2>&1 \
+   && tasklist.exe /FI "IMAGENAME eq wlbs_engine.exe" 2>/dev/null | grep -qi 'wlbs_engine\.exe'; then
+  ENGINE_RUNNING=1
+fi
+if [ "$ENGINE_RUNNING" = 1 ]; then
+  cp -f "$EXE" "$DST/wlbs_engine.new.exe"
+  RELAUNCH=1
+  echo "engine STAGED as wlbs_engine.new.exe (it is running) — relaunch to apply"
+elif cp -f "$EXE" "$DST/wlbs_engine.exe" 2>/dev/null; then
   rm -f "$DST/wlbs_engine.new.exe"
   echo "engine replaced in place (was not running)"
 else
   cp -f "$EXE" "$DST/wlbs_engine.new.exe"
   RELAUNCH=1
-  echo "engine STAGED as wlbs_engine.new.exe (it is running/locked) — relaunch to apply"
+  echo "engine STAGED as wlbs_engine.new.exe (locked) — relaunch to apply"
 fi
 
 printf '%s  deployed %s from %s%s\n' \
