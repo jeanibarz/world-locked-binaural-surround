@@ -217,12 +217,20 @@ reconfigure the running engine from the cockpit's Settings panel with no restart
 the engine builds for Linux natively and Windows via `cargo xwin`; macOS needs a Mac (Track S).
 
 **NON-NEGOTIABLE — never leave the Windows app stale.** The engine is a compiled binary, so
-"merged to main" is NOT "running on Windows" — there is a build+copy gap that silently bit us
-repeatedly. The guardrails:
-- **Deploy with `host/deploy-windows.sh`** — the one blessed in-place updater (build → copy
-  exe + `web_cockpit/` → write `DEPLOYED_SHA`; stages `wlbs_engine.new.exe` if the engine is
-  running, which `run-engine.bat` auto-applies on next launch). Run it after ANY change under
-  `rust-engine/` or `apps/web_cockpit/`, and ALWAYS **before telling the owner to test**.
+"merged to main" is NOT "running on Windows" — there is a build+copy gap AND a restart gap that
+silently bit us repeatedly. The guardrails:
+- **Redeploy with `host/redeploy.sh`** — the "redeploy properly" path: it runs
+  `host/deploy-windows.sh` AND, if the engine is running, restarts it so the LIVE process actually
+  runs the new build. Use this after ANY change under `rust-engine/` or `apps/web_cockpit/`, and
+  ALWAYS **before telling the owner to test**. Do this automatically as part of finishing such a
+  change — the owner should never have to ask.
+- **Deploying the files is not enough — the running process must be relaunched.** The engine keeps
+  the old build in memory until restarted, and on the WSL/DrvFs mount the on-disk exe can be
+  replaced in place without the live process changing, so a bare `host/deploy-windows.sh` (build →
+  copy exe + `web_cockpit/` → write `DEPLOYED_SHA`; stages `wlbs_engine.new.exe` and flags a
+  relaunch when the engine is running) can leave the live app stale even though `DEPLOYED_SHA`
+  matches `HEAD`. `host/redeploy.sh` closes that gap; use it unless you have a reason to stage
+  without restarting.
 - **Every build is stamped** (git SHA + date, baked by `rust-engine/build.rs`): printed as
   `ENGINE_BUILD …` on startup, served at `/api/version`, and shown in the cockpit SYSTEM panel's
   "Build" row. To confirm what is live, read that row or curl `/api/version` and compare to
