@@ -60,10 +60,25 @@ sleep 2
 sleep 6
 
 NEW="$(running_pids)"
-if [ -n "$NEW" ]; then
-  echo "redeploy: engine relaunched (PIDs: $NEW) — the live app now runs $SHORT."
+# Success requires a FRESH process — a PID that was not running before the kill. A surviving old PID
+# (e.g. taskkill was denied) must not be read as a successful relaunch: the old build would still be
+# live.
+FRESH=""
+for np in $NEW; do
+  is_old=0
+  for op in $PIDS; do [ "$np" = "$op" ] && { is_old=1; break; }; done
+  [ "$is_old" = 0 ] && FRESH="$FRESH $np"
+done
+FRESH="${FRESH# }"
+if [ -n "$FRESH" ]; then
+  echo "redeploy: engine relaunched (PID(s): $FRESH) — the live app now runs $SHORT."
   exit 0
 fi
-echo "⚠  redeploy: the engine did not come back up. Start it manually on the host:" >&2
-echo "   run $DST/run-engine.bat (it will apply the staged build)." >&2
+if [ -n "$NEW" ]; then
+  echo "⚠  redeploy: the previous engine (PIDs: $NEW) is still running and no fresh process started —" >&2
+  echo "   the kill was likely denied, so the OLD build is still live." >&2
+else
+  echo "⚠  redeploy: the engine did not come back up." >&2
+fi
+echo "   Fix on the host: close the engine window, then run $DST/run-engine.bat (it applies the staged build)." >&2
 exit 1
