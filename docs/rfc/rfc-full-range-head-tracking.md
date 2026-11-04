@@ -1,9 +1,23 @@
 # RFC: Full-range (toward 360°) head tracking — from a face-landmark solve to a landmark-free head-orientation estimator
 
-**Status:** Draft (v2 — post 5-critic panel + consensus attack). Proposal awaiting operator
-go/no-go on the Phase-0 gate and the three load-bearing decisions in *Open questions*.
+**Status:** Draft (v3 — operator decisions folded in, 2026-11-04). Scope narrowed to the
+**tracker only**; perception/BRIR work explicitly deferred. Ready to start at the Phase-0 gate.
 **Date:** 2026-11-04
 **Author:** Jean Ibarz (with Claude)
+
+> **v3 note (operator decisions, 2026-11-04).** The operator resolved every open question and
+> set a firm sequencing rule: **get head tracking accurate and reliable first; solve the
+> psychoacoustic/BRIR localization problem later — one thing at a time.** Concretely:
+> **(D1) No IMU** — the head-mounted IMU track is out of scope; this is a single-camera effort.
+> **(D2) Perception deferred** — the tracker is judged on **pose accuracy vs. ground truth**,
+> *not* on whether the renderer can yet use the angle; the render back-gap (journal 17) stays
+> documented as a known downstream dependency but is **not** on this effort's critical path.
+> **(D3) Personal rig** — local use only, so the §9 license gate is **dropped**: we can run a
+> non-commercial model (e.g. 6DRepNet360) locally now, and **per-user personalization becomes
+> the main accuracy play**, not a non-shippable probe. **(D4) Continuity-based rear** — single
+> camera; the pure-rear ±180° ambiguity is handled by trajectory continuity, and a second
+> camera (FR-13) is deferred, not committed. **(D5) Marker cap confirmed** — the operator will
+> wear a printed-marker cap for ground truth (rig specified below).
 
 > **v2 note (post-review).** v1 claimed the fix was "a new estimator behind the wire; the
 > wire, world geometry, and `rotation_to_euler` stay unchanged; the only downstream edit is
@@ -41,9 +55,10 @@ answers the three questions that decide whether the expensive work is even worth
 travel end-to-end through this codebase* — and ships two low-risk wins immediately (a
 wrap-safe pose path, and a cheap in-range jitter fix that may remove most of the felt pain).
 Only if Phase 0 passes do we bake off models, and only if no permissive model clears the bar
-do we train. Throughout, a **head-mounted IMU** (the headphones are already on the head) is
-flagged as the one path that reaches *literal* 360° with no rear blind cone, and is
-recommended as a parallel track for the operator to weigh.
+do we train. Per the operator's decisions (below), this is a **single-camera, tracker-first**
+effort: **no IMU** and **perception/BRIR work deferred**; it's a **personal rig**, so licensing
+is not a constraint and **per-user personalisation is the main accuracy play**; the pure-rear
+±180° ambiguity is handled by **trajectory continuity** on the one camera.
 
 ---
 
@@ -128,12 +143,17 @@ and the 150–210° back gap. At **yaw = 180°** the **world CENTRE channel (dia
 head-relative **180°**, dead centre of the broken gap, and "collapses to the front" — i.e.
 the dialogue that is physically *behind* you is rendered as *in front of* you: the stage
 **un-locks**, the exact failure the feature exists to prevent. So a perfect rear yaw can feed
-an **anti-world-locked** render. **Consequence for this RFC:** the render **rear-cue /
-BRIR-coverage** problem is a **co-equal workstream on the critical path**, not a downstream
-detail — and it gates *every* 360° path, vision **and** IMU (a perfect IMU orientation still
-can't fix the back gap). Phase-0 **0g** measures this cheaply before the tracker programme
-commits; if 0g fails (journal 17 says it already does), the rear-cue/BRIR upgrade is the
-**true gating item** for literal world-locked 360°.
+an **anti-world-locked** render. **Consequence:** the render **rear-cue / BRIR-coverage**
+problem is a real downstream dependency for the *audio illusion* at large head angles.
+
+**Operator decision D2 — deferred (tracker first).** The operator has chosen to make head
+tracking accurate and reliable **first**, and to solve this psychoacoustic/BRIR problem
+**later** ("one thing at a time"). So this section is **documented context, not a blocker**:
+the tracker is judged on **pose accuracy vs. ground truth**, independent of whether the
+renderer can yet express the angle. Phase-0 **0g** is **retained but demoted to an advisory
+one-off** — it confirms the known back-gap and sizes the eventual rear-cue work; it does
+**not** gate the tracker programme. Once the tracker is reliable, the rear-cue/BRIR upgrade
+becomes the next effort.
 
 ### The fundamental limit this RFC does and does not remove
 
@@ -144,9 +164,12 @@ frame-wise oracle at the back. The **vision track** claims the achievable thing:
 accurately through the **front/side hemisphere (±90°)**, track **continuously into the rear
 quarters** by temporal continuity (you *rotated* there through 90°/120°/150°), and **degrade
 honestly** (low confidence, held sign, never a flip) where even that fails. The only paths to
-**literal, drift-bounded 360° with no blind cone** are the **head-mounted IMU** and
-**multi-camera** (FR-13); both are promoted below from "alternative" to tracks the operator
-should actively choose between, because the operator asked for *360°*, not *±90°*.
+**literal, drift-bounded 360° with no blind cone** are a **head-mounted IMU** or
+**multi-camera** (FR-13) — both of which the operator has, for now, **ruled out / deferred**
+(D1/D4). So the agreed deliverable is explicit: **front/side hemisphere (±90°) solid +
+continuity-based rear on a single camera**, with literal full-circle left to a later effort.
+This is a conscious operator choice ("tracker first, one thing at a time"), not a silent
+retreat from the 360° ambition.
 
 ---
 
@@ -164,20 +187,21 @@ should actively choose between, because the operator asked for *360°*, not *±9
   incumbent cost (Phase 0a), not the NFR-4b number in the abstract.
 - **G4 — Zero new Python in the delivered product.** Shipped estimator is a Rust-ownable ONNX
   model via `ort` (as today). Python is allowed only as **offline** training/eval tooling.
-- **G5 — Licensing (requirements §9): conditional on the product/personal decision.** §9 wants
-  GPL avoided and compatibility with a possible **paid tier**, so for a *shipped* model the
-  architecture, **weights**, and **every training dataset** must be permissive (no GPL, no
-  non-commercial/research-only). **If this is the operator's personal rig** (Open Q1), G5
-  relaxes for local-only use and a non-commercial model may run privately. This fork is
-  load-bearing and decided before M-B.
+- **G5 — Licensing: relaxed (operator decision D3 — personal rig).** This is a local-only
+  personal rig, so the §9 permissive-shipping gate is **dropped**: a non-commercial /
+  research-only model (e.g. **6DRepNet360**) and its research-licensed training data
+  (300W-LP, CMU Panoptic) **may be run locally now**. Licensing stops being a milestone
+  blocker. (If the project is ever productized, the shippable-weights constraint returns and a
+  permissive or own-trained model would be needed — noted, not in scope here.)
 - **G6 — Measurement before model.** Phase 0 gates the programme; every model choice is made
   against numbers on real recordings.
 
 ### Non-goals
 
 Multi-person pose; precise 6-DoF translation (orientation is the product-critical quantity);
-eliminating the camera on the vision track (the IMU track does that separately);
-**sub-degree *tracker* accuracy at world-rear directions** (MAA is coarse there) — **but note
+an IMU or second camera (both ruled out/deferred — D1/D4); the render/BRIR back-gap and all
+perception work (deferred — D2); productization and shippable-weight licensing (personal rig —
+D3); **sub-degree *tracker* accuracy at world-rear directions** (MAA is coarse there) — **but note
 this is not the same as the render back-gap**, which afflicts *world-front* content (dialogue,
 front L/R) once a turned head swings it to *head-relative* rear, and *is* in scope as the 0g /
 rear-cue workstream; and — **now explicitly in scope, retracted from v1** — the pose
@@ -217,24 +241,20 @@ these pass; two of them ship value regardless.
   and flip-rate at **60°/90°/120°** yaw and measure **cap slip**, **before** building the rig.
   *Decides* whether the ground-truth plan survives contact (see *Ground truth* for why this is
   in doubt exactly at the rear).
-- **0g — Render-fidelity check (the consensus-attack gate).** Using the **existing**
-  rotating-source harness + judge from journals 15/17, measure whether the **world-locked
-  stage survives a 90–180° head turn at the *render* level** — i.e. can the 7-anchor BRIR set
-  reproduce world-front content (centre/dialogue, front L/R) when it maps to head-relative
-  150–210°? Journal 17 indicates it **cannot** today (back gap broken, rears front/back-
-  ambiguous). *Decides the sequencing of the whole programme:* if 0g fails, a **rear-cue /
-  BRIR-coverage upgrade** (re-measured rears, an HRTF set that resolves the owner's back, or a
-  synthesised rear cue — journal 17's own "next") is on the critical path **ahead of or beside**
-  the tracker work, because an accurate rear yaw is unusable without it. Cheapest high-leverage
-  check in the RFC — the harness already exists.
+- **0g — Render-fidelity check (advisory, not a gate — operator decision D2).** Using the
+  **existing** rotating-source harness + judge from journals 15/17, measure whether the
+  world-locked stage survives a 90–180° head turn at the *render* level. Journal 17 indicates
+  it **cannot** today (back gap broken, rears front/back-ambiguous). Per D2 this is **deferred
+  context**: run it once (cheap, the harness exists) to size the eventual rear-cue/BRIR work,
+  but it does **not** gate the tracker. The tracker's own success is pose accuracy vs. ground
+  truth, measured regardless of render fidelity.
 
-**Phase-0 gate:** proceed to the model programme only if 0a shows headroom (or a path to it),
-0b shows the rear is worth it (or the operator wants it regardless), 0c/C0 lands, 0d shows a
-viable net, 0f shows usable rear GT (or we fall back to IMU GT), **and 0g shows the renderer
-can express rear-turned directions (or the rear-cue/BRIR upgrade is scheduled alongside)**.
-Otherwise the deliverable may be just C0 + 0e + the hybrid's front half, which is a legitimate,
-much cheaper outcome — and if 0g fails, the **rear-cue/BRIR upgrade leads**, with the tracker
-programme gated behind it rather than the reverse.
+**Phase-0 gate (tracker-only, per D2):** proceed to the model programme if 0a shows latency
+headroom (or a path to it), 0c/C0 lands (full-circle yaw travels end-to-end), 0d shows a viable
+in-budget model (6DRepNet360 is runnable now — license no longer a blocker, D3), and 0f shows
+usable ground truth. 0b (real-usage histogram) and 0g (render-fidelity) are **advisory** — they
+inform scope and the *next* (perception) effort but do not block the tracker. Otherwise the
+deliverable may be just C0 + 0e + the hybrid's front half, a legitimate cheaper outcome.
 
 ### The estimator: a hybrid, not a wholesale swap
 
@@ -303,43 +323,54 @@ that de-risks everything after it. The +60→+120→+170 test (0c) is its accept
   the profile band we care most about; `solvePnP` gives the **marker** pose, needing a
   **marker→head extrinsic** calibration; and a cap **slips**, injecting a drifting offset
   right during fast sweeps. So GT-1 ships **with**: a marker→head calibration step, a
-  **per-session slip check against an independent reference**, a documented dead-band near ±90°,
-  and a cube (not a flat tag) to narrow the dead-bands. Validated in 0f before the rig is built.
-- **GT-2 — head-mounted IMU (orientation).** Phone/cheap IMU on a headband, time-synced to
-  video. Drifts in absolute yaw but is **occlusion-proof and bare-head-capable**, so it is the
-  **independent reference** that cross-checks GT-1's slip and covers bare-head clips GT-1
-  cannot. (It is also the sensor the IMU track below would ship — the work is shared.)
+  **per-session slip check** (below), and a documented dead-band near ±90°. Validated in 0f
+  before the rig is built.
+  This is why GT-1 uses a **cube** (several marker faces), not a flat tag: a face is always at
+  a workable angle, and because the cube's back and side faces turn **toward** the front camera
+  as the head turns away, **GT-1 gives true angles directly in the rear** — the single front
+  camera reads the rear-facing markers at 90–180°. The cube's **multi-face redundancy is also
+  the slip check**: when two faces are visible at once, their poses must agree up to the known
+  cube geometry; a disagreement flags cap slip with no extra sensor. Rig specified below
+  (ArUco DICT_4X4_50, 60 mm, IDs 0–5 on the six faces).
+- **GT-2 — head-mounted IMU: out of scope (operator decision D1).** An IMU reference would have
+  cross-checked slip and labelled bare-head clips, but the operator has ruled IMU out. Its two
+  jobs are covered without it: slip by the cube's multi-face redundancy (above), and bare-head
+  evaluation by GT-3 self-consistency plus a short "same motion, cap on then cap off" paired
+  clip to measure the cap-domain gap.
 - **GT-3 — model-ensemble pseudo-GT, with a correlated-bias caveat.** A geodesic (rotation)
   median over several full-range models, **but** those models share the real datasets' rear
   blind spot, so their errors are **correlated** and agreement can be **confidently wrong** at
   the rear. Use GT-3 for front/profile ranking and for **label-free self-consistency**
   (continuity/monotonicity on smooth sweeps; angular-velocity integration), **not** as a rear
-  ruler. The rear ruler is GT-2 (IMU), full stop.
+  ruler. The rear ruler is **GT-1's rear-facing cube markers**, full stop.
 
 **Recording protocol (the operator's offer):** short clips, raw frames + capture timestamps,
-cap+IMU: slow continuous yaw sweeps CW and CCW through a full turn; **plus a "turn-and-hold
+marker cap (no IMU, per D1): slow continuous yaw sweeps CW and CCW through a full turn; **plus a "turn-and-hold
 facing away" dwell** (the still-rear posture that breaks velocity-continuity); pitch nods;
 roll tilts; combined look-around; at 2–3 distances and lightings; with confounders (hat
 on/off, glasses, hair up/down, hand near face). **Keep cap and bare-head clips as separate
 distributions** so cap-domain shift is measurable, not hidden.
 
-### Train / personalise (M-D) — likely the real path, budgeted as such
+### Train / personalise (M-D) — personalization is the main accuracy play (operator decision D3)
 
-The panel's licence analysis says M-D is **probable, not contingent**: every named candidate
-has tainted lineage (300W-LP derives from research-licensed 300-W; CMU Panoptic/AGORA are
-restricted), so a **permissive shippable** weight set may not exist. v2 therefore **plans and
-budgets** M-D up front (with a **kill rule** and a **capped budget**), while still **gating**
-its start on Phase 0 / M-B so we don't train blind:
+With the personal-rig decision (D3), **per-user personalisation is promoted from a
+non-shippable probe to the primary accuracy strategy**, and licensing no longer constrains it.
+Two levers, personalisation first:
 
-- **Synthetic full-range data** (FLAME/3DMM + hair/scalp, domain randomisation over hair,
-  hats, glasses, light, background, skin): the only source of **labelled rear** views at scale,
-  **license-clean by construction**. Risk: the **synth→real gap is worst in the front cone**
-  that G2 cares most about — which is exactly why the **hybrid keeps the real landmark solve in
-  front**, so the regressor only has to win **outside** ±45°.
-- **Per-user personalisation** — the single biggest accuracy win **for this listener**, on
-  GT-1/GT-2 labels of the actual head/hair/room/camera. **But it does not ship to others**, so
-  whether it is the main play or only a research probe is decided by Open Q1 (product vs
-  personal rig). If personal rig: personalisation is the main play and G5 relaxes.
+- **Per-user personalisation (primary).** Fine-tune on the operator's **own GT-1 marker-cap
+  labels** — true angles of the actual head, hair, glasses, room and camera, across the full
+  yaw circle (the cube gives rear labels directly). A model specialised to one head in one
+  setup can be both **smaller and more accurate** than any general one, and since nothing
+  ships, this is the single highest-leverage use of the recordings. Start from a strong
+  full-range base (e.g. **6DRepNet360**, runnable now) and fine-tune.
+- **Synthetic full-range data (supporting).** FLAME/3DMM + hair/scalp with domain
+  randomisation, to backfill **labelled rear/extreme** views the real set is thin on and to
+  harden against hats/hair/light. The **synth→real gap is worst in the front cone** that G2
+  cares most about — which is why the **hybrid keeps the real landmark solve in front**, so the
+  regressor only has to win **outside** ±45°.
+
+M-D still carries a **capped budget** and a **kill rule**: if after the budget the
+personalised net still misses M-B's numeric gate, fall back to C0 + 0e + the hybrid front half.
 
 ### Integration & rollout — independently shippable slices (not one gated leap)
 
@@ -372,7 +403,7 @@ unchanged until a slice explicitly flips it:
   (`published_yaw`/`recenter_neutral`/azimuth wrap-safe + consume confidence), and the
   engine's One-Euro/α-β smoothing (wrap-aware; `lib.rs` says the engine owns it — confirmed by
   grep, resolved in Phase 0, not left as an M-C "TODO").
-- Offline (non-shipping Python): marker+IMU GT extraction & time-sync, ensemble pseudo-GT,
+- Offline (non-shipping Python): marker-cube GT extraction (ArUco solvePnP, multi-face), ensemble pseudo-GT,
   eval harness + **numeric** metrics, and (if reached) the M-D synthesis/training/distill
   pipeline.
 - Docs: `head-tracker-setup.md`, requirements FR-4/FR-13, a journal entry per milestone. Model
@@ -393,7 +424,7 @@ unchanged until a slice explicitly flips it:
 - **Still dwell facing away:** turn to 160°, hold 30 s → velocity integrates to 0, the
   trajectory anchor decays, the net is sign-ambiguous. Specified handling: hold last sign at a
   **confidence floor**, do not re-estimate the sign from a single ambiguous frame, re-establish
-  sign only on a frontal/profile re-acquire or from the IMU if present. In the recording set.
+  sign only on a frontal/profile re-acquire (no IMU fallback, per D1). In the recording set.
 - **Sign lost on a multi-frame gap mid-turn (15 fps is the real bottleneck, journal 05):** a
   180° turn in ~0.5 s is ~6 frames; one dropout can lose the hemisphere **permanently** until
   frontal re-acquire, and rear magnitude can drift unbounded. Specified: bound rear-cone drift,
@@ -401,53 +432,50 @@ unchanged until a slice explicitly flips it:
   first-class constraint** (raising it is a real mitigation, not an assumption).
 - **Latency regression:** worst-frame (detector+net+fusion, larger head crop) starves audio
   even if p50 looks fine → G3 is a **p99/worst-frame** gate with the audio thread running.
-- **GT ill-conditioned exactly at the rear:** GT-1 dead-bands/flip at ±90°, cap slip; GT-3
-  correlated-wrong at the rear → the rear ruler is GT-2 (IMU); GT-1 numbers carry a slip budget.
-- **Cap-domain shift:** training/evaluating on always-cap imagery vs bare-head deployment →
-  keep distributions separate; bare-head GT via IMU.
-- **License surprise:** scored in M-B **before** accuracy; a GPL/non-commercial model is
-  quarantined to **offline pseudo-GT only** (unless Open Q1 = personal rig).
+- **GT ill-conditioned at ±90°:** flat markers flip near profile → the **cube** keeps a
+  non-grazing face there; the rear ruler is **GT-1's rear-facing cube markers**, and slip is
+  caught by multi-face agreement (D1 removed the IMU cross-check; the cube replaces it).
+- **Cap-domain shift:** evaluating/training on always-cap imagery vs bare-head use → keep
+  distributions separate; measure the gap with a paired "same motion, cap on then cap off" clip
+  (no IMU).
+- **License:** not a blocker (D3, personal rig) — 6DRepNet360 and research-licensed data may be
+  used locally. (Only re-enters if the project is ever productized.)
 
 ## Milestones & numeric gates (each a go/no-go)
 
 - **Phase 0 (gate above).** Cheap; ships C0 + 0e. **Prerequisite for everything.**
-- **M-A — measurement rig & GT.** Build GT-1 (post-0f), GT-2 cross-check, GT-3 self-
-  consistency, the harness + metrics; capture the operator's set. *Gate:* can we score a model
-  **numerically** per regime on real recordings, with a trusted rear ruler?
-- **M-B — off-the-shelf bake-off.** Score candidates on M-A. *Numeric gate (examples, to be
-  fixed with the operator):* front (±30°) RMS **≤ incumbent + 1°** per axis; ±90° yaw RMS **≤
-  ~8°**; rear (90–180°) RMS **≤ ~20°** vs GT-2; **front/back flip rate = 0** over N full CW+CCW
-  sweeps; **p99 composed latency ≤ measured-headroom** (0a) with audio running; **license =
-  permissive** (or Q1 = personal). **All pass → C1–C4. Any fail on a non-permissive winner →
-  M-D.**
+- **M-A — measurement rig & GT.** Build GT-1 (marker cube, post-0f), GT-3 self-consistency, the
+  harness + metrics; capture the operator's set. *Gate:* can we score a model **numerically**
+  per regime on real recordings, with the cube's rear-facing markers as the rear ruler?
+- **M-B — model bake-off.** Score candidates (incl. 6DRepNet360, runnable now) on M-A. *Numeric
+  gate (examples, to be fixed with the operator):* front (±30°) RMS **≤ incumbent + 1°** per
+  axis; ±90° yaw RMS **≤ ~8°**; rear (90–180°) RMS **≤ ~20°** vs the cube markers; **front/back
+  flip rate = 0** over N full CW+CCW sweeps; **p99 composed latency ≤ measured-headroom** (0a)
+  with audio running. (License is **not** a gate — D3.) **Pass → C1–C4. Miss the accuracy gate
+  → M-D (personalise/fine-tune), which D3 makes the expected primary path anyway.**
 - **M-C — integration (slices C1–C4).** Hybrid + fusion + wrap path live behind the flag; A/B
   on M-A. *Gate:* G2 (no front regression, numeric) **and** G1 (measured range extension + zero
   flips) on **live** latency → promote (C4), then C5 after soak.
-- **M-D — (planned, gated) train/personalise.** Synthetic + per-user; distil to an in-budget
-  ONNX net; **kill rule:** if after the capped budget the net still misses M-B's numeric gate,
-  stop and fall back to C0 + 0e + hybrid-front + (recommended) the IMU track. Return to M-C on
-  success.
+- **M-D — train/personalise (primary path, D3).** Per-user fine-tune on GT-1 cube labels
+  (+ synthetic backfill); distil to an in-budget ONNX net; **kill rule:** if after the capped
+  budget the net still misses M-B's numeric gate, fall back to C0 + 0e + hybrid-front. Return to
+  M-C on success.
 
 Spikes/proofs first: 0c (representation, half day) **before** 0d (model, 1 day) **before** any
 rig — the cheapest falsifications lead.
 
 ## Alternatives considered
 
-- **Head-mounted IMU (headphone-strapped), Smyth Realiser / Waves Nx style — promoted to a
-  recommended parallel track.** The headphones are **already on the head**, so the one cited
-  cost ("hardware on the head") is **already paid**. An IMU gives **camera-independent,
-  occlusion-proof, low-latency, full-circle** orientation with **no rear blind cone** — the
-  only listed path to *literal* 360°, which is what the operator asked for. Its cost is **yaw
-  drift**, which the **camera cancels every time the user faces the screen** (most of the
-  time), and a rear excursion lasts seconds where gyro drift is small. **Camera+IMU fusion** is
-  therefore strictly better than either alone: camera = absolute reference, IMU = rear cone +
-  lower latency (helps the ~1° MAA and G3). GT-2 already puts an IMU on the head for M-A, so the
-  hardware/time-sync work is shared. **Recommendation: pursue the vision hybrid as the
-  no-extra-hardware default *and* scope the IMU-fusion track in parallel; if the operator
-  values literal 360°, IMU-fusion is the surer route** (Open Q2).
-- **Multiple cameras (FR-13).** A second camera genuinely sees the rear, removing the blind
-  cone — but adds calibration, cost, and setup. Worth promoting **only if the IMU is refused**;
-  make it the explicit fallback with a trigger written into the M-C rear gate (Open Q4).
+- **Head-mounted IMU (headphone-strapped), Smyth Realiser / Waves Nx style — considered and
+  ruled out by the operator (D1).** An IMU would give camera-independent, occlusion-proof,
+  full-circle orientation with no rear blind cone (the only path to *literal* 360°), and
+  camera+IMU fusion would be strictly better than either alone. The operator has declined it for
+  now (no head hardware). Recorded as the natural escalation if, later, the single-camera rear
+  proves inadequate and literal full-circle is wanted.
+- **Multiple cameras (FR-13) — deferred (D4).** A second camera genuinely sees the rear,
+  removing the blind cone, at the cost of calibration and setup. Not committed now; it is the
+  escalation for true rear coverage if continuity-based single-camera tracking proves
+  insufficient.
 - **Keep face-only; just add VIDEO-mode temporal smoothing.** Cannot pass profile — but is
   **0e**, shipped first, and may remove most of the *in-range* pain cheaply. Orthogonal, not a
   range fix.
@@ -457,31 +485,37 @@ rig — the cheapest falsifications lead.
 - **Status quo (±45° cap).** The honest baseline; rejected — the operator wants full range and
   pre-approved the effort.
 
-## Open questions for the operator (load-bearing — these change the plan)
+## Operator decisions (resolved 2026-11-04 — formerly open questions)
 
-1. **Product or your personal rig?** This decides **G5**: a shipped product needs permissive
-   weights (likely forcing M-D/training); a personal rig can run a non-commercial model (e.g.
-   6DRepNet360) **locally this week**, and makes **per-user personalisation the main play**
-   rather than a non-shippable probe. **Most load-bearing question in the RFC.**
-2. **Head-mounted IMU: in scope?** If yes, camera+IMU fusion is likely the **fastest, surest**
-   route to literal, drift-bounded 360° (and the headphones already carry it). Pursue in
-   parallel with — or instead of — the harder rear-cone vision work?
-3. **Rear-hemisphere priority vs front:** given 0b may show the rear is rarely used, do you
-   want M-C to **ship at ±90° solid + graceful rear** (sooner), or **hold for full-circle**
-   (IMU/multi-cam)? Are you aware the **vision-only** deliverable is "±90° solid + honest rear
-   decay," not a literal circle?
-4. **Marker-cap recording:** OK to wear a printed-tag cap + a headband IMU for a few sessions,
-   so we can auto-label and cross-check? This is the single thing that most de-risks evaluation
-   and personalisation (and is needed for 0f).
-5. **Rear-cue / BRIR upgrade priority (from the consensus attack):** journal 17 says your
-   current 7-anchor BRIR set cannot render world-front content at head-relative 150–210°
-   (the back gap is "broken for every method"; your rears read front/back-ambiguous). So
-   literal world-locked 360° needs a **render-side** fix — re-measured/added rear BRIRs, an
-   HRTF/HRIR set that resolves your back, or a synthesised rear cue — **as well as** the
-   tracker. If **0g** confirms this, do you want the rear-cue workstream to **lead** (tracker
-   gated behind it), run **in parallel**, or do you accept "±90° solid, honest rear" and defer
-   literal 360° until the BRIR set is upgraded? This gates how much of the tracker programme is
-   worth starting now.
+All five open questions were resolved by the operator; the plan above reflects them.
+
+1. **Product vs personal rig → D3: personal rig.** Local-only, so the §9 license gate is
+   dropped: **6DRepNet360 (non-commercial) and research-licensed data may run locally now**, and
+   **per-user personalisation is the primary accuracy play** (M-D), not a non-shippable probe.
+2. **Head-mounted IMU → D1: out of scope.** Single-camera effort. IMU kept only as a recorded
+   future escalation (Alternatives).
+3. **Rear priority → D2 + D4: tracker-first, single-camera.** Make tracking accurate and
+   reliable first (judged on pose accuracy vs. ground truth); the vision-only deliverable is
+   **front/side hemisphere (±90°) solid + continuity-based rear**, with the pure-rear ±180°
+   ambiguity handled by trajectory continuity. Literal full-circle (second camera) is deferred.
+4. **Marker-cap recording → D5: yes.** The operator will wear a printed-marker **cube cap**
+   (ArUco DICT_4X4_50, 60 mm, IDs 0–5 on six faces; see *Ground truth* and the rig note). This
+   gives true angles across the full circle (rear markers face the camera when turned away) and
+   doubles as per-user fine-tuning labels. No IMU (D1).
+5. **Rear-cue / BRIR upgrade → D2: deferred.** Journal 17's back-gap is a real downstream
+   dependency for the *audio illusion*, but "one thing at a time": the tracker comes first and
+   is measured independently of render fidelity; the rear-cue/BRIR upgrade is the **next** effort
+   once the tracker is reliable. 0g is advisory, not a gate.
+
+### Rig note (procurement — for M-A)
+
+The ground-truth rig is a DIY marker cube on a plain cap (total ≈ €20, no IMU): a plain
+adjustable cap + printable **matte** A4 sticker sheets + a small rigid cube (≥65 mm/face) with
+one ArUco marker per face. Markers generated (DICT_4X4_50, 60 mm, IDs 0–5) and print-ready.
+**Print A4 at 100% ("actual size"), verify 60 mm with a ruler** (the physical side length sets
+the pose scale). Still-open minor items for M-A, decidable from measurements not opinion:
+the target machine's GPU/DirectML headroom (measured in 0a) and the exact numeric gate
+thresholds in M-B (fixed with the operator once the harness produces baseline numbers).
 
 ---
 
@@ -562,6 +596,9 @@ on the existing journal-15/17 harness), corrected the non-goal mislabel (world-f
 swung to head-relative rear ≠ world-rear content), and a sequencing rule that the rear-cue/
 BRIR upgrade **leads** if 0g fails. No further round triggered; the finding was already
 empirically established in-repo (journal 17), so no `design-experimenter` probe was needed.
+*(v3 update: the operator's decision D2 supersedes the "leads" sequencing — the rear-cue/BRIR
+work is **deferred** behind the tracker, and 0g is demoted to advisory. The co-bottleneck
+finding stands as documented context; only its priority changed.)*
 
 ## Empirical-validation note
 
