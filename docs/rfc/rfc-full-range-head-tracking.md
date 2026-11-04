@@ -256,6 +256,19 @@ usable ground truth. 0b (real-usage histogram) and 0g (render-fidelity) are **ad
 inform scope and the *next* (perception) effort but do not block the tracker. Otherwise the
 deliverable may be just C0 + 0e + the hybrid's front half, a legitimate cheaper outcome.
 
+> **Phase-0 measured results (2026-11-05 — journals 89, 90; done on the host):**
+> **0c PASS** — `rotation_to_azimuth` lands (full-circle, exact front-cone parity, monotonic through
+> the rear); the ±90° Euler cap is proven in a test (journal 89, merged).
+> **0a** — on the production **DirectML** path the current pipeline is **~11.4 ms p50 / 13.6 ms p95**
+> (BlazeFace 0.5 + FaceMesh 10.9); CPU ~23 ms (Rust 1–2-thread fallback ~100 ms). It already uses most
+> of the ~12–16 ms budget.
+> **0d** — a full-range **6DRepNet / RepVGG (224²)** regressor is **~4.3 ms p50** on DirectML — **~2.5×
+> cheaper than FaceMesh**. So the full-range net is a **replacement** for FaceMesh that *frees* ~6.5 ms,
+> and **G3 is satisfiable** — provided the regime runs **one net per frame** (landmark solve *or*
+> regressor, never both except briefly at the blend boundary). This is now a hard design rule for the
+> hybrid below. **0b** deferred (needs real sessions; webcam was busy — index 0 no frames, index 2 is
+> OBS virtual).
+
 ### The estimator: a hybrid, not a wholesale swap
 
 v1 replaced the landmark stack entirely, which puts G2 (front ~1° precision) at risk for a
