@@ -22,6 +22,11 @@ pub mod solve;
 #[cfg(feature = "inference")]
 pub mod pipeline;
 
+/// The full-range ONNX head-pose backend (BlazeFace + 6DRepNet360 → full-circle azimuth). Needs
+/// onnxruntime. The landmark-free alternative to `pipeline` for extended-range tracking.
+#[cfg(feature = "inference")]
+pub mod headpose360;
+
 /// Protocol major version. Bump only on a breaking change; additive fields do not bump it.
 pub const PROTOCOL_VERSION: u32 = 1;
 

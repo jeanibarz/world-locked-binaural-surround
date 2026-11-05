@@ -27,3 +27,8 @@ image = { version = "0.25.5", default-features = false, features = ["jpeg", "png
 name = "pose_dump"
 path = "src/bin/pose_dump.rs"
 required-features = ["inference"]
+
+[[bin]]
+name = "pose360_dump"
+path = "src/bin/pose360_dump.rs"
+required-features = ["inference"]
