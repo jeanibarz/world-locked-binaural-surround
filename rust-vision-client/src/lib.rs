@@ -27,6 +27,11 @@ pub mod pipeline;
 #[cfg(feature = "inference")]
 pub mod headpose360;
 
+/// The CrowdHuman head detector (YOLOv11), a rear-robust fallback for `headpose360` when BlazeFace is
+/// blind to the back of the head. Needs onnxruntime.
+#[cfg(feature = "inference")]
+pub mod headdet;
+
 /// Protocol major version. Bump only on a breaking change; additive fields do not bump it.
 pub const PROTOCOL_VERSION: u32 = 1;
 
