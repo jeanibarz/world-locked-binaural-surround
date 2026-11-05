@@ -32,6 +32,57 @@ const NET: usize = 224;
 /// against the live camera.
 const DEFAULT_CROP_SCALE: f32 = 1.4;
 
+/// Default detect-and-track budget: how many consecutive detector misses we bridge by re-using the
+/// last accepted face box before giving up. A *face* detector loses the face through the deep rear
+/// even though 6DRepNet360 still reads a valid angle from a held crop, so holding the last box keeps
+/// the azimuth tracking through a turn instead of freezing (journal 93). Bounded, so a stale box is
+/// never trusted indefinitely (the "dwell facing away" edge case). Tunable live via
+/// `WLBS_POSE360_TRACK_MISSES` (`0` disables tracking — the pre-C2 behaviour).
+const DEFAULT_TRACK_MISSES: u32 = 15;
+
+/// Bridges short detector blind spots by re-using the last accepted face box. A *face* detector can't
+/// box the back of a head, so near the rear it returns nothing even while the pose net would still
+/// read a valid angle from a crop at the same place — holding the last box keeps the estimate alive
+/// across that gap, bounded so we never trust a stale box for long. Pure (no ONNX / image state), so
+/// the state machine is unit-tested natively. A crop is `(cx, cy, side)` in image pixels.
+pub struct BoxTracker {
+    last: Option<(f32, f32, f32)>,
+    misses: u32,
+    max_misses: u32,
+}
+
+impl BoxTracker {
+    pub fn new(max_misses: u32) -> Self {
+        Self { last: None, misses: 0, max_misses }
+    }
+
+    /// Feed this frame's detector result: `Some(crop)` when the detector fired, `None` on a miss.
+    /// Returns the crop to run the pose net on plus whether it is a *tracked* (held) box, or `None`
+    /// to skip the frame — either nothing has been detected yet, or the miss budget is spent (in
+    /// which case a fresh detection is required before tracking resumes).
+    pub fn update(&mut self, detected: Option<(f32, f32, f32)>) -> Option<(f32, f32, f32, bool)> {
+        match detected {
+            Some(c) => {
+                self.last = Some(c);
+                self.misses = 0;
+                Some((c.0, c.1, c.2, false))
+            }
+            None => {
+                if let Some(c) = self.last {
+                    if self.misses < self.max_misses {
+                        self.misses += 1;
+                        return Some((c.0, c.1, c.2, true));
+                    }
+                    // Budget spent → stop trusting the stale box; require a fresh detection.
+                    self.last = None;
+                    self.misses = 0;
+                }
+                None
+            }
+        }
+    }
+}
+
 /// One full-range head-pose estimate.
 pub struct Estimate360 {
     /// Full-circle head azimuth (deg, wrapped (-180,180]) — the forward-axis azimuth of the predicted
@@ -40,8 +91,12 @@ pub struct Estimate360 {
     /// Pitch / roll (deg) for telemetry (the world-lock is yaw/azimuth-driven).
     pub pitch: f64,
     pub roll: f64,
-    /// Detector confidence of the chosen face.
+    /// Detector confidence of the chosen face (carried over from the last real detection on a
+    /// tracked frame).
     pub score: f32,
+    /// `true` when this estimate came from a *held* box (the detector missed and the tracker bridged
+    /// it) rather than a fresh detection this frame.
+    pub tracked: bool,
 }
 
 /// The loaded full-range pipeline: BlazeFace detector + the 6DRepNet360 ResNet-50 pose net.
@@ -50,6 +105,9 @@ pub struct Pose360Pipeline {
     pose: Session,
     anchors: Vec<Anchor>,
     crop_scale: f32,
+    tracker: BoxTracker,
+    /// The score of the most recent real detection, reported on tracked (held-box) frames too.
+    last_score: f32,
 }
 
 impl Pose360Pipeline {
@@ -73,7 +131,26 @@ impl Pose360Pipeline {
             .and_then(|s| s.parse::<f32>().ok())
             .filter(|v| *v > 0.5 && *v < 4.0)
             .unwrap_or(DEFAULT_CROP_SCALE);
-        Ok(Self { detector, pose, anchors: short_range_anchors(), crop_scale })
+        let track_misses = std::env::var("WLBS_POSE360_TRACK_MISSES")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .filter(|v| *v <= 240)
+            .unwrap_or(DEFAULT_TRACK_MISSES);
+        Ok(Self {
+            detector,
+            pose,
+            anchors: short_range_anchors(),
+            crop_scale,
+            tracker: BoxTracker::new(track_misses),
+            last_score: 0.0,
+        })
+    }
+
+    /// Set the detect-and-track miss budget after construction (`0` disables tracking). Used by the
+    /// offline `pose360_dump` parity tool, which runs over *independent* images (no video
+    /// continuity) and so must never re-use a previous image's box.
+    pub fn set_track_misses(&mut self, n: u32) {
+        self.tracker = BoxTracker::new(n);
     }
 
     /// Run the full-range pipeline on one image. `Ok(None)` when the detector finds no face.
@@ -85,25 +162,32 @@ impl Pose360Pipeline {
         let regressors = named_f32(&det_out, "regressors")?;
         let scores = named_f32(&det_out, "classificators")?;
         let dets = detections(regressors, scores, &self.anchors)?;
-        let Some(best) = dets.into_iter().next() else {
-            return Ok(None); // weighted_nms keeps the global max first
-        };
-        let score = best.score;
 
-        // Axis-aligned square crop around the detection box centre (6DRepNet wants a loose, upright
-        // crop — it regresses roll itself, so unlike FaceMesh's ROI we do NOT eye-rotate).
-        let (x0, y0) = lb.to_image_px(best.xmin, best.ymin);
-        let (x1, y1) = lb.to_image_px(best.xmax, best.ymax);
-        let cx = (x0 + x1) / 2.0;
-        let cy = (y0 + y1) / 2.0;
-        let side = (x1 - x0).max(y1 - y0) * self.crop_scale;
+        // The detector gives a face box when the face is visible; through the deep rear it finds
+        // nothing even though the pose net still reads a valid angle from a held crop. Build this
+        // frame's crop from the best detection (an axis-aligned square around the box centre —
+        // 6DRepNet wants a loose, upright crop, so unlike FaceMesh's ROI we do NOT eye-rotate) and
+        // feed it to the tracker, which bridges short misses by re-using the last box (journal 93).
+        // `weighted_nms` keeps the global max first.
+        let detected = dets.into_iter().next().map(|best| {
+            self.last_score = best.score;
+            let (x0, y0) = lb.to_image_px(best.xmin, best.ymin);
+            let (x1, y1) = lb.to_image_px(best.xmax, best.ymax);
+            let cx = (x0 + x1) / 2.0;
+            let cy = (y0 + y1) / 2.0;
+            let side = (x1 - x0).max(y1 - y0) * self.crop_scale;
+            (cx, cy, side)
+        });
+        let Some((cx, cy, side, tracked)) = self.tracker.update(detected) else {
+            return Ok(None); // nothing detected yet, or the track budget is spent
+        };
 
         let crop = preprocess_224_nchw(img, cx, cy, side);
         let pose_in = Tensor::from_array(([1_i64, 3, NET as i64, NET as i64], crop)).map_err(ort_err)?;
         let pose_out = self.pose.run(ort::inputs! { "input" => pose_in }).map_err(ort_err)?;
         let r = named_f32(&pose_out, "R")?;
         let (azimuth, pitch, roll) = pose_from_matrix(r)?;
-        Ok(Some(Estimate360 { azimuth, pitch, roll, score }))
+        Ok(Some(Estimate360 { azimuth, pitch, roll, score: self.last_score, tracked }))
     }
 }
 
@@ -202,6 +286,48 @@ mod tests {
         let id = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
         let (az, pitch, roll) = pose_from_matrix(&id).unwrap();
         assert!(az.abs() < 1e-6 && pitch.abs() < 1e-6 && roll.abs() < 1e-6);
+    }
+
+    #[test]
+    fn tracker_passes_detections_through_untracked() {
+        let mut t = BoxTracker::new(3);
+        assert_eq!(t.update(Some((10.0, 20.0, 30.0))), Some((10.0, 20.0, 30.0, false)));
+    }
+
+    #[test]
+    fn tracker_holds_last_box_through_bounded_misses_then_gives_up() {
+        let mut t = BoxTracker::new(2);
+        t.update(Some((5.0, 6.0, 7.0))); // seed
+        // Two misses re-use the held box, flagged tracked…
+        assert_eq!(t.update(None), Some((5.0, 6.0, 7.0, true)));
+        assert_eq!(t.update(None), Some((5.0, 6.0, 7.0, true)));
+        // …then the budget is spent and it gives up, and stays given-up.
+        assert_eq!(t.update(None), None);
+        assert_eq!(t.update(None), None);
+    }
+
+    #[test]
+    fn tracker_reacquires_and_resets_budget() {
+        let mut t = BoxTracker::new(1);
+        t.update(Some((1.0, 1.0, 1.0)));
+        assert_eq!(t.update(None), Some((1.0, 1.0, 1.0, true))); // 1 miss bridged
+        assert_eq!(t.update(None), None); // budget spent
+        // A fresh detection re-seeds (untracked) and the budget is available again.
+        assert_eq!(t.update(Some((2.0, 2.0, 2.0))), Some((2.0, 2.0, 2.0, false)));
+        assert_eq!(t.update(None), Some((2.0, 2.0, 2.0, true)));
+    }
+
+    #[test]
+    fn tracker_zero_budget_disables_tracking() {
+        let mut t = BoxTracker::new(0);
+        t.update(Some((9.0, 9.0, 9.0)));
+        assert_eq!(t.update(None), None); // 0 budget → never holds (pre-C2 behaviour)
+    }
+
+    #[test]
+    fn tracker_miss_before_any_detection_is_none() {
+        let mut t = BoxTracker::new(5);
+        assert_eq!(t.update(None), None);
     }
 
     #[test]
