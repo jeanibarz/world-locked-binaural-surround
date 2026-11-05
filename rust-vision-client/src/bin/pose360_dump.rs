@@ -17,6 +17,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let onnx_dir = arg(&args, "--onnx-dir").expect("--onnx-dir required");
     let images = arg(&args, "--images").expect("--images <dir> required");
     let mut pipe = Pose360Pipeline::new(&onnx_dir)?;
+    // These images are independent (a parity bag, not a video), so detect-and-track must be OFF —
+    // a miss must stay a miss, never re-use the previous image's box.
+    pipe.set_track_misses(0);
 
     let mut paths: Vec<_> = std::fs::read_dir(&images)?
         .filter_map(|e| e.ok().map(|e| e.path()))

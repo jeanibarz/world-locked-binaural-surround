@@ -41,6 +41,10 @@ struct CommonEstimate {
     landmarks: Vec<[f64; 3]>,
     #[allow(dead_code)]
     score: f32,
+    /// `true` when the full-range backend produced this from a *held* box (detector missed; the
+    /// tracker bridged it), so the status log can show how often we track vs detect. Always `false`
+    /// for the FaceMesh backend.
+    tracked: bool,
 }
 
 impl PoseBackend {
@@ -67,6 +71,7 @@ impl PoseBackend {
                 roll: e.pose.2,
                 landmarks: e.landmarks,
                 score: e.score,
+                tracked: false,
             })),
             PoseBackend::Full(p) => Ok(p.estimate(img)?.map(|e| CommonEstimate {
                 yaw: e.azimuth,
@@ -74,7 +79,16 @@ impl PoseBackend {
                 roll: e.roll,
                 landmarks: Vec::new(),
                 score: e.score,
+                tracked: e.tracked,
             })),
+        }
+    }
+
+    /// Drop any detect-and-track state (full-range backend only) — called on a camera reopen so a
+    /// held box from the previous device/resolution is never coasted on. No-op for FaceMesh.
+    fn reset_tracker(&mut self) {
+        if let PoseBackend::Full(p) = self {
+            p.reset_tracker();
         }
     }
 }
@@ -441,6 +455,7 @@ pub fn spawn_camera_pose(
         let mut flip_buf: Vec<u8> = Vec::new();
         let mut last_preview = std::time::Instant::now() - std::time::Duration::from_secs(1);
         let (mut ok, mut miss, mut decode_fail, mut est_err, mut n) = (0u64, 0u64, 0u64, 0u64, 0usize);
+        let mut tracked_n = 0u64; // of `ok`, how many came from a held box (detect-and-track bridging)
         let (mut consec_est_err, mut est_err_flagged) = (0u32, false);
         // EMA of wall-clock inference time per solved frame (ms) — surfaced in the VISION log so the
         // execution provider is obvious at a glance: ~10-20 ms = DirectML GPU, ~100 ms+ = CPU
@@ -509,6 +524,8 @@ pub fn spawn_camera_pose(
             pose.set_cam_res(cam_w, cam_h);
             pose.clear_cam_error();
             println!("POSE camera id={id} {cam_w}x{cam_h}");
+            // Fresh device/resolution → forget any held detect-and-track box from the old one.
+            pipe.reset_tracker();
 
             let mut consec_frame_err = 0u32;
             let mut last_frame_at = std::time::Instant::now();
@@ -610,6 +627,9 @@ pub fn spawn_camera_pose(
                             continue;
                         }
                         ok += 1;
+                        if est.tracked {
+                            tracked_n += 1;
+                        }
                         // Capture the FaceMesh overlay for the cockpit preview (#185). The landmarks
                         // are in the un-mirrored frame's normalized space — the same frame as the
                         // JPEG pushed below — so the overlay aligns with the preview to the pixel.
@@ -655,7 +675,7 @@ pub fn spawn_camera_pose(
                     }
                 }
                 if (ok + miss + est_err).is_multiple_of(30) {
-                    eprintln!("VISION ok={ok} miss={miss} est_err={est_err} decode_fail={decode_fail} infer_ms={infer_ema_ms:.0} yaw={:.1}", *pose.yaw.lock().unwrap());
+                    eprintln!("VISION ok={ok} miss={miss} track={tracked_n} est_err={est_err} decode_fail={decode_fail} infer_ms={infer_ema_ms:.0} yaw={:.1}", *pose.yaw.lock().unwrap());
                 }
             }
             worker.retire(); // release the device before reopen / exit (BUG-30)
