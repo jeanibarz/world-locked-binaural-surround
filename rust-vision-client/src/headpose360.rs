@@ -17,6 +17,7 @@ use ort::value::Tensor;
 
 use crate::anchors::{short_range_anchors, Anchor};
 use crate::detector::detections;
+use crate::headdet::HeadDetector;
 use crate::image_util::{letterbox_128, RgbImage};
 use crate::pipeline::{configure_providers, named_f32, onnx_intra_threads};
 use crate::solve::rotation_to_azimuth;
@@ -115,6 +116,12 @@ pub struct Pose360Pipeline {
     tracker: BoxTracker,
     /// The score of the most recent real detection, reported on tracked (held-box) frames too.
     last_score: f32,
+    /// Rear-robust head detector, run only when BlazeFace misses (journal 95). `None` unless
+    /// `WLBS_POSE360_HEAD` enables it, so the default path neither loads nor needs the asset.
+    head: Option<HeadDetector>,
+    /// Count of head-detector runtime errors, for rate-limited logging (a failing head net degrades
+    /// to the tracker's coast rather than dropping the frame).
+    head_errs: u64,
 }
 
 impl Pose360Pipeline {
@@ -143,6 +150,13 @@ impl Pose360Pipeline {
             .and_then(|s| s.parse::<u32>().ok())
             .filter(|v| *v <= 240)
             .unwrap_or(DEFAULT_TRACK_MISSES);
+        let head = match std::env::var("WLBS_POSE360_HEAD").ok().as_deref() {
+            Some("1") | Some("on") | Some("true") | Some("yes") => {
+                eprintln!("VISION head-detector fallback: ON [WLBS_POSE360_HEAD]");
+                Some(HeadDetector::new(onnx_dir)?)
+            }
+            _ => None,
+        };
         Ok(Self {
             detector,
             pose,
@@ -150,6 +164,8 @@ impl Pose360Pipeline {
             crop_scale,
             tracker: BoxTracker::new(track_misses),
             last_score: 0.0,
+            head,
+            head_errs: 0,
         })
     }
 
@@ -182,7 +198,7 @@ impl Pose360Pipeline {
         // 6DRepNet wants a loose, upright crop, so unlike FaceMesh's ROI we do NOT eye-rotate) and
         // feed it to the tracker, which bridges short misses by re-using the last box (journal 93).
         // `weighted_nms` keeps the global max first.
-        let detected = dets.into_iter().next().map(|best| {
+        let mut detected = dets.into_iter().next().map(|best| {
             self.last_score = best.score;
             let (x0, y0) = lb.to_image_px(best.xmin, best.ymin);
             let (x1, y1) = lb.to_image_px(best.xmax, best.ymax);
@@ -191,6 +207,34 @@ impl Pose360Pipeline {
             let side = (x1 - x0).max(y1 - y0) * self.crop_scale;
             (cx, cy, side)
         });
+        // Head-detector fallback (journal 95): BlazeFace is a face detector and is blind to the back
+        // of the head, so when it misses, run the rear-robust head net to recover a real box through
+        // the deep rear — paying its cost only on a miss (~the rear frames), not every frame. The
+        // tracker then bridges only the rare frame where BOTH miss.
+        if detected.is_none() {
+            // The head-net borrow ends with this call, before we touch other `self` fields below.
+            let found = if let Some(head) = self.head.as_mut() {
+                head.detect(img)
+            } else {
+                Ok(None)
+            };
+            match found {
+                Ok(Some((cx, cy, raw_side, score))) => {
+                    self.last_score = score;
+                    detected = Some((cx, cy, raw_side * self.crop_scale));
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    // A head-net error must not drop the frame worse than the no-head baseline:
+                    // leave `detected` None so the tracker coasts the held box, and surface the
+                    // error rate-limited rather than on every frame.
+                    self.head_errs += 1;
+                    if self.head_errs == 1 || self.head_errs.is_multiple_of(60) {
+                        eprintln!("VISION head-detector error (total {}): {e}", self.head_errs);
+                    }
+                }
+            }
+        }
         let Some((cx, cy, side, tracked)) = self.tracker.update(detected) else {
             return Ok(None); // nothing detected yet, or the track budget is spent
         };
