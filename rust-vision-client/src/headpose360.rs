@@ -81,6 +81,13 @@ impl BoxTracker {
             }
         }
     }
+
+    /// Forget the held box (e.g. on a camera reopen / resolution change) so a stale box from the
+    /// previous device is never re-used. The miss budget (`max_misses`) is preserved.
+    pub fn reset(&mut self) {
+        self.last = None;
+        self.misses = 0;
+    }
 }
 
 /// One full-range head-pose estimate.
@@ -151,6 +158,12 @@ impl Pose360Pipeline {
     /// continuity) and so must never re-use a previous image's box.
     pub fn set_track_misses(&mut self, n: u32) {
         self.tracker = BoxTracker::new(n);
+    }
+
+    /// Drop any held tracking box — called on a camera reopen so the next frame must re-detect
+    /// rather than coast on a box from the previous device / resolution.
+    pub fn reset_tracker(&mut self) {
+        self.tracker.reset();
     }
 
     /// Run the full-range pipeline on one image. `Ok(None)` when the detector finds no face.
@@ -328,6 +341,17 @@ mod tests {
     fn tracker_miss_before_any_detection_is_none() {
         let mut t = BoxTracker::new(5);
         assert_eq!(t.update(None), None);
+    }
+
+    #[test]
+    fn tracker_reset_forgets_held_box_but_keeps_budget() {
+        let mut t = BoxTracker::new(5);
+        t.update(Some((3.0, 3.0, 3.0)));
+        t.reset();
+        assert_eq!(t.update(None), None); // nothing held → a miss has nothing to coast on
+        // budget is intact: a fresh detection then holds normally
+        assert_eq!(t.update(Some((4.0, 4.0, 4.0))), Some((4.0, 4.0, 4.0, false)));
+        assert_eq!(t.update(None), Some((4.0, 4.0, 4.0, true)));
     }
 
     #[test]

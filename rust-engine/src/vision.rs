@@ -83,6 +83,14 @@ impl PoseBackend {
             })),
         }
     }
+
+    /// Drop any detect-and-track state (full-range backend only) — called on a camera reopen so a
+    /// held box from the previous device/resolution is never coasted on. No-op for FaceMesh.
+    fn reset_tracker(&mut self) {
+        if let PoseBackend::Full(p) = self {
+            p.reset_tracker();
+        }
+    }
 }
 
 use crate::geometry::{pack_landmarks, LandmarkFrame};
@@ -516,6 +524,8 @@ pub fn spawn_camera_pose(
             pose.set_cam_res(cam_w, cam_h);
             pose.clear_cam_error();
             println!("POSE camera id={id} {cam_w}x{cam_h}");
+            // Fresh device/resolution → forget any held detect-and-track box from the old one.
+            pipe.reset_tracker();
 
             let mut consec_frame_err = 0u32;
             let mut last_frame_at = std::time::Instant::now();
