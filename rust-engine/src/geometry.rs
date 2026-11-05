@@ -75,7 +75,12 @@ pub fn head_relative_azimuths_5p1(yaw_deg: f64, yaw_sign: f64) -> [f64; 6] {
 /// direction.
 pub fn published_yaw(raw_yaw: f64, neutral_raw: f64, invert: bool) -> f64 {
     let sign = if invert { -1.0 } else { 1.0 };
-    sign * (raw_yaw - neutral_raw)
+    // Wrap to (-180, 180] so a full-circle raw yaw minus a neutral never publishes an out-of-range
+    // angle (e.g. raw 170 − neutral −20 = 190 → −170). This is a NO-OP for the current ±45°
+    // operating range (|offset| ≤ 180 wraps to itself), and is the representation prerequisite for
+    // the full-range estimator (RFC slice C0): once the pose source is a full-circle azimuth, the
+    // published yaw stays a single-valued angle instead of folding or running past ±180°.
+    wrap_deg(sign * (raw_yaw - neutral_raw))
 }
 
 /// New raw neutral when re-centring so the current heading reads 0°, preserving the direction sign.
@@ -83,7 +88,11 @@ pub fn published_yaw(raw_yaw: f64, neutral_raw: f64, invert: bool) -> f64 {
 /// `raw_cur = neutral + yaw / sign`, and for `sign ∈ {±1}`, `1/sign == sign`.
 pub fn recenter_neutral(neutral_raw: f64, cur_yaw: f64, invert: bool) -> f64 {
     let sign = if invert { -1.0 } else { 1.0 };
-    neutral_raw + cur_yaw * sign
+    // Wrap so the new neutral stays a single-valued raw azimuth in (-180, 180] even when re-centring
+    // past the ±180° seam (full-circle source). The re-centre invariant still holds — because
+    // `published_yaw` also wraps, a 360° offset in the stored neutral cancels: see
+    // `recenter_zeroes_across_the_wrap`. NO-OP in the current ±45° range.
+    wrap_deg(neutral_raw + cur_yaw * sign)
 }
 
 /// A captured FaceMesh overlay for the cockpit camera preview (#185). Coordinates are per-mille
@@ -234,6 +243,59 @@ mod tests {
     // yaw_sign = +1) depend on the SAME published yaw with the SAME sign, so they always agree in
     // direction — the core of the #189 fix. Head-left (published +Y): the centre speaker swings to
     // the head's right (negative azimuth) and the radar cone rotates by -Y to match.
+    // --- RFC slice C0: full-circle, wrap-safe published yaw (no-op in range) ---
+
+    // Inside the current ±45° operating range, wrapping changes nothing — the published yaw is
+    // bit-identical to the old `sign*(raw-neutral)`. This is the "C0 ships as a no-op" guarantee.
+    #[test]
+    fn published_yaw_is_unchanged_in_operating_range() {
+        for (raw, neutral) in [(110.0, 100.0), (60.0, 100.0), (137.0, 100.0), (0.0, 0.0), (45.0, 0.0)]
+        {
+            for invert in [false, true] {
+                let sign = if invert { -1.0 } else { 1.0 };
+                // |offset| ≤ 180 here, so wrap is the identity and matches the pre-C0 formula.
+                assert_eq!(published_yaw(raw, neutral, invert), sign * (raw - neutral));
+            }
+        }
+    }
+
+    // Past the seam, a full-circle raw azimuth minus a neutral wraps to a single-valued angle
+    // instead of running past ±180°: the behaviour the full-range estimator needs. raw +170,
+    // neutral −20 → offset 190 → published −170 (the head is 10° past straight-back, not 190°).
+    #[test]
+    fn published_yaw_wraps_full_circle() {
+        assert!((published_yaw(170.0, -20.0, false) - (-170.0)).abs() < 1e-9);
+        assert!((published_yaw(-170.0, 20.0, false) - 170.0).abs() < 1e-9);
+        // and the audio azimuth is identical whether the published yaw is wrapped or not, because
+        // head_relative_azimuths wraps again — this is why C0 is safe to land before the estimator.
+        let wrapped = published_yaw(170.0, -20.0, false); // -170
+        let unwrapped = 190.0;
+        for ch in CHANNELS_7P1 {
+            let a = wrap_deg(speaker_azimuth(ch) - wrapped);
+            let b = wrap_deg(speaker_azimuth(ch) - unwrapped);
+            assert!((a - b).abs() < 1e-9, "azimuth for {ch} differs across wrap");
+        }
+    }
+
+    // The re-centre invariant survives the wrap: re-centring at any heading (including past ±90°)
+    // makes the current heading read 0, and because published_yaw also wraps, the stored-neutral
+    // 360° ambiguity cancels.
+    #[test]
+    fn recenter_zeroes_across_the_wrap() {
+        for invert in [false, true] {
+            for (neutral0, raw_now) in [(0.0, 140.0), (-20.0, 170.0), (100.0, -160.0), (175.0, -175.0)]
+            {
+                let y = published_yaw(raw_now, neutral0, invert);
+                let neutral1 = recenter_neutral(neutral0, y, invert);
+                assert!(neutral1 > -180.0 && neutral1 <= 180.0, "neutral stays in range");
+                assert!(
+                    published_yaw(raw_now, neutral1, invert).abs() < 1e-9,
+                    "re-centred heading must read 0 (neutral0={neutral0}, raw={raw_now}, invert={invert})"
+                );
+            }
+        }
+    }
+
     #[test]
     fn radar_and_audio_agree_in_direction() {
         let yaw = published_yaw(110.0, 100.0, false); // head left (un-mirrored feed) -> +10
