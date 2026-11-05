@@ -119,6 +119,9 @@ pub struct Pose360Pipeline {
     /// Rear-robust head detector, run only when BlazeFace misses (journal 95). `None` unless
     /// `WLBS_POSE360_HEAD` enables it, so the default path neither loads nor needs the asset.
     head: Option<HeadDetector>,
+    /// Count of head-detector runtime errors, for rate-limited logging (a failing head net degrades
+    /// to the tracker's coast rather than dropping the frame).
+    head_errs: u64,
 }
 
 impl Pose360Pipeline {
@@ -162,6 +165,7 @@ impl Pose360Pipeline {
             tracker: BoxTracker::new(track_misses),
             last_score: 0.0,
             head,
+            head_errs: 0,
         })
     }
 
@@ -208,13 +212,27 @@ impl Pose360Pipeline {
         // the deep rear — paying its cost only on a miss (~the rear frames), not every frame. The
         // tracker then bridges only the rare frame where BOTH miss.
         if detected.is_none() {
-            let found = match self.head.as_mut() {
-                Some(head) => head.detect(img)?,
-                None => None,
+            // The head-net borrow ends with this call, before we touch other `self` fields below.
+            let found = if let Some(head) = self.head.as_mut() {
+                head.detect(img)
+            } else {
+                Ok(None)
             };
-            if let Some((cx, cy, raw_side, score)) = found {
-                self.last_score = score;
-                detected = Some((cx, cy, raw_side * self.crop_scale));
+            match found {
+                Ok(Some((cx, cy, raw_side, score))) => {
+                    self.last_score = score;
+                    detected = Some((cx, cy, raw_side * self.crop_scale));
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    // A head-net error must not drop the frame worse than the no-head baseline:
+                    // leave `detected` None so the tracker coasts the held box, and surface the
+                    // error rate-limited rather than on every frame.
+                    self.head_errs += 1;
+                    if self.head_errs == 1 || self.head_errs.is_multiple_of(60) {
+                        eprintln!("VISION head-detector error (total {}): {e}", self.head_errs);
+                    }
+                }
             }
         }
         let Some((cx, cy, side, tracked)) = self.tracker.update(detected) else {
