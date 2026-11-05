@@ -136,7 +136,7 @@ fn ort_err(e: ort::Error) -> String {
 
 /// Look up the named f32 output tensor's data, returning a descriptive `Err` (not a panic) if the
 /// model has no such output or it isn't an f32 tensor.
-fn named_f32<'a>(
+pub(crate) fn named_f32<'a>(
     outputs: &'a ort::session::SessionOutputs<'_>,
     name: &str,
 ) -> Result<&'a [f32], String> {
@@ -176,7 +176,7 @@ fn face_present(presence_logit: f32) -> bool {
 
 /// Number of ONNX intra-op threads: a small cap so the two nets don't grab every core and starve
 /// the real-time audio render thread (BUG-12). ~1/4 of the machine's cores, clamped to 1..=2.
-fn onnx_intra_threads() -> usize {
+pub(crate) fn onnx_intra_threads() -> usize {
     (std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4) / 4).clamp(1, 2)
 }
 
@@ -191,7 +191,7 @@ fn onnx_intra_threads() -> usize {
 /// usable DX12 GPU it logs and keeps the CPU path — never failing session creation. DirectML needs
 /// the ORT memory planner disabled, which we do here. Without the feature this is a no-op (the
 /// `DirectMLExecutionProvider` type isn't even linked), so non-Windows / CPU builds are unchanged.
-fn configure_providers(builder: ort::session::builder::SessionBuilder) -> ort::Result<ort::session::builder::SessionBuilder> {
+pub(crate) fn configure_providers(builder: ort::session::builder::SessionBuilder) -> ort::Result<ort::session::builder::SessionBuilder> {
     #[cfg(feature = "gpu-directml")]
     {
         use ort::execution_providers::directml::DirectMLExecutionProvider;

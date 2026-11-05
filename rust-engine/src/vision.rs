@@ -18,8 +18,66 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use control_plane::Cockpit;
+use vision_client::headpose360::Pose360Pipeline;
 use vision_client::image_util::RgbImage;
 use vision_client::pipeline::{decode_image, Pipeline};
+
+/// The selected head-pose backend: the FaceMesh+Kabsch landmark solve (default), or the full-range
+/// 6DRepNet360 azimuth regressor (`WLBS_POSE_BACKEND=360`). Both open once and expose the same
+/// `estimate` → [`CommonEstimate`], so the capture loop is backend-agnostic (RFC estimator slice).
+enum PoseBackend {
+    Mesh(Pipeline),
+    Full(Pose360Pipeline),
+}
+
+/// A backend-agnostic pose sample. `yaw` is the raw head yaw/azimuth the engine publishes;
+/// `landmarks` is empty for the full-range backend (no FaceMesh overlay).
+struct CommonEstimate {
+    yaw: f64,
+    #[allow(dead_code)]
+    pitch: f64,
+    #[allow(dead_code)]
+    roll: f64,
+    landmarks: Vec<[f64; 3]>,
+    #[allow(dead_code)]
+    score: f32,
+}
+
+impl PoseBackend {
+    /// Select the backend from `WLBS_POSE_BACKEND` ("360" = full-range; anything else / unset =
+    /// FaceMesh). The full-range backend ignores `canonical` (it is landmark-free) and needs
+    /// `sixdrepnet360.onnx` in `onnx_dir`; a missing asset is a clean `Err`, surfaced like any other.
+    fn new(onnx_dir: &str, canonical: &str) -> Result<Self, String> {
+        let full = std::env::var("WLBS_POSE_BACKEND")
+            .map(|v| v.trim().eq_ignore_ascii_case("360"))
+            .unwrap_or(false);
+        if full {
+            eprintln!("VISION backend: 6DRepNet360 (full-range) [WLBS_POSE_BACKEND=360]");
+            Ok(PoseBackend::Full(Pose360Pipeline::new(onnx_dir)?))
+        } else {
+            Ok(PoseBackend::Mesh(Pipeline::new(onnx_dir, canonical)?))
+        }
+    }
+
+    fn estimate(&mut self, img: &RgbImage) -> Result<Option<CommonEstimate>, String> {
+        match self {
+            PoseBackend::Mesh(p) => Ok(p.estimate(img)?.map(|e| CommonEstimate {
+                yaw: e.pose.0,
+                pitch: e.pose.1,
+                roll: e.pose.2,
+                landmarks: e.landmarks,
+                score: e.score,
+            })),
+            PoseBackend::Full(p) => Ok(p.estimate(img)?.map(|e| CommonEstimate {
+                yaw: e.azimuth,
+                pitch: e.pitch,
+                roll: e.roll,
+                landmarks: Vec::new(),
+                score: e.score,
+            })),
+        }
+    }
+}
 
 use crate::geometry::{pack_landmarks, LandmarkFrame};
 
@@ -366,7 +424,7 @@ pub fn spawn_camera_pose(
     std::thread::spawn(move || {
         // The pipeline (ONNX nets + canonical model) opens once; a bad asset is a clean error, not a
         // panic (BUG-11), surfaced to the cockpit as "camera unavailable" (BUG-10).
-        let mut pipe = match Pipeline::new(&onnx_dir, &canonical) {
+        let mut pipe = match PoseBackend::new(&onnx_dir, &canonical) {
             Ok(p) => p,
             Err(e) => {
                 pose.set_cam_error(format!("pipeline: {e}"));
@@ -547,7 +605,7 @@ pub fn spawn_camera_pose(
                         }
                         // The flips changed during inference → this pose is in the old orientation;
                         // publishing it would make it the new neutral. Drop it (and its overlay).
-                        if !pose.update_raw_if_gen(est.pose.0, flip_gen) {
+                        if !pose.update_raw_if_gen(est.yaw, flip_gen) {
                             pose.set_landmarks(None);
                             continue;
                         }
@@ -793,7 +851,7 @@ pub fn spawn_mjpeg_pose(
     running: Arc<AtomicBool>,
 ) {
     std::thread::spawn(move || {
-        let mut pipe = match Pipeline::new(&onnx_dir, &canonical) {
+        let mut pipe = match PoseBackend::new(&onnx_dir, &canonical) {
             Ok(p) => p,
             Err(e) => {
                 pose.set_cam_error(format!("pipeline: {e}"));
@@ -830,7 +888,7 @@ pub fn spawn_mjpeg_pose(
                         match pipe.estimate(&img) {
                             Ok(Some(est)) => {
                                 ok += 1;
-                                pose.update_raw(est.pose.0);
+                                pose.update_raw(est.yaw);
                             }
                             _ => miss += 1,
                         }
@@ -853,7 +911,7 @@ pub fn spawn_image_pose(
     running: Arc<AtomicBool>,
 ) {
     std::thread::spawn(move || {
-        let mut pipe = match Pipeline::new(&onnx_dir, &canonical) {
+        let mut pipe = match PoseBackend::new(&onnx_dir, &canonical) {
             Ok(p) => p,
             Err(e) => {
                 pose.set_cam_error(format!("pipeline: {e}"));
@@ -877,8 +935,8 @@ pub fn spawn_image_pose(
         };
         while running.load(Ordering::Relaxed) {
             if let Ok(Some(est)) = pipe.estimate(&img) {
-                pose.update_raw(est.pose.0);
-                eprintln!("VISION image yaw={:.2}", est.pose.0);
+                pose.update_raw(est.yaw);
+                eprintln!("VISION image yaw={:.2}", est.yaw);
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
