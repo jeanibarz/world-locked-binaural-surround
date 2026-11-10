@@ -67,6 +67,11 @@ Do **one** block per task. Do not batch blocks because setup is warm.
   repo, **merge after local verification** (tests/build green). Record the PR in
   the journal. If no remote: committing to the feature branch and fast-forwarding
   `main` locally after verification is the delivery step.
+- **Build every PR body from [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md)**
+  (copy it into a file, fill it, pass it with `gh pr create --body-file <file inside the worktree>` or a
+  *quoted* heredoc — never a hand-written inline `--body`). Keep the checklist's `kookr:check` marker
+  comments verbatim on one line; check each row honestly (checked = the evidence is in this PR) or strike
+  it with a one-line reason (`- [ ] ~~<marker> text~~ — why`). `kookr pr-checklist verify` checks them.
 - Do **not** merge red, broken, or unverified work. Record a blocker instead.
 - Keep every added dependency licence-compatible with a future donationware
   release (prefer MIT/BSD/Apache; flag GPL). Record each dependency + licence in
